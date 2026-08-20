@@ -6,6 +6,27 @@ from .models import Cost, Product, Profile
 from .parser import CsvSchema, ParseError, RobustCsvParser
 from .paths import DataPaths, DataPathsError
 from .repository import DataRepository, DataRepositoryError
+from .profile_service import (
+    ProfileService,
+    ResolvedProfile,
+)
+
+from .usage_profile import (
+    FluviusDataError,
+    UsageProfile,
+)
+
+from .user_config import (
+    ConfigError,
+    UserConfig,
+    load_user_config,
+)
+
+from .sources import (
+    SourceArtifact,
+    SourceDiscoveryError,
+    VnrSourceScraper,
+)
 
 
 __all__ = [
@@ -23,4 +44,14 @@ __all__ = [
     "Profile",
     "RobustCsvParser",
     "Settings",
+    "ConfigError",
+    "FluviusDataError",
+    "ProfileService",
+    "ResolvedProfile",
+    "UsageProfile",
+    "UserConfig",
+    "load_user_config",
+    "SourceArtifact",
+    "SourceDiscoveryError",
+    "VnrSourceScraper",
 ]

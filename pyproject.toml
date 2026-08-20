@@ -9,7 +9,9 @@ description = "Modulaire energievergelijker voor Vlaanderen"
 requires-python = ">=3.10"
 dependencies = [
     "pandas>=2.0",
-    "openpyxl>=3.1"
+    "openpyxl>=3.1",
+    "requests>=2.32",
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]
