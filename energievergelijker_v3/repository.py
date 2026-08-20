@@ -7,6 +7,8 @@ from .constants import D, DNB_CODES, MONTHS
 from .models import Product
 from .normalizer import dec, norm
 from .parser import PRODUCT_SCHEMA, RobustCsvParser
+from .config import Settings
+from .paths import DataPaths
 
 class DataRepositoryError(RuntimeError):
     pass
@@ -66,6 +68,16 @@ class DataRepository:
         self.variable = products.read(
             self.root / "master_var_dyn_2026.csv"
         )
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: Settings | None = None,
+    ) -> "DataRepository":
+        active_settings = settings or Settings.load()
+        paths = DataPaths.from_settings(active_settings)
+
+        return cls(paths.current_data_dir())
 
     def dnb_for(self, postcode: str, gemeente: str = "") -> tuple[str, str]:
         rows = self.municipal[self.municipal["Postcode"].astype(str).str.strip() == str(postcode).strip()]

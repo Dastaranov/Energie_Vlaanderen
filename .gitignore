@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# EnergieVergelijker runtime data
+data/raw/*
+!data/raw/.gitkeep
+data/staging/*
+!data/staging/.gitkeep
+data/versions/*
+!data/versions/.gitkeep
+data/current/*
+!data/current/.gitkeep

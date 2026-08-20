@@ -3,6 +3,7 @@ import argparse, json, logging, os
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+import sys
 import pandas as pd
 from .constants import D
 from .models import Profile
@@ -12,10 +13,33 @@ from .calculator import Calculator
 from .intervals import FluviusIntervals
 from .market import EntsoeMarketData
 from .validation import validate_excel_against_csv
+from .config import Settings
+from .paths import DataPaths, DataPathsError
 
 LOG = logging.getLogger("energievergelijker")
 
+def show_paths() -> int:
+    settings = Settings.load()
+    paths = DataPaths.from_settings(settings)
+    paths.ensure()
+
+    print(f"Projectroot : {settings.project_root}")
+    print(f"Dataroot    : {paths.root}")
+    print(f"Raw         : {paths.raw}")
+    print(f"Staging     : {paths.staging}")
+    print(f"Versions    : {paths.versions}")
+    print(f"Failed      : {paths.failed}")
+
+    try:
+        print(f"Current     : {paths.current_data_dir()}")
+    except DataPathsError:
+        print("Current     : nog niet ingesteld")
+
+    return 0
+
 def main()->int:
+    if len(sys.argv) == 2 and sys.argv[1] == "paths":
+        return show_paths()
     ap=argparse.ArgumentParser(description="EnergieVergelijker v2")
     ap.add_argument("--data",type=Path,default=Path(".")); ap.add_argument("--postcode",required=True); ap.add_argument("--gemeente",default="")
     ap.add_argument("--segment",default="Woning"); ap.add_argument("--year",type=int,default=2026); ap.add_argument("--month",type=int,default=datetime.now().month)
