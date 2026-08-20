@@ -35,6 +35,15 @@ from .downloader import (
     DownloadError,
 )
 
+from .raw_store import (
+    RawArtifactRecord,
+    RawManifest,
+    RawRegistrationResult,
+    RawStore,
+    RawStoreError,
+    RawVerificationReport,
+)
+
 
 __all__ = [
     "Calculator",
@@ -65,4 +74,10 @@ __all__ = [
     "DownloadBatch",
     "DownloadedArtifact",
     "DownloadError",
+    "RawArtifactRecord",
+    "RawManifest",
+    "RawRegistrationResult",
+    "RawStore",
+    "RawStoreError",
+    "RawVerificationReport",
 ]

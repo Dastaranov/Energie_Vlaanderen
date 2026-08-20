@@ -86,3 +86,36 @@ def test_download_command_accepts_json():
     )
 
     assert args.json is True
+
+def test_verify_raw_command_is_accepted():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "verify-raw",
+            "--version",
+            "20260820T120000Z-1234abcd",
+        ]
+    )
+
+    assert args.command == "verify-raw"
+    assert (
+        args.version
+        == "20260820T120000Z-1234abcd"
+    )
+    assert callable(args.handler)
+
+
+def test_raw_status_command_is_accepted():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "raw-status",
+            "--json",
+        ]
+    )
+
+    assert args.command == "raw-status"
+    assert args.json is True
+    assert callable(args.handler)

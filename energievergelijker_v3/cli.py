@@ -28,6 +28,11 @@ from .downloader import (
     DownloadError,
 )
 
+from .raw_store import (
+    RawStore,
+    RawStoreError,
+)
+
 LOG = logging.getLogger("energievergelijker")
 
 def positive_integer(value: str) -> int:
@@ -295,6 +300,55 @@ def build_parser() -> argparse.ArgumentParser:
 
     download_parser.set_defaults(
         handler=run_download
+    )
+
+    # ---------------------------------------------------------
+    # verify-raw
+    # ---------------------------------------------------------
+    verify_raw_parser = subparsers.add_parser(
+        "verify-raw",
+        help=(
+            "Controleer manifest, bestanden en "
+            "checksums van een raw-versie."
+        ),
+    )
+
+    verify_raw_parser.add_argument(
+        "--version",
+        required=True,
+        help="Raw-versie-id die gecontroleerd wordt.",
+    )
+
+    verify_raw_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Geef het resultaat als JSON weer.",
+    )
+
+    verify_raw_parser.set_defaults(
+        handler=run_verify_raw
+    )
+
+    # ---------------------------------------------------------
+    # raw-status
+    # ---------------------------------------------------------
+
+    raw_status_parser = subparsers.add_parser(
+        "raw-status",
+        help=(
+            "Toon de lokaal opgeslagen raw-versies "
+            "en hun validatiestatus."
+        ),
+    )
+
+    raw_status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Geef het resultaat als JSON weer.",
+    )
+
+    raw_status_parser.set_defaults(
+        handler=run_raw_status
     )
 
     # ---------------------------------------------------------
@@ -789,6 +843,38 @@ def run_download(
         paths=paths,
     )
 
+    raw_store = RawStore(paths)
+
+    registration = raw_store.register_batch(
+        batch
+    )
+
+    if not registration.kept:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "status": "unchanged",
+                        "version_id": (
+                            registration.version_id
+                        ),
+                        "duplicate_of": (
+                            registration.duplicate_of
+                        ),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        else:
+            print(
+                "Geen nieuwe brondata: inhoud is "
+                "identiek aan raw-versie "
+                f"{registration.duplicate_of}."
+            )
+
+        return 0
+
     if args.json:
         output = {
             "version_id": batch.version_id,
@@ -844,6 +930,153 @@ def run_download(
 
     return 0
 
+def run_verify_raw(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> int:
+    paths = DataPaths.from_settings(
+        settings
+    )
+
+    store = RawStore(paths)
+
+    report = store.verify(
+        args.version
+    )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "version_id": report.version_id,
+                    "directory": str(
+                        report.directory
+                    ),
+                    "valid": report.valid,
+                    "checked_files": (
+                        report.checked_files
+                    ),
+                    "errors": list(
+                        report.errors
+                    ),
+                    "warnings": list(
+                        report.warnings
+                    ),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+
+        return 0 if report.valid else 2
+
+    print(
+        f"Raw-versie     : {report.version_id}"
+    )
+    print(
+        f"Map             : {report.directory}"
+    )
+    print(
+        f"Gecontroleerd   : "
+        f"{report.checked_files} bestanden"
+    )
+    print(
+        f"Geldig          : "
+        f"{'ja' if report.valid else 'nee'}"
+    )
+
+    if report.warnings:
+        print()
+        print("Waarschuwingen:")
+
+        for warning in report.warnings:
+            print(f"  - {warning}")
+
+    if report.errors:
+        print()
+        print("Fouten:")
+
+        for error in report.errors:
+            print(f"  - {error}")
+
+    return 0 if report.valid else 2
+
+def run_raw_status(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> int:
+    paths = DataPaths.from_settings(
+        settings
+    )
+
+    store = RawStore(paths)
+    manifests = store.list_manifests()
+
+    rows: list[dict[str, object]] = []
+
+    for manifest in manifests:
+        report = store.verify(
+            manifest.version_id
+        )
+
+        rows.append(
+            {
+                "version_id": manifest.version_id,
+                "created_at": (
+                    manifest.created_at.isoformat()
+                ),
+                "valid": report.valid,
+                "checked_files": (
+                    report.checked_files
+                ),
+                "errors": list(report.errors),
+                "warnings": list(
+                    report.warnings
+                ),
+            }
+        )
+
+    if args.json:
+        print(
+            json.dumps(
+                rows,
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+
+        return 0
+
+    if not rows:
+        print("Geen raw-versies gevonden.")
+        return 0
+
+    for row in rows:
+        print(row["version_id"])
+        print(
+            f"  aangemaakt    : "
+            f"{row['created_at']}"
+        )
+        print(
+            f"  geldig        : "
+            f"{'ja' if row['valid'] else 'nee'}"
+        )
+        print(
+            f"  bestanden     : "
+            f"{row['checked_files']}"
+        )
+        print(
+            f"  fouten        : "
+            f"{len(row['errors'])}"
+        )
+        print(
+            f"  waarschuwingen: "
+            f"{len(row['warnings'])}"
+        )
+        print()
+
+    return 0
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -869,6 +1102,7 @@ def main(argv: list[str] | None = None) -> int:
         SourceDiscoveryError,
         ValueError,
         DownloadError,
+        RawStoreError,
     ) as exc:
         logging.error("%s", exc)
         return 2
