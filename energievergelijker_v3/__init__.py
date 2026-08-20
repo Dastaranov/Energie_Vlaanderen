@@ -44,6 +44,13 @@ from .raw_store import (
     RawVerificationReport,
 )
 
+from .vtest_workbook import (
+    ParsedSheet,
+    ParsedVTestWorkbook,
+    VTestWorkbookError,
+    VTestWorkbookParser,
+)
+
 
 __all__ = [
     "Calculator",
@@ -80,4 +87,8 @@ __all__ = [
     "RawStore",
     "RawStoreError",
     "RawVerificationReport",
+    "ParsedSheet",
+    "ParsedVTestWorkbook",
+    "VTestWorkbookError",
+    "VTestWorkbookParser",
 ]

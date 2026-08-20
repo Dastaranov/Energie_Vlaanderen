@@ -91,3 +91,36 @@ def test_repository_reports_missing_data(tmp_path: Path):
         match="Datamap is onvolledig",
     ):
         DataRepository(tmp_path)
+
+@pytest.mark.integration
+def test_repository_from_settings(
+    data_root: Path,
+    tmp_path: Path,
+):
+    from energievergelijker_v3 import Settings
+
+    test_data_root = tmp_path / "data"
+    current = test_data_root / "current"
+
+    # De parentmap moet bestaan voordat de symlink wordt aangemaakt.
+    test_data_root.mkdir(parents=True, exist_ok=True)
+
+    current.symlink_to(
+        data_root,
+        target_is_directory=True,
+    )
+
+    settings = Settings(
+        project_root=tmp_path,
+        data_root=test_data_root,
+    )
+
+    repository = DataRepository.from_settings(settings)
+
+    assert repository.dnb_for(
+        "9280",
+        "Lebbeke",
+    ) == (
+        "Fluvius Midden-Vlaanderen",
+        "FMV",
+    )
