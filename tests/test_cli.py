@@ -55,3 +55,34 @@ def test_sources_command_accepts_json():
     )
 
     assert args.json is True
+
+def test_download_command_is_accepted():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "download",
+            "--year",
+            "2026",
+        ]
+    )
+
+    assert args.command == "download"
+    assert args.year == 2026
+    assert args.json is False
+    assert callable(args.handler)
+
+
+def test_download_command_accepts_json():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "download",
+            "--year",
+            "2026",
+            "--json",
+        ]
+    )
+
+    assert args.json is True

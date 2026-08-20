@@ -21,6 +21,12 @@ from .profile_service import ProfileService
 from .usage_profile import FluviusDataError
 from .user_config import ConfigError, load_user_config
 from .sources import SourceDiscoveryError, VnrSourceScraper
+from .downloader import ( 
+    ArtifactDownloader,
+    DownloadBatch,
+    DownloadedArtifact,
+    DownloadError,
+)
 
 LOG = logging.getLogger("energievergelijker")
 
@@ -233,7 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     paths_parser.set_defaults(handler=run_paths)
 
-        # ---------------------------------------------------------
+    # ---------------------------------------------------------
     # sources
     # ---------------------------------------------------------
 
@@ -260,6 +266,35 @@ def build_parser() -> argparse.ArgumentParser:
 
     sources_parser.set_defaults(
         handler=run_sources
+    )
+
+    # ---------------------------------------------------------
+    # download
+    # ---------------------------------------------------------
+
+    download_parser = subparsers.add_parser(
+        "download",
+        help=(
+            "Ontdek en download de officiële "
+            "Excelbronnen naar een nieuwe raw-versie."
+        ),
+    )
+
+    download_parser.add_argument(
+        "--year",
+        type=int,
+        default=datetime.now().year,
+        help="Jaar van de distributienettarieven.",
+    )
+
+    download_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Geef het resultaat als JSON weer.",
+    )
+
+    download_parser.set_defaults(
+        handler=run_download
     )
 
     # ---------------------------------------------------------
@@ -737,6 +772,78 @@ def run_sources(
 
     return 0
 
+def run_download(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> int:
+    paths = DataPaths.from_settings(settings)
+    scraper = VnrSourceScraper(settings)
+    downloader = ArtifactDownloader(settings)
+
+    sources = scraper.discover(
+        args.year
+    )
+
+    batch = downloader.download_batch(
+        sources=sources,
+        paths=paths,
+    )
+
+    if args.json:
+        output = {
+            "version_id": batch.version_id,
+            "directory": str(batch.directory),
+            "manifest": str(batch.manifest_path),
+            "artifacts": {
+                kind: artifact.as_manifest_dict()
+                for kind, artifact
+                in batch.artifacts.items()
+            },
+        }
+
+        print(
+            json.dumps(
+                output,
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+
+        return 0
+
+    print(
+        f"Downloadversie : {batch.version_id}"
+    )
+    print(
+        f"Map             : {batch.directory}"
+    )
+    print(
+        f"Manifest        : {batch.manifest_path}"
+    )
+    print()
+
+    for kind, artifact in batch.artifacts.items():
+        print(kind)
+        print(
+            f"  bestand       : "
+            f"{artifact.stored_filename}"
+        )
+        print(
+            f"  bronnaam      : "
+            f"{artifact.original_filename}"
+        )
+        print(
+            f"  grootte       : "
+            f"{artifact.size_bytes} bytes"
+        )
+        print(
+            f"  sha256        : "
+            f"{artifact.sha256}"
+        )
+        print()
+
+    return 0
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -761,6 +868,7 @@ def main(argv: list[str] | None = None) -> int:
         FileNotFoundError,
         SourceDiscoveryError,
         ValueError,
+        DownloadError,
     ) as exc:
         logging.error("%s", exc)
         return 2

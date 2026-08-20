@@ -28,6 +28,13 @@ from .sources import (
     VnrSourceScraper,
 )
 
+from .downloader import (
+    ArtifactDownloader,
+    DownloadBatch,
+    DownloadedArtifact,
+    DownloadError,
+)
+
 
 __all__ = [
     "Calculator",
@@ -54,4 +61,8 @@ __all__ = [
     "SourceArtifact",
     "SourceDiscoveryError",
     "VnrSourceScraper",
+    "ArtifactDownloader",
+    "DownloadBatch",
+    "DownloadedArtifact",
+    "DownloadError",
 ]

@@ -93,3 +93,44 @@ def test_settings_rejects_zero_timeout(
                 "ENERGIEVERGELIJKER_REQUEST_TIMEOUT": "0",
             },
         )
+
+def test_settings_reads_download_limit(
+    tmp_path: Path,
+):
+    settings = Settings.load(
+        project_root=tmp_path,
+        environ={
+            "ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES": "12345",
+        },
+    )
+
+    assert settings.max_download_bytes == 12345
+
+
+def test_settings_rejects_invalid_download_limit(
+    tmp_path: Path,
+):
+    with pytest.raises(
+        ValueError,
+        match="moet een geheel getal zijn",
+    ):
+        Settings.load(
+            project_root=tmp_path,
+            environ={
+                "ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES": "veel",
+            },
+        )
+
+def test_settings_rejects_zero_download_limit(
+    tmp_path: Path,
+):
+    with pytest.raises(
+        ValueError,
+        match="groter zijn dan nul",
+    ):
+        Settings.load(
+            project_root=tmp_path,
+            environ={
+                "ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES": "0",
+            },
+        )

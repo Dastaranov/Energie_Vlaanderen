@@ -21,7 +21,6 @@ DEFAULT_ALLOWED_DOWNLOAD_HOSTS = (
     "assets.vlaamsenutsregulator.be",
 )
 
-
 def discover_project_root(start: Path | None = None) -> Path:
     """
     Zoek vanaf `start` omhoog naar de map met pyproject.toml.
@@ -61,6 +60,9 @@ class Settings:
     )
 
     request_timeout_seconds: float = 60.0
+    max_download_bytes: int = 50 * 1024 * 1024
+    download_chunk_bytes: int = 1024 * 1024
+
     user_agent: str = "EnergieVergelijker/3.0"
 
     @classmethod
@@ -117,12 +119,32 @@ class Settings:
             DEFAULT_TARIFF_PAGE,
         )
 
+        max_download_text = env.get(
+            "ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES",
+            str(50 * 1024 * 1024),
+        )
+
+        try:
+            max_download_bytes = int(max_download_text)
+        except ValueError as exc:
+            raise ValueError(
+                "ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES "
+                "moet een geheel getal zijn."
+            ) from exc
+
+        if max_download_bytes <= 0:
+            raise ValueError(
+                "ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES "
+                "moet groter zijn dan nul."
+            )
+
         return cls(
             project_root=root,
             data_root=data_root,
             vtest_page_url=vtest_page_url,
             tariff_page_url=tariff_page_url,
             request_timeout_seconds=timeout,
+            max_download_bytes=max_download_bytes,
         )
 
     def with_data_root(self, data_root: Path) -> "Settings":
