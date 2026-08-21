@@ -391,15 +391,15 @@ def test_parser_skips_empty_sheets(
     assert result.fixed_rows == 1
     assert result.variable_dynamic_rows == 0
     assert not result.fixed.empty
-    assert len(result) == 1
+    assert len(result.fixed) == 1
 
     assert (
-        result.iloc[0]["Handelsnaam"]
+        result.fixed.iloc[0]["Handelsnaam"]
         == "Leverancier A"
     )
 
     assert (
-        result.iloc[0]["Productnaam"]
+        result.fixed.iloc[0]["Productnaam"]
         == "Product X"
     )
 
@@ -451,21 +451,14 @@ def test_parser_preserves_source_metadata(
     assert frame.loc[0, "source_sheet"] == "Variabele producten"
     assert frame.loc[0, "source_row"] == 2
 
-    assert (
-        result.attrs.get("source")
-        == str(workbook_path)
-    )
+    # 1. We controleren het bronbestand direct
+    assert result.source_path == workbook_path
 
-    parsed_sheets = result.attrs.get(
-        "parsed_sheets",
-        (),
-    )
-
-    assert (
-        "Variabele producten"
-        in parsed_sheets
-    )
-
+    # 2. We halen de verwerkte tabbladen rechtstreeks uit het resultaat
+    parsed_sheets = result.sheets
+ 
+    # 3. We pakken het eerste (en enige) tabblad uit de lijst en controleren de naam
+    assert parsed_sheets[0].sheet_name == "Variabele producten"
 
 def test_parser_normalizes_empty_values(
     tmp_path: Path,

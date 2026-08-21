@@ -313,6 +313,17 @@ class VTestWorkbookParser:
             drop=True
         )
 
+        # Controleer eerst of de kolom 'Prijs' wel bestaat
+        if "Prijs" in frame.columns:
+            # Zet de Belgische tekst-prijs om naar een internationaal rekengetal
+            frame["Prijs"] = (
+                frame["Prijs"]
+                .astype(str)
+                .str.replace(".", "", regex=False)  # Verwijder de punt voor duizendtallen
+                .str.replace(",", ".", regex=False)  # Verander onze komma in een reken-punt
+                .astype(float)                       # Vertel de computer dat het een kommagetal is
+            )
+
         return frame
 
     def split_contract_types(
