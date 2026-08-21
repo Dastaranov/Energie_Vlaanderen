@@ -33,6 +33,8 @@ from .raw_store import (
     RawStoreError,
 )
 
+from .vtest_pipeline import VTestPipeline
+
 LOG = logging.getLogger("energievergelijker")
 
 def positive_integer(value: str) -> int:
@@ -349,6 +351,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     raw_status_parser.set_defaults(
         handler=run_raw_status
+    )
+
+    # ---------------------------------------------------------
+    # parse-vtest
+    # ---------------------------------------------------------
+
+    parse_vtest_parser = subparsers.add_parser(
+        "parse-vtest",
+        help="Verwerk een ruwe V-test Excel via de pipeline naar CSV in de staging map.",
+    )
+
+    parse_vtest_parser.add_argument(
+        "--version",
+        required=True,
+        help="Raw-versie-id die verwerkt moet worden.",
+    )
+
+    parse_vtest_parser.set_defaults(
+        handler=run_parse_vtest
     )
 
     # ---------------------------------------------------------
@@ -1076,6 +1097,83 @@ def run_raw_status(
         print()
 
     return 0
+
+def run_parse_vtest(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> int:
+    """Fase 7B.3: V-testwerkboek verwerken via de pipeline."""
+    paths = DataPaths.from_settings(settings)
+    store = RawStore(paths)
+
+    # 1. Raw-versie eerst verifiëren
+    print(f"Verifieer raw-versie {args.version}...")
+    report = store.verify(args.version)
+    if not report.valid:
+        print("Fout: Raw-versie is ongeldig.", file=sys.stderr)
+        for error in report.errors:
+            print(f"  - {error}", file=sys.stderr)
+        return 2
+
+    # 2. vtest.xlsx lokaliseren via het manifest
+    # We openen het opgeslagen manifest om de correcte lokale bestandsnaam te vinden
+    manifest_path = report.directory / "manifest.json"
+    if not manifest_path.exists():
+        print(f"Fout: Manifest niet gevonden op {manifest_path}", file=sys.stderr)
+        return 2
+
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            manifest_data = json.load(f)
+        
+        # We zoeken de stored_filename voor 'vtest'
+        vtest_filename = manifest_data.get("artifacts", {}).get("vtest", {}).get("stored_filename", "vtest.xlsx")
+        source_file = report.directory / vtest_filename
+    except Exception as exc:
+        print(f"Fout bij lezen van manifest: {exc}", file=sys.stderr)
+        return 2
+
+    if not source_file.exists():
+        print(f"Fout: vtest.xlsx niet gevonden op {source_file}", file=sys.stderr)
+        return 2
+
+    # 3. Pipeline configureren voor uitvoer naar staging
+    staging_dir = paths.staging / args.version / "vtest"
+    
+    print(f"Start verwerking van {source_file}...")
+    pipeline = VTestPipeline()
+
+    try:
+        # 4. Pipeline uitvoeren. We gaan ervan uit dat process() een boolean retouneert
+        success = pipeline.process(source_file, staging_dir, args.version)
+        
+        # We controleren en tonen het JSON-rapport
+        report_file = staging_dir / "pipeline_report.json"
+        if report_file.exists():
+            with open(report_file, 'r', encoding='utf-8') as f:
+                pipeline_report = json.load(f)
+            
+            print("\n--- Pipeline Rapport ---")
+            if 'errors' in pipeline_report and pipeline_report['errors']:
+                print("\nBlokkerende Fouten:")
+                for err in pipeline_report['errors']:
+                    print(f"  - {err}")
+                    
+            if 'warnings' in pipeline_report and pipeline_report['warnings']:
+                print("\nWaarschuwingen:")
+                for warn in pipeline_report['warnings']:
+                    print(f"  - {warn}")
+        
+        if not success:
+            print("\nFout: Pipeline gestopt vanwege blokkerende validatiefouten.", file=sys.stderr)
+            return 2
+            
+        print(f"\nSucces! V-test data geschreven naar {staging_dir}")
+        return 0
+
+    except Exception as exc:
+        logging.error("Onverwachte fout tijdens pipeline-verwerking: %s", exc)
+        return 2
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()

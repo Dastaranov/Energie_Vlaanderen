@@ -51,6 +51,19 @@ from .vtest_workbook import (
     VTestWorkbookParser,
 )
 
+from .vtest_pipeline import (
+    VTestPipeline,
+    VTestPipelineError,
+    VTestPipelineResult
+)
+
+
+
+from .vtest_normalizer import (
+    NormalizedVTestData,
+    VTestNormalizationError,
+)
+
 
 __all__ = [
     "Calculator",
@@ -91,4 +104,9 @@ __all__ = [
     "ParsedVTestWorkbook",
     "VTestWorkbookError",
     "VTestWorkbookParser",
+    "VTestPipeline",
+    "VTestPipelineError",
+    "VTestPipelineResult",
+    "VTestNormalizationError",
+    "NormalizedVTestData",
 ]

@@ -133,8 +133,20 @@ class VTestDataNormalizer:
         if not rows:
             return pd.DataFrame()
 
-        return pd.DataFrame(
-            rows
+        df = pd.DataFrame(rows)
+        return df.drop_duplicates(
+            subset=[
+                "year",
+                "month",
+                "segment",
+                "energy",
+                "direction",
+                "supplier",
+                "product",
+                "product_type",
+                "component",
+            ],
+            keep="first",
         )
            
     def _normalize_row(
