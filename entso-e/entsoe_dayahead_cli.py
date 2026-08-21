@@ -39,6 +39,22 @@ UTC = ZoneInfo("UTC")
 BASE_URL = "https://web-api.tp.entsoe.eu/api"
 BE_DOMAIN = "10YBE----------2"
 
+import os
+from dotenv import load_dotenv
+
+# 1. Laad de verborgen variabelen uit het .env bestand
+load_dotenv()
+
+# 2. Vraag de sleutel op uit het systeemgeheugen
+mijn_api_key = os.getenv("ENTSOE_API_KEY")
+
+# 3. Test of het gelukt is (zonder de sleutel zelf te printen!)
+if mijn_api_key:
+    print("Sleutel succesvol geladen! Klaar om ENTSO-E aan te roepen.")
+    # Vanaf hier gebruik je de variabele 'mijn_api_key' in je requests
+else:
+    print("Fout: Sleutel niet gevonden. Check of je .env bestand klopt.")
+
 
 @dataclass(frozen=True)
 class PricePoint:

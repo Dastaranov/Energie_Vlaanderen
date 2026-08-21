@@ -226,3 +226,6 @@ data/versions/*
 !data/versions/.gitkeep
 data/current/*
 !data/current/.gitkeep
+
+# Secret files
+.env
