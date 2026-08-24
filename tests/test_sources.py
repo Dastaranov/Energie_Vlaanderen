@@ -1,3 +1,32 @@
+''' 
+Project: Energievergelijker
+Auteur: Gert Botte
+Licentie: Apache License 2.0
+
+Beschrijving:
+    Test voor Bronnen en webscraping
+
+Testen:
+    - test_parse_links_finds_only_allowed_xlsx
+        Controleert of de scraper uitsluitend links naar Excel-bestanden (.xlsx) verzamelt en alleen van goedgekeurde websites. 
+        Links naar bijvoorbeeld PDF's of verkeerde domeinen worden genegeerd.
+    - test_parse_links_removes_duplicates
+        Verifieert dat dubbele links op een webpagina netjes worden weggefilterd zodat elke bron maar één keer voorkomt.
+    - test_selects_vtest_source
+        Test of het juiste V-test databestand wordt geselecteerd op basis van specifieke naamgevingspatronen,
+        waarbij irrelevante bestanden zoals prijscurves worden genegeerd.
+    - test_selects_tariff_sources
+        Controleert of de bestanden voor distributienettarieven (zowel gas als elektriciteit) correct worden geïdentificeerd.
+    - test_select_one_rejects_missing_source
+        Zorgt ervoor dat het systeem een foutmelding geeft wanneer het vereiste bronbestand ontbreekt op de webpagina.
+    - test_select_one_rejects_multiple_sources
+        Garandeert dat het programma stopt met een fout als er meerdere bestanden voldoen aan de zoekcriteria, 
+        om dubbelzinnigheid te voorkomen.
+    - test_discover_returns_four_sources
+        Controleert of de bronontdekking vier bronnen retourneert.
+
+'''
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,9 +39,9 @@ from energievergelijker_v3.sources import (
     VnrSourceScraper,
 )
 
+# HTML-tekens voor '<' en '>'
 LT = chr(60)
 GT = chr(62)
-
 
 def html_anchor(
     url: str,
@@ -23,7 +52,6 @@ def html_anchor(
         f"{text}"
         f"{LT}/a{GT}"
     )
-
 
 def html_document(
     *elements: str,
@@ -37,7 +65,6 @@ def html_document(
         f"{LT}/body{GT}"
         f"{LT}/html{GT}"
     )
-
 
 VTEST_HTML = html_document(
     html_anchor(
@@ -59,7 +86,6 @@ VTEST_HTML = html_document(
         "Energieprijscurves",
     ),
 )
-
 
 TARIFF_HTML = html_document(
     html_anchor(
@@ -92,7 +118,6 @@ TARIFF_HTML = html_document(
     ),
 )
 
-
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(
@@ -100,9 +125,61 @@ def settings(tmp_path: Path) -> Settings:
         data_root=tmp_path / "data",
     )
 
+class FakeResponse:
+    def __init__(
+        self,
+        text: str,
+        status_code: int = 200,
+    ):
+        '''
+        Test of de neprespons correct wordt geïnitialiseerd.
+
+        Args:
+            text (str): De inhoud van de respons.
+            status_code (int, optional): De HTTP-statuscode van de respons. Standaard is 200.
+        '''
+        self.text = text
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(
+                f"HTTP {self.status_code}"
+            )
+
+class FakeSession:
+    def __init__(
+        self,
+        pages: dict[str, str],
+    ):
+        '''
+        Test of de nepsessie correct wordt geïnitialiseerd.
+
+        Args:
+            pages (dict[str, str]): Een mapping van URL's naar HTML-inhoud.
+        '''
+        self.pages = pages
+        self.headers: dict[str, str] = {}
+
+    def get(
+        self,
+        url: str,
+        timeout: float,
+    ) -> FakeResponse:
+        del timeout
+        return FakeResponse(
+            self.pages[url]
+        )
+
 def test_parse_links_finds_only_allowed_xlsx(
     settings: Settings,
 ):
+    '''
+    Test of de scraper uitsluitend links naar toegestane Excel-bestanden vindt.
+
+    Args: 
+        settings (Settings): De configuratie-instellingen voor de scraper.
+    '''
     scraper = VnrSourceScraper(settings)
 
     html = html_document(
@@ -141,6 +218,12 @@ def test_parse_links_finds_only_allowed_xlsx(
 def test_parse_links_removes_duplicates(
     settings: Settings,
 ):
+    '''
+    Test of de scraper dubbele links correct verwijdert.
+
+    Args:
+        settings (Settings): De configuratie-instellingen voor de scraper.
+    '''
     scraper = VnrSourceScraper(settings)
 
     url = (
@@ -168,10 +251,15 @@ def test_parse_links_removes_duplicates(
     assert links[0].url == url
     assert links[0].text == "Eerste"
 
-
 def test_selects_vtest_source(
     settings: Settings,
 ):
+    '''
+    Test of de scraper het juiste V-test databestand selecteert.
+
+    Args:
+        settings (Settings): De configuratie-instellingen voor de scraper.
+    '''
     scraper = VnrSourceScraper(settings)
 
     links = scraper.parse_links(
@@ -199,10 +287,15 @@ def test_selects_vtest_source(
         == "202608-v-test-data-exclbtw v2_0.xlsx"
     )
 
-
 def test_selects_tariff_sources(
     settings: Settings,
 ):
+    '''
+    Test of de scraper de juiste distributienettarieven voor elektriciteit en gas selecteert.
+
+    Args:
+        settings (Settings): De configuratie-instellingen voor de scraper.
+    '''
     scraper = VnrSourceScraper(settings)
 
     links = scraper.parse_links(
@@ -247,10 +340,15 @@ def test_selects_tariff_sources(
         == "Distributienettarieven aardgas 2026.xlsx"
     )
 
-
 def test_select_one_rejects_missing_source(
     settings: Settings,
 ):
+    '''
+    Test of de scraper een foutmelding geeft wanneer het vereiste bronbestand ontbreekt.
+
+    Args:
+        settings (Settings): De configuratie-instellingen voor de scraper.
+    '''
     scraper = VnrSourceScraper(settings)
 
     with pytest.raises(
@@ -264,10 +362,15 @@ def test_select_one_rejects_missing_source(
             required_patterns=(r"v-test",),
         )
 
-
 def test_select_one_rejects_multiple_sources(
     settings: Settings,
 ):
+    '''
+    Test of de scraper een foutmelding geeft wanneer er meerdere bestanden voldoen aan de zoekcriteria.
+
+    Args:
+        settings (Settings): De configuratie-instellingen voor de scraper.
+    '''
     scraper = VnrSourceScraper(settings)
 
     html = html_document(
@@ -308,44 +411,15 @@ def test_select_one_rejects_multiple_sources(
             ),
         )
 
-class FakeResponse:
-    def __init__(
-        self,
-        text: str,
-        status_code: int = 200,
-    ):
-        self.text = text
-        self.status_code = status_code
-
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400:
-            raise RuntimeError(
-                f"HTTP {self.status_code}"
-            )
-
-
-class FakeSession:
-    def __init__(
-        self,
-        pages: dict[str, str],
-    ):
-        self.pages = pages
-        self.headers: dict[str, str] = {}
-
-    def get(
-        self,
-        url: str,
-        timeout: float,
-    ) -> FakeResponse:
-        del timeout
-        return FakeResponse(
-            self.pages[url]
-        )
-
-
 def test_discover_returns_four_sources(
     settings: Settings,
 ):
+    '''
+    Test of de bronontdekking vier bronnen retourneert.
+
+    Args:
+        settings (Settings): De configuratie-instellingen voor de scraper.
+    '''
     session = FakeSession(
         {
             settings.vtest_page_url: VTEST_HTML,
