@@ -2,9 +2,11 @@
 
 ## 1. Doel van het project
 
-EnergieVergelijker Vlaanderen wordt een modulair Pythonprogramma dat officiële energiegegevens automatisch ontdekt, downloadt, valideert, parseert, normaliseert en inzet voor prijsvergelijkingen van Vlaamse energieproducten.
+EnergieVergelijker Vlaanderen wordt een modulair Pythonprogramma dat officiële energiegegevens automatisch ontdekt, downloadt, valideert,
+parseert, normaliseert en inzet voor prijsvergelijkingen van Vlaamse energieproducten.
 
-De toepassing moet uiteindelijk zonder handmatig vervangen van bronbestanden kunnen werken. De officiële Excelbestanden vormen de primaire bron. De gegenereerde CSV-bestanden en lokale dataversies zijn afgeleide, gecontroleerde gegevens.
+De toepassing moet uiteindelijk zonder handmatig vervangen van bronbestanden kunnen werken. De officiële Excelbestanden vormen de primaire bron.
+De gegenereerde CSV-bestanden en lokale dataversies zijn afgeleide, gecontroleerde gegevens.
 
 ## 2. Wat al gebouwd is
 
@@ -233,7 +235,8 @@ Belangrijke testprincipes:
 
 ## 3. Huidige grens van het systeem
 
-De infrastructuur voor V-testproductdata is grotendeels opgebouwd, maar de volledige automatische updater is nog niet klaar. De volgende onderdelen moeten nog worden gekoppeld of ontwikkeld:
+De infrastructuur voor V-testproductdata is grotendeels opgebouwd, maar de volledige automatische updater is nog niet klaar.
+De volgende onderdelen moeten nog worden gekoppeld of ontwikkeld:
 
 - pipeline aansluiten op `parse-vtest`;
 - echte V-testbron volledig door de pipeline laten lopen;

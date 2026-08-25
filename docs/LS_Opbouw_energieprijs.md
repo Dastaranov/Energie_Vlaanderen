@@ -1,16 +1,17 @@
-# Opbouw energieprijs in vlaanderen (voor Particulieren en KMO).
+# Opbouw energieprijs in vlaanderen (voor Particulieren en KMO)
 
 ## Waaruit bestaat de energieprijs?
 
-Bron: 	
- - https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/energieprijzen-en-facturen/waaruit-bestaat-de-energieprijs-voor-elektriciteit-en-aardgas
- - https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/nettarieven/hoeveel-bedragen-de-distributienettarieven
- - https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/nettarieven/wat-zijn-nettarieven
- - https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/nettarieven/capaciteitstarief
- - https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/nettarieven/prosumententarief
- - https://www.vtest.be/
- - https://www.creg.be/nl/professionals/toegang-tot-het-net/elektriciteit-transmissie/tarieven-transmissienet
-		
+Bron:
+
+- https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/energieprijzen-en-facturen/waaruit-bestaat-de-energieprijs-voor-elektriciteit-en-aardgas
+- https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/nettarieven/hoeveel-bedragen-de-distributienettarieven
+- https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/nettarieven/wat-zijn-nettarieven
+- https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/nettarieven/capaciteitstarief
+- https://www.vlaamsenutsregulator.be/elektriciteit-en-aardgas/nettarieven/prosumententarief
+- https://www.vtest.be/
+- https://www.creg.be/nl/professionals/toegang-tot-het-net/elektriciteit-transmissie/tarieven-transmissienet
+
 1. De Energiekost
 2. De nettarieven
 3. De heffingen

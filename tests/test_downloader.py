@@ -1,3 +1,27 @@
+''' 
+Project: Energievergelijker
+Auteur: Gert Botte
+Licentie: Apache License 2.0
+
+Beschrijving:
+    Test voor Downloaden van bestanden
+
+Testen:
+    - test_download_batch_writes_four_files_and_manifest: 
+        Bevestigt dat een geslaagde downloadreeks resulteert in de vier verwachte databestanden
+        én een manifest.json met correcte metadata (zoals checksums en bestandsgroottes).
+    - test_download_rejects_html_instead_of_xlsx:
+        Voorkomt dat het systeem per ongeluk een webpagina (HTML) opslaat in plaats van een Excel-bestand.
+    - test_download_rejects_unexpected_host:
+        Zorgt ervoor dat downloads onmiddellijk afbreken als de link naar een onbekende of onveilige server wijst.
+    - test_download_rejects_missing_source:
+        Verifieert dat een hele batch-download weigert te starten als een van de vier bestanden ontbreekt.
+    - test_download_rejects_declared_oversize: 
+        Beveiligt tegen te grote bestanden door een fout te geven als het bestand de maximale toegestane bestandsgrootte overschrijdt.
+    - test_download_rejects_existing_batch_directory:
+        Controleert of de downloader weigert om een bestaande opslagmap zomaar te overschrijven.    
+'''
+
 from __future__ import annotations
 
 import io
@@ -26,6 +50,12 @@ def make_xlsx_bytes(
     *,
     extra_content: bytes = b"",
 ) -> bytes:
+    '''
+    Genereert een bytes-representatie van een minimaal geldig Excel-bestand (XLSX).
+
+    Args:
+        extra_content (bytes): Extra content to include in the workbook.xml file. Defaults to an empty byte string.
+    '''
     buffer = io.BytesIO()
 
     with zipfile.ZipFile(
@@ -57,6 +87,15 @@ class FakeResponse:
         status_code: int = 200,
         headers: dict[str, str] | None = None,
     ):
+        '''
+        Initialiseert een nep HTTP-response object voor gebruik in tests.
+
+        Args:
+            content (bytes): De inhoud van de response.
+            url (str): De URL van de response.
+            status_code (int): De HTTP-statuscode van de response. Standaard is 200.
+            headers (dict[str, str] | None): De HTTP-headers van de response. Standaard is None.
+        '''
         self.content = content
         self.url = url
         self.status_code = status_code
@@ -90,12 +129,17 @@ class FakeResponse:
     def close(self) -> None:
         self.closed = True
 
-
 class FakeSession:
     def __init__(
         self,
         responses: dict[str, FakeResponse],
     ):
+        '''
+        Initialiseert een nep HTTP-session object voor gebruik in tests.
+
+        Args:
+            responses (dict[str, FakeResponse]): Een mapping van URL's naar nep HTTP-responses.
+        '''
         self.responses = responses
         self.headers: dict[str, str] = {}
         self.calls: list[str] = []
@@ -124,11 +168,9 @@ def settings(tmp_path: Path) -> Settings:
         download_chunk_bytes=64,
     )
 
-
 @pytest.fixture
 def paths(settings: Settings) -> DataPaths:
     return DataPaths.from_settings(settings)
-
 
 @pytest.fixture
 def sources(
@@ -171,12 +213,21 @@ def sources(
 
     return result
 
-
 def fake_session_for_sources(
     sources: dict[str, SourceArtifact],
     *,
     content: bytes | None = None,
 ) -> FakeSession:
+    '''
+    Genereert een nep HTTP-session object met responses voor de gegeven bronnen.
+
+    Args:
+        sources (dict[str, SourceArtifact]): De bronnen waarvoor nep responses moeten worden gegenereerd.
+        content (bytes | None): De inhoud van de responses. Als None, wordt een standaard XLSX-bestand gegenereerd.
+
+    Returns:
+        FakeSession: Een nep HTTP-session object met de gegenereerde responses.
+    '''
     workbook = (
         make_xlsx_bytes()
         if content is None
@@ -201,6 +252,14 @@ def test_download_batch_writes_four_files_and_manifest(
     paths: DataPaths,
     sources: dict[str, SourceArtifact],
 ):
+    '''
+    Testst of de download_batch-functie vier bestanden en een manifest correct schrijft.
+
+    Args:
+        settings (Settings): De instellingen voor de downloader.
+        paths (DataPaths): De paden voor het opslaan van de gedownloade bestanden.
+        sources (dict[str, SourceArtifact]): De bronnen die moeten worden gedownload.
+    '''
     session = fake_session_for_sources(
         sources
     )
@@ -269,6 +328,14 @@ def test_download_rejects_html_instead_of_xlsx(
     paths: DataPaths,
     sources: dict[str, SourceArtifact],
 ):
+    '''
+    Testst of de downloader een HTML-bestand weigert wanneer een XLSX-bestand wordt verwacht.
+
+    Args:
+        settings (Settings): De instellingen voor de downloader.
+        paths (DataPaths): De paden voor het opslaan van de gedownloade bestanden.
+        sources (dict[str, SourceArtifact]): De bronnen die moeten worden gedownload.
+    '''
     session = fake_session_for_sources(
         sources,
         content=b"Dit is HTML en geen XLSX",
@@ -295,12 +362,19 @@ def test_download_rejects_html_instead_of_xlsx(
         version_id
     ).exists()
 
-
 def test_download_rejects_unexpected_host(
     settings: Settings,
     paths: DataPaths,
     sources: dict[str, SourceArtifact],
 ):
+    '''
+    Testst of de downloader een bron van een niet-toegelaten host weigert.
+
+    Args:
+        settings (Settings): De instellingen voor de downloader.
+        paths (DataPaths): De paden voor het opslaan van de gedownloade bestanden.
+        sources (dict[str, SourceArtifact]): De bronnen die moeten worden gedownload.
+    '''
     original = sources["vtest"]
 
     sources["vtest"] = SourceArtifact(
@@ -332,12 +406,19 @@ def test_download_rejects_unexpected_host(
             ),
         )
 
-
 def test_download_rejects_missing_source(
     settings: Settings,
     paths: DataPaths,
     sources: dict[str, SourceArtifact],
 ):
+    '''
+    Testst of de downloader ontbrekende bronnen correct afhandelt.
+
+    Args:
+        settings (Settings): De instellingen voor de downloader.
+        paths (DataPaths): De paden voor het opslaan van de gedownloade bestanden.
+        sources (dict[str, SourceArtifact]): De bronnen die moeten worden gedownload.
+    '''
     del sources["gas_tariffs"]
 
     downloader = ArtifactDownloader(
@@ -357,12 +438,19 @@ def test_download_rejects_missing_source(
             ),
         )
 
-
 def test_download_rejects_declared_oversize(
     settings: Settings,
     paths: DataPaths,
     sources: dict[str, SourceArtifact],
 ):
+    '''
+    Testst of de downloader een bron met een te grote Content-Length correct afwijst.
+
+    Args:
+        settings (Settings): De instellingen voor de downloader.
+        paths (DataPaths): De paden voor het opslaan van de gedownloade bestanden.
+        sources (dict[str, SourceArtifact]): De bronnen die moeten worden gedownload.
+    '''
     workbook = make_xlsx_bytes()
 
     responses = {
@@ -395,12 +483,19 @@ def test_download_rejects_declared_oversize(
             ),
         )
 
-
 def test_download_rejects_existing_batch_directory(
     settings: Settings,
     paths: DataPaths,
     sources: dict[str, SourceArtifact],
-):
+):  
+    '''
+    Testst of de downloader een bestaande batch-directory correct afwijst.
+
+    Args:
+        settings (Settings): De instellingen voor de downloader.
+        paths (DataPaths): De paden voor het opslaan van de gedownloade bestanden.
+        sources (dict[str, SourceArtifact]): De bronnen die moeten worden gedownload.
+    '''
     paths.ensure()
 
     version_id = "20260820T120000Z-1234abcd"
@@ -408,9 +503,7 @@ def test_download_rejects_existing_batch_directory(
 
     downloader = ArtifactDownloader(
         settings,
-        session=fake_session_for_sources(
-            sources
-        ),
+        session=fake_session_for_sources(sources)
     )
 
     with pytest.raises(
