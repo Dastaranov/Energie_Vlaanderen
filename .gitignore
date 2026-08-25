@@ -229,3 +229,6 @@ data/current/*
 
 # Secret files
 .env
+
+# Coding history
+docs/history/

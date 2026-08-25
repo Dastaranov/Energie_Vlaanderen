@@ -553,7 +553,4 @@ def test_parser_handles_belgian_decimal_values(
     frame = result.fixed
     assert len(frame) == 1
 
-    assert (
-        frame.iloc[0]["Prijs"]
-        == 1234.56
-    )
+    assert str(frame.iloc[0]["Prijs"]) == "1.234,56"

@@ -33,7 +33,7 @@ from .raw_store import (
     RawStoreError,
 )
 
-from .vtest_pipeline import VTestPipeline
+from .vtest_pipeline import VTestPipeline, VTestPipelineError
 
 LOG = logging.getLogger("energievergelijker")
 
@@ -661,6 +661,8 @@ def run_compare(
             output_path,
         )
 
+    return 0
+
 def load_market_data_if_required(
     *,
     args: argparse.Namespace,
@@ -1102,78 +1104,49 @@ def run_parse_vtest(
     args: argparse.Namespace,
     settings: Settings,
 ) -> int:
-    """Fase 7B.3: V-testwerkboek verwerken via de pipeline."""
+    """Verifieer een raw-versie en verwerk het V-testwerkboek naar staging."""
     paths = DataPaths.from_settings(settings)
     store = RawStore(paths)
 
-    # 1. Raw-versie eerst verifiëren
-    print(f"Verifieer raw-versie {args.version}...")
-    report = store.verify(args.version)
-    if not report.valid:
-        print("Fout: Raw-versie is ongeldig.", file=sys.stderr)
-        for error in report.errors:
-            print(f"  - {error}", file=sys.stderr)
+    raw_report = store.verify(args.version)
+    if not raw_report.valid:
+        LOG.error("Raw-versie %s is ongeldig.", args.version)
+        for error in raw_report.errors:
+            LOG.error("%s", error)
         return 2
 
-    # 2. vtest.xlsx lokaliseren via het manifest
-    # We openen het opgeslagen manifest om de correcte lokale bestandsnaam te vinden
-    manifest_path = report.directory / "manifest.json"
-    if not manifest_path.exists():
-        print(f"Fout: Manifest niet gevonden op {manifest_path}", file=sys.stderr)
+    manifest_path = raw_report.directory / "manifest.json"
+    try:
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifact = manifest_data["artifacts"]["vtest"]
+        stored_filename = artifact["stored_filename"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        LOG.error("V-testartifact ontbreekt of manifest is ongeldig: %s", exc)
+        return 2
+
+    source_path = raw_report.directory / stored_filename
+    if not source_path.is_file():
+        LOG.error("V-testwerkboek niet gevonden: %s", source_path)
         return 2
 
     try:
-        with open(manifest_path, 'r', encoding='utf-8') as f:
-            manifest_data = json.load(f)
-        
-        # We zoeken de stored_filename voor 'vtest'
-        vtest_filename = manifest_data.get("artifacts", {}).get("vtest", {}).get("stored_filename", "vtest.xlsx")
-        source_file = report.directory / vtest_filename
-    except Exception as exc:
-        print(f"Fout bij lezen van manifest: {exc}", file=sys.stderr)
+        result = VTestPipeline().process(
+            source_path=source_path,
+            destination=paths.staging / args.version,
+            version_id=args.version,
+        )
+    except VTestPipelineError as exc:
+        LOG.error("V-testpipeline geweigerd: %s", exc)
         return 2
 
-    if not source_file.exists():
-        print(f"Fout: vtest.xlsx niet gevonden op {source_file}", file=sys.stderr)
-        return 2
 
-    # 3. Pipeline configureren voor uitvoer naar staging
-    staging_dir = paths.staging / args.version / "vtest"
-    
-    print(f"Start verwerking van {source_file}...")
-    pipeline = VTestPipeline()
-
-    try:
-        # 4. Pipeline uitvoeren. We gaan ervan uit dat process() een boolean retouneert
-        success = pipeline.process(source_file, staging_dir, args.version)
-        
-        # We controleren en tonen het JSON-rapport
-        report_file = staging_dir / "pipeline_report.json"
-        if report_file.exists():
-            with open(report_file, 'r', encoding='utf-8') as f:
-                pipeline_report = json.load(f)
-            
-            print("\n--- Pipeline Rapport ---")
-            if 'errors' in pipeline_report and pipeline_report['errors']:
-                print("\nBlokkerende Fouten:")
-                for err in pipeline_report['errors']:
-                    print(f"  - {err}")
-                    
-            if 'warnings' in pipeline_report and pipeline_report['warnings']:
-                print("\nWaarschuwingen:")
-                for warn in pipeline_report['warnings']:
-                    print(f"  - {warn}")
-        
-        if not success:
-            print("\nFout: Pipeline gestopt vanwege blokkerende validatiefouten.", file=sys.stderr)
-            return 2
-            
-        print(f"\nSucces! V-test data geschreven naar {staging_dir}")
-        return 0
-
-    except Exception as exc:
-        logging.error("Onverwachte fout tijdens pipeline-verwerking: %s", exc)
-        return 2
+    print(f"V-test stagingmap       : {result.directory}")
+    print(f"Vaste productcomponenten: {result.fixed_rows}")
+    print(f"Variabel/dynamisch      : {result.variable_dynamic_rows}")
+    print(f"Normalisatiewarnings    : {result.normalization_warnings}")
+    print(f"Validatiewarnings       : {result.validation_warnings}")
+    print(f"Rapport                  : {result.report_json}")
+    return 0
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
