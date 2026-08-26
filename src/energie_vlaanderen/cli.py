@@ -7,33 +7,24 @@ from pathlib import Path
 import sys
 import pandas as pd
 
-from ...experiments.constants import D
-from ...experiments.models import Profile
-from .utility.normalizer import money
-from ...experiments.repository import DataRepository
-from ...experiments.calculator import Calculator
-from ...experiments.intervals import FluviusIntervals
-from .market.entsoe import EntsoeMarketData
-from ...experiments.remove.validation import validate_excel_against_csv
-from .settings import Settings
-from .utility.paths import DataPaths, DataPathsError
-from ...experiments.park.profile_service import ProfileService
-from .metering.fluvius_csv import FluviusDataError
-from ...experiments.park.user_config import ConfigError, load_user_config
-from .ingest.sources import SourceDiscoveryError, VnrSourceScraper
-from .ingest.downloader import ( 
-    ArtifactDownloader,
-    DownloadBatch,
-    DownloadedArtifact,
-    DownloadError,
-)
+# Interne modules
+from energie_vlaanderen.settings import Settings
+from energie_vlaanderen.utility.constants import D
+from energie_vlaanderen.utility.normalizer import money
+from energie_vlaanderen.data.paths import DataPaths, DataPathsError
 
-from .ingest.raw_store import (
-    RawStore,
-    RawStoreError,
-)
+from energie_vlaanderen.metering.fluvius_csv import FluviusIntervals
+from energie_vlaanderen.metering.fluvius_csv import FluviusDataError
+from energie_vlaanderen.market.entsoe import EntsoeMarketData
 
-from .ingest.vtest.pipeline import VTestPipeline, VTestPipelineError
+from energie_vlaanderen.ingest.sources import SourceDiscoveryError, VnrSourceScraper
+from energie_vlaanderen.ingest.downloader import ArtifactDownloader, DownloadBatch, DownloadedArtifact, DownloadError
+from energie_vlaanderen.ingest.raw_store import RawStore, RawStoreError
+from energie_vlaanderen.ingest.vtest.pipeline import VTestPipeline, VTestPipelineError
+
+from energie_vlaanderen.domain.models import Profile
+from energie_vlaanderen.data.repository import DataRepository
+from energie_vlaanderen.calculation.calculator import Calculator
 
 LOG = logging.getLogger("energievergelijker")
 
@@ -89,6 +80,7 @@ def show_paths(
 
     return 0
 
+'''
 def command_profile(args) -> int:
     try:
         config = load_user_config(args.config)
@@ -193,7 +185,7 @@ def command_profile(args) -> int:
             print(f"- {warning}")
 
     return 0
-
+'''
 def resolve_data_dir(
     args: argparse.Namespace,
     settings: Settings,
@@ -270,11 +262,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Geef het resultaat als JSON weer.",
     )
-
+    
     sources_parser.set_defaults(
         handler=run_sources
     )
-
+    
     # ---------------------------------------------------------
     # download
     # ---------------------------------------------------------
@@ -371,160 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     parse_vtest_parser.set_defaults(
         handler=run_parse_vtest
     )
-
-    # ---------------------------------------------------------
-    # compare
-    # ---------------------------------------------------------
-
-    compare_parser = subparsers.add_parser(
-        "compare",
-        help="Vergelijk energieproducten voor een profiel.",
-    )
-
-    compare_parser.add_argument(
-        "--data",
-        type=Path,
-        default=None,
-        help=(
-            "Expliciete map met genormaliseerde data. "
-            "Zonder deze optie wordt de actieve dataset gebruikt."
-        ),
-    )
-
-    compare_parser.add_argument(
-        "--postcode",
-        required=True,
-        help="Belgische postcode, bijvoorbeeld 9280.",
-    )
-
-    compare_parser.add_argument(
-        "--gemeente",
-        default="",
-        help=(
-            "Gemeente. Aanbevolen wanneer een postcode "
-            "meer dan één gemeente bevat."
-        ),
-    )
-
-    compare_parser.add_argument(
-        "--segment",
-        default="Woning",
-        choices=("Woning", "Onderneming"),
-    )
-
-    compare_parser.add_argument(
-        "--year",
-        type=int,
-        default=datetime.now().year,
-    )
-
-    compare_parser.add_argument(
-        "--month",
-        type=int,
-        choices=range(1, 13),
-        metavar="{1..12}",
-        default=datetime.now().month,
-    )
-
-    compare_parser.add_argument(
-        "--dag",
-        type=Decimal,
-        default=D("2000"),
-        help="Jaarlijkse dagafname in kWh.",
-    )
-
-    compare_parser.add_argument(
-        "--nacht",
-        type=Decimal,
-        default=D("1500"),
-        help="Jaarlijkse nachtafname in kWh.",
-    )
-
-    compare_parser.add_argument(
-        "--piek",
-        type=Decimal,
-        default=D("4"),
-        help="Geschatte gemiddelde maandpiek in kW.",
-    )
-
-    compare_parser.add_argument(
-        "--meter",
-        choices=("digitaal", "analoog"),
-        default="digitaal",
-    )
-
-    compare_parser.add_argument(
-        "--omvormer-kva",
-        type=Decimal,
-        default=D("0"),
-        help="Omvormervermogen voor analoge prosumenten.",
-    )
-
-    compare_parser.add_argument(
-        "--kwartier-csv",
-        type=Path,
-        default=None,
-        help="Optioneel Fluviusbestand met kwartierwaarden.",
-    )
-
-    compare_parser.add_argument(
-        "--entsoe-cache",
-        type=Path,
-        default=None,
-        help="Optioneel pad naar de ENTSO-E-cache.",
-    )
-
-    compare_parser.add_argument(
-        "--api-key",
-        default=None,
-        help=(
-            "ENTSO-E API-key. Gebruik bij voorkeur de "
-            "omgevingsvariabele ENTSOE_API_KEY."
-        ),
-    )
-
-    compare_parser.add_argument(
-        "--levies-eur-kwh",
-        type=Decimal,
-        default=D("0"),
-        help=(
-            "Federale of regionale heffingen buiten de "
-            "DNB-tarieven, exclusief btw, in EUR/kWh."
-        ),
-    )
-
-    compare_parser.add_argument(
-        "--energy-fund-eur-year",
-        type=Decimal,
-        default=D("0"),
-        help="Jaarlijkse bijdrage energiefonds in EUR.",
-    )
-
-    compare_parser.add_argument(
-        "--top",
-        type=positive_integer,
-        default=20,
-        help="Aantal resultaten dat wordt getoond.",
-    )
-
-    compare_parser.add_argument(
-        "--csv",
-        type=Path,
-        default=None,
-        help="Optioneel uitvoerpad voor alle resultaten.",
-    )
-
-    compare_parser.add_argument(
-        "--validate-sources",
-        action="store_true",
-        help=(
-            "Voer controles uit op de officiële Excelbronnen "
-            "en de genormaliseerde CSV-bestanden."
-        ),
-    )
-
-    compare_parser.set_defaults(handler=run_compare)
-
+    
     return parser
 
 def run_compare(
@@ -778,7 +617,7 @@ def run_source_validation(
             ),
         )
         return 2
-
+    '''
     checks = [
         validate_excel_against_csv(
             electricity_xlsx,
@@ -791,7 +630,7 @@ def run_source_validation(
             "gas",
         ),
     ]
-
+    
     print(
         json.dumps(
             checks,
@@ -804,7 +643,7 @@ def run_source_validation(
         check["ok"]
         for check in checks
     ) else 2
-
+    '''
 def run_sources(
     args: argparse.Namespace,
     settings: Settings,

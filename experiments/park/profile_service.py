@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..repository import DataRepository
+from ...src.energie_vlaanderen.data.repository import DataRepository
 from ...src.energie_vlaanderen.metering.fluvius_csv import (
     UsageProfile,
 )

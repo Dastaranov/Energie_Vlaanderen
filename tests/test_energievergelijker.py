@@ -82,7 +82,7 @@ def test_fixed_supplier():
     assert not warnings
 
 def test_repository_reports_missing_data(tmp_path: Path):
-    from experiments.repository import (
+    from energie_vlaanderen.data.repository import (
         DataRepositoryError,
     )
 

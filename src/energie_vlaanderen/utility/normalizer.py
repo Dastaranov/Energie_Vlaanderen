@@ -3,7 +3,7 @@ import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 import pandas as pd
-from ....experiments.constants import CENT, D
+from energie_vlaanderen.utility.constants import CENT, D
 
 NULL_TOKENS = {"", "nan", "none", "null", "(empty)", "n/a", "na"}
 MOJIBAKE = {"�": "€", "â‚¬": "€", "\u00a0": " ", "\ufeff": ""}

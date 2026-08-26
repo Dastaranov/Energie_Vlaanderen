@@ -9,11 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .downloader import (
-    ArtifactDownloader,
-    DownloadBatch,
-)
-from ....energievergelijker_v3.paths import DataPaths, DataPathsError
+from energie_vlaanderen.ingest.downloader import ArtifactDownloader, DownloadBatch
+from energie_vlaanderen.data.paths import DataPaths, DataPathsError
 
 
 LOG = logging.getLogger(__name__)

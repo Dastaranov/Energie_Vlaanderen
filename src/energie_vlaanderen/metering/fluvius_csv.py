@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from ....experiments.constants import LOCAL_TZ, UTC
-from ..utility.normalizer import clean_text
+from energie_vlaanderen.utility.constants import LOCAL_TZ, UTC
+from energie_vlaanderen.utility.normalizer import clean_text
 
 class FluviusIntervals:
     @staticmethod

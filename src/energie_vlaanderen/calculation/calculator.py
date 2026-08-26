@@ -2,9 +2,10 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Optional
 import pandas as pd
-from .constants import D
-from .models import Cost, Product, Profile
-from .repository import DataRepository
+from energie_vlaanderen.utility.constants import D
+from energie_vlaanderen.domain.models import Cost, Product, Profile
+from energie_vlaanderen.data.repository import DataRepository
+from typing import Any, Literal
 
 class Calculator:
     def __init__(self, repo: DataRepository, vat=D("0.06"), levies_eur_kwh=D("0"), energy_fund_eur_year=D("0")):
@@ -39,6 +40,7 @@ class Calculator:
 
     @staticmethod
     def formula_ct(f: dict[str,Any], overrides: Optional[dict[str,Decimal]]=None) -> Decimal:
+        
         overrides=overrides or {}; total=f.get("z") or D("0")
         for coeff,letter in zip("abcd","ABCD"):
             x=overrides.get(f.get(f"name_{letter}")) or f.get(letter)

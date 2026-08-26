@@ -1,11 +1,11 @@
-from .calculator import Calculator
+from ..src.energie_vlaanderen.calculation.calculator import Calculator
 from ..src.energie_vlaanderen.settings import Settings
 from .intervals import FluviusIntervals
 from ..src.energie_vlaanderen.market.entsoe import EntsoeMarketData
-from .models import Cost, Product, Profile
+from ..src.energie_vlaanderen.domain.models import Cost, Product, Profile
 from ..src.energie_vlaanderen.infrastructure.csv import CsvSchema, ParseError, RobustCsvParser
-from ..src.energie_vlaanderen.utility.paths import DataPaths, DataPathsError
-from .repository import DataRepository, DataRepositoryError
+from ..src.energie_vlaanderen.data.paths import DataPaths, DataPathsError
+from ..src.energie_vlaanderen.data.repository import DataRepository, DataRepositoryError
 from .park.profile_service import (
     ProfileService,
     ResolvedProfile,

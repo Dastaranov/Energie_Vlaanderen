@@ -14,10 +14,9 @@ from urllib.parse import urlparse
 
 import requests
 
-from ..settings import Settings
-from ....energievergelijker_v3.paths import DataPaths
-from .sources import SourceArtifact
-
+from energie_vlaanderen.settings import Settings
+from energie_vlaanderen.data.paths import DataPaths
+from energie_vlaanderen.ingest.sources import SourceArtifact
 
 LOG = logging.getLogger(__name__)
 

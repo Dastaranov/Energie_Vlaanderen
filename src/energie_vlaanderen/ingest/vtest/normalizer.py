@@ -6,9 +6,8 @@ from typing import Any
 
 import pandas as pd
 
-from .....experiments.constants import MONTHS
-from ...utility.normalizer import clean_text, dec
-
+from energie_vlaanderen.utility.constants import MONTHS
+from energie_vlaanderen.utility.normalizer import clean_text, dec
 
 class VTestNormalizationError(RuntimeError):
     pass
@@ -134,20 +133,7 @@ class VTestDataNormalizer:
             return pd.DataFrame()
 
         df = pd.DataFrame(rows)
-        return df.drop_duplicates(
-            subset=[
-                "year",
-                "month",
-                "segment",
-                "energy",
-                "direction",
-                "supplier",
-                "product",
-                "product_type",
-                "component",
-            ],
-            keep="first",
-        )
+        return df
            
     def _normalize_row(
         self,

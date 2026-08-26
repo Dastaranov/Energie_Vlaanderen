@@ -7,15 +7,13 @@ from typing import Any
 
 import pandas as pd
 
-from .....energievergelijker_v3.normalizer import clean_text, nullify
-
+from energie_vlaanderen.utility.normalizer import clean_text, nullify
 
 LOG = logging.getLogger(__name__)
 
 
 class VTestWorkbookError(RuntimeError):
     pass
-
 
 REQUIRED_PRODUCT_COLUMNS = frozenset(
     {

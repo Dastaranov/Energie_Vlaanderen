@@ -7,8 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from ..settings import Settings
-
+from energie_vlaanderen.settings import Settings
 
 SAFE_VERSION_PATTERN = re.compile(
     r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"

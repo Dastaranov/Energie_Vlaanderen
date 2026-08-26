@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
-from .constants import D
+from energie_vlaanderen.utility.constants import D
 
 @dataclass(frozen=True)
 class Profile:

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
 import pandas as pd
-from .normalizer import clean_text, nullify
+from energie_vlaanderen.utility.normalizer import clean_text, nullify
 
 LOG = logging.getLogger(__name__)
 

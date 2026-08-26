@@ -11,7 +11,7 @@ from typing import Protocol
 import requests
 from bs4 import BeautifulSoup
 
-from ..settings import Settings
+from energie_vlaanderen.settings import Settings
 
 import logging
 
