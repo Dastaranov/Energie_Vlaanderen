@@ -9,7 +9,8 @@
 
 ## 1. Doel en toepassingsgebied
 
-Dit manifest vormt de functionele en gegevenskundige specificatie voor Energie_Vlaanderen. Het platform verzamelt, normaliseert en valideert energiegegevens en gebruikt die voor:
+Dit manifest vormt de functionele en gegevenskundige specificatie voor Energie_Vlaanderen.
+Het platform verzamelt, normaliseert en valideert energiegegevens en gebruikt die voor:
 
 1. energiecontractvergelijking en factuurcontrole;
 2. historische en hypothetische kostensimulaties;
@@ -30,7 +31,8 @@ Elektriciteit is de primaire scope. Aardgas blijft ondersteund waar betrouwbare 
 - `LARGE_CONSUMER`: grootverbruiker met intervalmeting, contractueel vermogen of complexe tariefstructuur.
 - `INDUSTRIAL`: industriële site, mogelijk rechtstreeks aangesloten op een hoger spanningsniveau of met meerdere toegangspunten.
 
-Het klantsegment alleen bepaalt nooit het tarief. Tariefselectie steunt op de aansluiting, netbeheerder, spanning, meetregime, contracttype, afname- en injectieregime en geldigheidsperiode.
+Het klantsegment alleen bepaalt nooit het tarief. Tariefselectie steunt op de aansluiting,
+netbeheerder, spanning, meetregime, contracttype, afname- en injectieregime en geldigheidsperiode.
 
 ### 2.2 Aansluitingsniveaus
 
@@ -41,7 +43,9 @@ Ondersteunde categorieën worden als configureerbare referentiedata opgeslagen:
 - hoogspanning;
 - rechtstreekse aansluiting op het transmissienet, indien binnen de gevalideerde scope.
 
-Voor midden- en hoogspanning kunnen bijkomende componenten gelden, zoals contractueel vermogen, gemeten maximumvermogen, actief en reactief vermogen, arbeidsfactor, kwartiervermogen, transformatorverliezen, aansluitings- en systeemdiensten. Deze componenten worden niet afgeleid uit residentiële rekenregels.
+Voor midden- en hoogspanning kunnen bijkomende componenten gelden, zoals contractueel vermogen,
+gemeten maximumvermogen, actief en reactief vermogen, arbeidsfactor, kwartiervermogen, transformatorverliezen,
+aansluitings- en systeemdiensten. Deze componenten worden niet afgeleid uit residentiële rekenregels.
 
 ## 3. Bronnenhiërarchie en provenance
 
@@ -70,7 +74,8 @@ Elke afgeleide waarde bevat minstens:
 
 ### 4.1 ENTSO-E
 
-ENTSO-E levert Europese markt- en systeemdata, waaronder day-aheadprijzen, belasting, productie en grensoverschrijdende stromen. Het platform gebruikt deze data niet als universele vervanging voor leveranciersindexen.
+ENTSO-E levert Europese markt- en systeemdata, waaronder day-aheadprijzen, belasting, productie en grensoverschrijdende stromen.
+Het platform gebruikt deze data niet als universele vervanging voor leveranciersindexen.
 
 Voor dynamische contracten gelden de volgende regels:
 
@@ -84,11 +89,15 @@ Voor dynamische contracten gelden de volgende regels:
 
 ### 4.2 Elia Open Data
 
-Elia-data kan worden gebruikt voor Belgische netbelasting, onbalans, hernieuwbare productie en prognoses. Deze data ondersteunt forecasting, scenarioanalyse en toekomstige MPC-functionaliteit. Een Elia-onbalansprijs is niet automatisch de afnameprijs van een eindklant en mag alleen worden gebruikt wanneer een product- of optimalisatiemodel dat expliciet voorschrijft.
+Elia-data kan worden gebruikt voor Belgische netbelasting, onbalans, hernieuwbare productie en prognoses.
+Deze data ondersteunt forecasting, scenarioanalyse en toekomstige MPC-functionaliteit.
+Een Elia-onbalansprijs is niet automatisch de afnameprijs van een eindklant en mag alleen worden gebruikt
+wanneer een product- of optimalisatiemodel dat expliciet voorschrijft.
 
 ### 4.3 Fluvius en meterdata
 
-Fluvius-meterdata kan, na formele toegang en geldig gebruikersmandaat, afname, injectie en piekwaarden leveren. Het platform behandelt deze gegevens als persoonsgegevens of commercieel gevoelige gegevens.
+Fluvius-meterdata kan, na formele toegang en geldig gebruikersmandaat, afname, injectie en piekwaarden leveren.
+Het platform behandelt deze gegevens als persoonsgegevens of commercieel gevoelige gegevens.
 
 Vereisten:
 
@@ -100,11 +109,13 @@ Vereisten:
 - export- en verwijdermogelijkheid voor de gebruiker;
 - geen hergebruik voor sturing zonder afzonderlijke toestemming.
 
-Wanneer geen Fluvius-koppeling beschikbaar is, kan lokale P1-, AMR- of EMS-data worden ingelezen mits een gedocumenteerd schema en toestemming van de rechthebbende.
+Wanneer geen Fluvius-koppeling beschikbaar is, kan lokale P1-, AMR- of EMS-data worden ingelezen mits
+een gedocumenteerd schema en toestemming van de rechthebbende.
 
 ### 4.4 Synergrid en Atrias
 
-RLP, SLP-EX en SPP worden gebruikt voor allocatie of benadering wanneer werkelijke intervaldata ontbreken. Profielgewichten moeten per toepasselijke periode sommeren tot één. Elk resultaat op basis van profielen wordt als schatting gemarkeerd.
+RLP, SLP-EX en SPP worden gebruikt voor allocatie of benadering wanneer werkelijke intervaldata ontbreken.
+Profielgewichten moeten per toepasselijke periode sommeren tot één. Elk resultaat op basis van profielen wordt als schatting gemarkeerd.
 
 ## 5. Data dictionary
 
@@ -203,13 +214,18 @@ Vaste, variabele, dynamische en ToU-producten worden ondersteund. De generieke f
 prijs_t = z + a*A_t + b*B_t + c*C_t + d*D_t
 ```
 
-Elke indexparameter bevat naam, bron, frequentie, eenheid en geldigheid. Een vereenvoudigde formule `a*X_t + b` is een bijzonder geval. Ontbrekende verplichte indexwaarden veroorzaken een fout. Een officieel aangeleverde berekende fallbackprijs mag alleen met zichtbare waarschuwing worden gebruikt.
+Elke indexparameter bevat naam, bron, frequentie, eenheid en geldigheid. Een vereenvoudigde formule `a*X_t + b` is een bijzonder geval.
+Ontbrekende verplichte indexwaarden veroorzaken een fout. Een officieel aangeleverde berekende fallbackprijs mag
+alleen met zichtbare waarschuwing worden gebruikt.
 
 ## 7. Nettarieven
 
 ### 7.1 Laagspanning
 
-De berekening ondersteunt volumetrische nettarieven, vaste termen, capaciteitstarief, databeheer, toeslagen, maximumtarief en waar toepasselijk prosumententarief. Voor digitale meters wordt de gefactureerde maandpiek volgens de geldige tariefmethodologie berekend. Voor analoge meters worden uitsluitend de officiële analoge klantcategorie en tariefregels gebruikt, zonder dubbele capaciteitsterm.
+De berekening ondersteunt volumetrische nettarieven, vaste termen, capaciteitstarief, databeheer, toeslagen, maximumtarief
+en waar toepasselijk prosumententarief. Voor digitale meters wordt de gefactureerde maandpiek volgens de geldige
+tariefmethodologie berekend. Voor analoge meters worden uitsluitend de officiële analoge klantcategorie en tariefregels
+gebruikt, zonder dubbele capaciteitsterm.
 
 ### 7.2 Midden- en hoogspanning
 
@@ -227,7 +243,9 @@ De engine mag deze segmenten pas berekenen wanneer de toepasselijke tariefbestan
 
 ## 8. Heffingen en btw
 
-Heffingen worden per geldige schijf, periode, klantcategorie en energievorm gemodelleerd. Btw-percentages zijn versioned masterdata. Btw-vrije posten, zoals een bijdrage waarvoor de officiële regel vrijstelling bepaalt, worden afzonderlijk verwerkt. Geen percentage wordt permanent in de financiële kerncode vastgelegd.
+Heffingen worden per geldige schijf, periode, klantcategorie en energievorm gemodelleerd.
+Btw-percentages zijn versioned masterdata. Btw-vrije posten, zoals een bijdrage waarvoor de officiële regel vrijstelling bepaalt,
+worden afzonderlijk verwerkt. Geen percentage wordt permanent in de financiële kerncode vastgelegd.
 
 ## 9. Meetprofielen en datakwaliteit
 
@@ -255,7 +273,8 @@ Ontbrekende intervallen, overlap, DST-afwijkingen, onmogelijke waarden en onvold
 
 ## 11. Scenario-, MPC- en EMS-grens
 
-De factuur- en tariefengine blijft deterministisch en gescheiden van forecasting en optimalisatie. MPC gebruikt tariffen, marktdata, voorspellingen en technische assets, maar schrijft geen officiële factuurhistoriek over.
+De factuur- en tariefengine blijft deterministisch en gescheiden van forecasting en optimalisatie.
+MPC gebruikt tariffen, marktdata, voorspellingen en technische assets, maar schrijft geen officiële factuurhistoriek over.
 
 Een MPC-resultaat wordt altijd aangeduid als advies of scenario en bevat:
 

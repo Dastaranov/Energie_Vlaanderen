@@ -7,7 +7,7 @@ from unittest import result
 import pandas as pd
 import pytest
 
-from energievergelijker_v3.vtest_workbook import (
+from src.energie_vlaanderen.ingest.vtest.workbook import (
     VTestWorkbookError,
     VTestWorkbookParser,
 )

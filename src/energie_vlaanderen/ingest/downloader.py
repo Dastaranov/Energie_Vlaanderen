@@ -14,8 +14,8 @@ from urllib.parse import urlparse
 
 import requests
 
-from .config import Settings
-from .paths import DataPaths
+from ..settings import Settings
+from ....energievergelijker_v3.paths import DataPaths
 from .sources import SourceArtifact
 
 

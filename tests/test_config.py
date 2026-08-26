@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from energievergelijker_v3.config import (
+from src.energie_vlaanderen.settings import (
     DEFAULT_TARIFF_PAGE,
     DEFAULT_VTEST_PAGE,
     Settings,

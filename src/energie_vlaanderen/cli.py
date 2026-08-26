@@ -7,33 +7,33 @@ from pathlib import Path
 import sys
 import pandas as pd
 
-from .constants import D
-from .models import Profile
-from .normalizer import money
-from .repository import DataRepository
-from .calculator import Calculator
-from .intervals import FluviusIntervals
-from .market import EntsoeMarketData
-from .validation import validate_excel_against_csv
-from .config import Settings
-from .paths import DataPaths, DataPathsError
-from .profile_service import ProfileService
-from .usage_profile import FluviusDataError
-from .user_config import ConfigError, load_user_config
-from .sources import SourceDiscoveryError, VnrSourceScraper
-from .downloader import ( 
+from ...experiments.constants import D
+from ...experiments.models import Profile
+from .utility.normalizer import money
+from ...experiments.repository import DataRepository
+from ...experiments.calculator import Calculator
+from ...experiments.intervals import FluviusIntervals
+from .market.entsoe import EntsoeMarketData
+from ...experiments.remove.validation import validate_excel_against_csv
+from .settings import Settings
+from .utility.paths import DataPaths, DataPathsError
+from ...experiments.park.profile_service import ProfileService
+from .metering.fluvius_csv import FluviusDataError
+from ...experiments.park.user_config import ConfigError, load_user_config
+from .ingest.sources import SourceDiscoveryError, VnrSourceScraper
+from .ingest.downloader import ( 
     ArtifactDownloader,
     DownloadBatch,
     DownloadedArtifact,
     DownloadError,
 )
 
-from .raw_store import (
+from .ingest.raw_store import (
     RawStore,
     RawStoreError,
 )
 
-from .vtest_pipeline import VTestPipeline, VTestPipelineError
+from .ingest.vtest.pipeline import VTestPipeline, VTestPipelineError
 
 LOG = logging.getLogger("energievergelijker")
 

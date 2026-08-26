@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pandas as pd
 
-from energievergelijker_v3.vtest_validator import VTestDataValidator
+from src.energie_vlaanderen.ingest.vtest.validator import VTestDataValidator
 
 
 def make_row() -> dict[str, object]:

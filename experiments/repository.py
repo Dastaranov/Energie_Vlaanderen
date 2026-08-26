@@ -5,10 +5,10 @@ from typing import Optional
 import pandas as pd
 from .constants import D, DNB_CODES, MONTHS
 from .models import Product
-from .normalizer import dec, norm
-from .parser import PRODUCT_SCHEMA, RobustCsvParser
-from .config import Settings
-from .paths import DataPaths
+from ..src.energie_vlaanderen.utility.normalizer import dec, norm
+from ..src.energie_vlaanderen.infrastructure.csv import PRODUCT_SCHEMA, RobustCsvParser
+from ..src.energie_vlaanderen.settings import Settings
+from ..src.energie_vlaanderen.utility.paths import DataPaths
 
 class DataRepositoryError(RuntimeError):
     pass

@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from energievergelijker_v3.vtest_pipeline import VTestPipeline, VTestPipelineError
+from src.energie_vlaanderen.ingest.vtest.pipeline import VTestPipeline, VTestPipelineError
 
 
 def write_workbook(path: Path, price: str = "30,50") -> None:

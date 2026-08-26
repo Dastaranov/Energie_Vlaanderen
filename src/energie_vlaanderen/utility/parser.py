@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 import csv
 import io
@@ -126,3 +127,4 @@ class RobustCsvParser:
             msg = f"{path.name}: verplichte kolommen volledig leeg: {', '.join(empty)}"
             if self.strict: raise ParseError(msg)
             self.warnings.append(msg)
+

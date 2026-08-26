@@ -13,7 +13,7 @@ from .downloader import (
     ArtifactDownloader,
     DownloadBatch,
 )
-from .paths import DataPaths, DataPathsError
+from ....energievergelijker_v3.paths import DataPaths, DataPathsError
 
 
 LOG = logging.getLogger(__name__)

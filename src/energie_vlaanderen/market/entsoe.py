@@ -5,7 +5,7 @@ from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Optional
 import pandas as pd
-from .constants import BE_DOMAIN, LOCAL_TZ, UTC
+from ....experiments.constants import BE_DOMAIN, LOCAL_TZ, UTC
 
 class EntsoeMarketData:
     BASE_URL="https://web-api.tp.entsoe.eu/api"

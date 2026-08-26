@@ -6,8 +6,8 @@ from typing import Any
 
 import pandas as pd
 
-from .constants import MONTHS
-from .normalizer import clean_text, dec
+from .....experiments.constants import MONTHS
+from ...utility.normalizer import clean_text, dec
 
 
 class VTestNormalizationError(RuntimeError):

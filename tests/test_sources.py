@@ -33,8 +33,8 @@ from pathlib import Path
 
 import pytest
 
-from energievergelijker_v3 import Settings
-from energievergelijker_v3.sources import (
+from experiments import Settings
+from src.energie_vlaanderen.ingest.sources import (
     SourceDiscoveryError,
     VnrSourceScraper,
 )

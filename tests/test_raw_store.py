@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from energievergelijker_v3 import (
+from experiments import (
     DataPaths,
     Settings,
 )
-from energievergelijker_v3.raw_store import (
+from src.energie_vlaanderen.ingest.raw_store import (
     RawStore,
     RawStoreError,
 )

@@ -11,9 +11,9 @@ from typing import Any
 
 import pandas as pd
 
-from .vtest_normalizer import NormalizedVTestData, VTestDataNormalizer
-from .vtest_validator import VTestDataValidator, VTestValidationReport
-from .vtest_workbook import ParsedVTestWorkbook, VTestWorkbookParser
+from .normalizer import NormalizedVTestData, VTestDataNormalizer
+from .validator import VTestDataValidator, VTestValidationReport
+from .workbook import ParsedVTestWorkbook, VTestWorkbookParser
 
 
 class VTestPipelineError(RuntimeError):

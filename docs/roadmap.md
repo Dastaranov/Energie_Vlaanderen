@@ -7,7 +7,9 @@
 
 ## 1. Geactualiseerde visie
 
-Energie_Vlaanderen evolueert van een energievergelijker naar een controleerbaar energie-data-, reken- en optimalisatieplatform voor particulieren, kmo's en hoogvermogenklanten. Het platform combineert officiële tarieven, productdata, marktdata, meterdata en technische scenario's zonder hun verschillende bewijsniveaus door elkaar te halen.
+Energie_Vlaanderen evolueert van een energievergelijker naar een controleerbaar energie-data-, reken- en optimalisatieplatform voor particulieren,
+kmo's en hoogvermogenklanten. Het platform combineert officiële tarieven, productdata, marktdata, meterdata en technische scenario's
+zonder hun verschillende bewijsniveaus door elkaar te halen.
 
 De kernproducten worden:
 
@@ -256,7 +258,8 @@ Een afzonderlijke tariefengine bouwen voor hoogvermogenklanten.
 
 ## 16. Fase 11: REST-, Python- en MCP-API
 
-De publieke API biedt goedgekeurde data en reproduceerbare berekeningen. Persoonlijke meetdata krijgt afzonderlijke authenticatie, autorisatie en tenantisolatie.
+De publieke API biedt goedgekeurde data en reproduceerbare berekeningen.
+Persoonlijke meetdata krijgt afzonderlijke authenticatie, autorisatie en tenantisolatie.
 
 MCP blijft standaard read-only. Iedere tool meldt engineversie, bronversies, exactheidsklasse en waarschuwingen.
 
@@ -281,7 +284,8 @@ MCP blijft standaard read-only. Iedere tool meldt engineversie, bronversies, exa
 
 ## 18. Fase 13: Home Assistant en edge-integratie
 
-Begin read-only. Voeg pas later advies en daarna optionele sturing toe. Ondersteun waar passend MQTT, Modbus, SunSpec, OCPP en lokale EMS-koppelingen, zonder afhankelijk te worden van één hardwareleverancier.
+Begin read-only. Voeg pas later advies en daarna optionele sturing toe.
+Ondersteun waar passend MQTT, Modbus, SunSpec, OCPP en lokale EMS-koppelingen, zonder afhankelijk te worden van één hardwareleverancier.
 
 ## 19. Direct volgend werkpakket
 

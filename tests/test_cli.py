@@ -1,8 +1,8 @@
 import argparse
 from pathlib import Path
 
-from energievergelijker_v3.cli import build_parser, run_paths
-from energievergelijker_v3.config import Settings
+from src.energie_vlaanderen.cli import build_parser, run_paths
+from src.energie_vlaanderen.settings import Settings
 
 def test_paths_command_runs(
     tmp_path: Path,

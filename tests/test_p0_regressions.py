@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from energievergelijker_v3.vtest_pipeline import VTestPipeline
-from energievergelijker_v3.vtest_validator import VTestDataValidator
+from src.energie_vlaanderen.ingest.vtest.pipeline import VTestPipeline
+from src.energie_vlaanderen.ingest.vtest.validator import VTestDataValidator
 
 
 def test_csv_value_preserves_decimal_text() -> None:

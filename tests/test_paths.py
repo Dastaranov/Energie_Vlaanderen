@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from energievergelijker_v3 import (
+from experiments import (
     DataPaths,
     DataPathsError,
     Settings,

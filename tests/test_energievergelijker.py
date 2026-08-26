@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from energievergelijker_v3 import (
+from experiments import (
     Calculator,
     DataRepository,
     Profile,
@@ -82,7 +82,7 @@ def test_fixed_supplier():
     assert not warnings
 
 def test_repository_reports_missing_data(tmp_path: Path):
-    from energievergelijker_v3.repository import (
+    from experiments.repository import (
         DataRepositoryError,
     )
 
@@ -97,7 +97,7 @@ def test_repository_from_settings(
     data_root: Path,
     tmp_path: Path,
 ):
-    from energievergelijker_v3 import Settings
+    from experiments import Settings
 
     test_data_root = tmp_path / "data"
     current = test_data_root / "current"

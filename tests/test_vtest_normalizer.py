@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pandas as pd
 
-from energievergelijker_v3.vtest_normalizer import (
+from src.energie_vlaanderen.ingest.vtest.normalizer import (
     VTestDataNormalizer,
 )
 

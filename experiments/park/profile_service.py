@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .repository import DataRepository
-from .usage_profile import (
+from ..repository import DataRepository
+from ...src.energie_vlaanderen.metering.fluvius_csv import (
     UsageProfile,
 )
 from .user_config import UserConfig

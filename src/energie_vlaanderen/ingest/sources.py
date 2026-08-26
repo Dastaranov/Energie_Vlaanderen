@@ -11,7 +11,7 @@ from typing import Protocol
 import requests
 from bs4 import BeautifulSoup
 
-from .config import Settings
+from ..settings import Settings
 
 import logging
 

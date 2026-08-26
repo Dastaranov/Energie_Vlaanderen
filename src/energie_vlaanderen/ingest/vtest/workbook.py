@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from .normalizer import clean_text, nullify
+from .....energievergelijker_v3.normalizer import clean_text, nullify
 
 
 LOG = logging.getLogger(__name__)

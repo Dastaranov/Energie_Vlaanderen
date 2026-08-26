@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from .config import Settings
+from ..settings import Settings
 
 
 SAFE_VERSION_PATTERN = re.compile(

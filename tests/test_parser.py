@@ -2,8 +2,8 @@ from pathlib import Path
 from decimal import Decimal as D
 import pandas as pd
 import pytest
-from energievergelijker_v3 import RobustCsvParser, CsvSchema, ParseError
-from energievergelijker_v3.normalizer import dec
+from experiments import RobustCsvParser, CsvSchema, ParseError
+from src.energie_vlaanderen.utility.normalizer import dec
 
 def test_decimalen():
     assert dec("1.234,56 €") == D("1234.56")
