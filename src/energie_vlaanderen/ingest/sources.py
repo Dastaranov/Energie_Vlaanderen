@@ -31,9 +31,13 @@ class PageLink:
         return unquote(self.url)
 
     @property
+    def filename(self) -> str:
+        return PurePosixPath(unquote(urlparse(self.url).path)).name
+
+    @property
     def search_text(self) -> str:
         return (
-            f"{self.text} {self.decoded_url}"
+            f"{self.text} {self.filename}"
             .casefold()
         )
 

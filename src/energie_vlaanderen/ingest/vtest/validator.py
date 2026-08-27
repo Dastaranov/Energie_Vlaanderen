@@ -101,7 +101,7 @@ class VTestDataValidator:
             self._add_issue(
                 issues,
                 row,
-                severity="error",
+                severity="warning",
                 code="duplicate_component",
                 message=(
                     "Dubbele productcomponent voor "

@@ -30,7 +30,7 @@ energievergelijker = "energievergelijker_v3.cli:main"
 packages = ["energievergelijker_v3"]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = [".", "src"]
 testpaths = ["tests"]
 addopts = "-ra"
 markers = [

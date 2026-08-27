@@ -7,17 +7,15 @@ import pytest
 
 
 REQUIRED_DATA_FILES = (
-    "DnbPerGemeente.csv",
-    "DNB_ELEK_2026.csv",
-    "master_vast_2026.csv",
-    "master_var_dyn_2026.csv",
+    Path("vtest") / "master_vast.csv",
+    Path("vtest") / "master_var_dyn.csv",
 )
 
 
 def has_required_data(path: Path) -> bool:
     return path.is_dir() and all(
-        (path / filename).is_file()
-        for filename in REQUIRED_DATA_FILES
+        (path / rel_path).is_file()
+        for rel_path in REQUIRED_DATA_FILES
     )
 
 

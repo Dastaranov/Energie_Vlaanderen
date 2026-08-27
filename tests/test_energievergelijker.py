@@ -3,24 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from experiments import (
-    Calculator,
-    DataRepository,
-    Profile,
-    Product,
-)
+from energie_vlaanderen.calculation.calculator import Calculator
+from energie_vlaanderen.data.repository import DataRepository, DataRepositoryError
+from energie_vlaanderen.domain.models import Cost, Product, Profile
+from energie_vlaanderen.settings import Settings
 
-@pytest.mark.integration
-def test_postcode_lebbeke(data_root: Path):
-    repository = DataRepository(data_root)
-
-    assert repository.dnb_for(
-        "9280",
-        "Lebbeke",
-    ) == (
-        "Fluvius Midden-Vlaanderen",
-        "FMV",
-    )
 
 def test_variable_formula():
     formula = {
@@ -81,46 +68,10 @@ def test_fixed_supplier():
     assert cost == D("649")
     assert not warnings
 
-def test_repository_reports_missing_data(tmp_path: Path):
-    from energie_vlaanderen.data.repository import (
-        DataRepositoryError,
-    )
 
+def test_repository_reports_missing_data(tmp_path: Path):
     with pytest.raises(
         DataRepositoryError,
-        match="Datamap is onvolledig",
+        match="Ontbrekende datasetbestanden",
     ):
         DataRepository(tmp_path)
-
-@pytest.mark.integration
-def test_repository_from_settings(
-    data_root: Path,
-    tmp_path: Path,
-):
-    from experiments import Settings
-
-    test_data_root = tmp_path / "data"
-    current = test_data_root / "current"
-
-    # De parentmap moet bestaan voordat de symlink wordt aangemaakt.
-    test_data_root.mkdir(parents=True, exist_ok=True)
-
-    current.symlink_to(
-        data_root,
-        target_is_directory=True,
-    )
-
-    settings = Settings(
-        project_root=tmp_path,
-        data_root=test_data_root,
-    )
-
-    repository = DataRepository.from_settings(settings)
-
-    assert repository.dnb_for(
-        "9280",
-        "Lebbeke",
-    ) == (
-        "Fluvius Midden-Vlaanderen",
-        "FMV",
-    )

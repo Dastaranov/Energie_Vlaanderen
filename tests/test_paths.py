@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from experiments import (
+from energie_vlaanderen.data.paths import (
     DataPaths,
     DataPathsError,
-    Settings,
 )
+from energie_vlaanderen.settings import Settings
 
 
 @pytest.fixture

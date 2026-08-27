@@ -33,15 +33,13 @@ from pathlib import Path
 import pytest
 import requests
 
-from experiments import (
-    DataPaths,
-    Settings,
-)
-from src.energie_vlaanderen.ingest.downloader import (
+from energie_vlaanderen.data.paths import DataPaths
+from energie_vlaanderen.settings import Settings
+from energie_vlaanderen.ingest.downloader import (
     ArtifactDownloader,
     DownloadError,
 )
-from src.energie_vlaanderen.ingest.sources import (
+from energie_vlaanderen.ingest.sources import (
     SourceArtifact,
 )
 

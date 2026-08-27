@@ -21,9 +21,10 @@ from energie_vlaanderen.ingest.sources import SourceDiscoveryError, VnrSourceScr
 from energie_vlaanderen.ingest.downloader import ArtifactDownloader, DownloadBatch, DownloadedArtifact, DownloadError
 from energie_vlaanderen.ingest.raw_store import RawStore, RawStoreError
 from energie_vlaanderen.ingest.vtest.pipeline import VTestPipeline, VTestPipelineError
+from energie_vlaanderen.ingest.tariffs.pipeline import TariffPipeline, TariffPipelineError
 
 from energie_vlaanderen.domain.models import Profile
-from energie_vlaanderen.data.repository import DataRepository
+from energie_vlaanderen.data.repository import DataRepository, DataRepositoryError
 from energie_vlaanderen.calculation.calculator import Calculator
 
 LOG = logging.getLogger("energievergelijker")
@@ -80,112 +81,7 @@ def show_paths(
 
     return 0
 
-'''
-def command_profile(args) -> int:
-    try:
-        config = load_user_config(args.config)
-        repository = DataRepository.from_settings()
 
-        resolved = ProfileService(
-            repository
-        ).build(config)
-
-    except (
-        ConfigError,
-        FluviusDataError,
-        FileNotFoundError,
-        ValueError,
-    ) as exc:
-        print(f"FOUT: {exc}")
-        return 2
-
-    usage = resolved.usage
-
-    print("Profiel")
-    print("=======")
-    print(
-        f"Postcode            : "
-        f"{config.user.postcode}"
-    )
-    print(
-        f"Gemeente            : "
-        f"{config.user.gemeente}"
-    )
-    print(
-        f"Segment             : "
-        f"{config.user.segment}"
-    )
-    print(
-        f"DNB elektriciteit   : "
-        f"{resolved.dnb_name} "
-        f"({resolved.dnb_code})"
-    )
-    print(
-        f"Meter               : "
-        f"{config.connection.meter}"
-    )
-    print(
-        f"Fluviusbestand      : "
-        f"{usage.source}"
-    )
-    print(
-        f"Meetpunten          : "
-        f"{usage.interval_count}"
-    )
-    print(
-        f"Periode vanaf       : "
-        f"{usage.start}"
-    )
-    print(
-        f"Periode tot         : "
-        f"{usage.end}"
-    )
-    print(
-        f"Afname              : "
-        f"{usage.consumption_kwh:.3f} kWh"
-    )
-    print(
-        f"Injectie            : "
-        f"{usage.injection_kwh:.3f} kWh"
-    )
-    print(
-        f"Gemiddelde maandpiek: "
-        f"{usage.average_monthly_peak_kw:.3f} kW"
-    )
-
-    if config.electricity_contract is not None:
-        contract = config.electricity_contract
-
-        print()
-        print("Huidig elektriciteitscontract")
-        print("=============================")
-        print(
-            f"Leverancier          : "
-            f"{contract.supplier}"
-        )
-        print(
-            f"Product              : "
-            f"{contract.product}"
-        )
-        print(
-            f"Type                 : "
-            f"{contract.kind}"
-        )
-        print(
-            f"Startdatum           : "
-            f"{contract.start_date.isoformat()}"
-        )
-
-    if usage.warnings:
-        print()
-        print("Waarschuwingen")
-        print("==============")
-
-        for warning in usage.warnings:
-            print(f"- {warning}")
-
-    return 0
-'''
 def resolve_data_dir(
     args: argparse.Namespace,
     settings: Settings,
@@ -363,7 +259,57 @@ def build_parser() -> argparse.ArgumentParser:
     parse_vtest_parser.set_defaults(
         handler=run_parse_vtest
     )
-    
+
+    # ---------------------------------------------------------
+    # parse-tariffs
+    # ---------------------------------------------------------
+    parse_tariffs_parser = subparsers.add_parser(
+        "parse-tariffs",
+        help="Verwerk een ruwe elektriciteitstarieven Excel via de pipeline naar CSV in de staging map.",
+    )
+    parse_tariffs_parser.add_argument(
+        "--version",
+        required=True,
+        help="Raw-versie-id die verwerkt moet worden.",
+    )
+    parse_tariffs_parser.set_defaults(
+        handler=run_parse_tariffs
+    )
+
+    # ---------------------------------------------------------
+    # publish
+    # ---------------------------------------------------------
+
+    publish_parser = subparsers.add_parser(
+        "publish",
+        help=(
+            "Publiceer een gestagede versie naar de "
+            "actieve datarepository."
+        ),
+    )
+
+    publish_parser.add_argument(
+        "--version",
+        required=True,
+        help="Versie-id van de te publiceren staging-map.",
+    )
+
+    publish_parser.add_argument(
+        "--keep-staging",
+        action="store_true",
+        help="Bewaar de staging-map na publicatie (standaard: verwijderen).",
+    )
+
+    publish_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Geef het resultaat als JSON weer.",
+    )
+
+    publish_parser.set_defaults(
+        handler=run_publish
+    )
+
     return parser
 
 def run_compare(
@@ -374,276 +320,6 @@ def run_compare(
 
     repository = DataRepository(data_dir)
 
-    if args.validate_sources:
-        return run_source_validation(
-            args=args,
-            data_dir=data_dir,
-        )
-
-    profile = Profile(
-        postcode=args.postcode,
-        gemeente=args.gemeente,
-        segment=args.segment,
-        meter=args.meter,
-        afname_dag_kwh=args.dag,
-        afname_nacht_kwh=args.nacht,
-        omvormer_kva=args.omvormer_kva,
-        geschatte_maandpiek_kw=args.piek,
-        kwartier_csv=args.kwartier_csv,
-    )
-
-    products = repository.products(
-        args.year,
-        args.month,
-        args.segment,
-    )
-
-    intervals = (
-        FluviusIntervals.read(args.kwartier_csv)
-        if args.kwartier_csv
-        else None
-    )
-
-    market = load_market_data_if_required(
-        args=args,
-        settings=settings,
-        products=products,
-        intervals=intervals,
-    )
-
-    calculator = Calculator(
-        repository,
-        levies_eur_kwh=args.levies_eur_kwh,
-        energy_fund_eur_year=args.energy_fund_eur_year,
-    )
-
-    rows: list[dict[str, object]] = []
-
-    for product in products:
-        try:
-            cost = calculator.calculate(
-                product,
-                profile,
-                market,
-                intervals,
-            )
-
-            rows.append(
-                {
-                    "leverancier": product.supplier,
-                    "product": product.name,
-                    "type": product.kind,
-                    "energiekost_excl_btw": float(
-                        money(cost.supplier)
-                    ),
-                    "nettarief_excl_btw": float(
-                        money(cost.grid)
-                    ),
-                    "heffingen_excl_btw": float(
-                        money(cost.levies)
-                    ),
-                    "btw": float(money(cost.vat)),
-                    "totaal_incl_btw": float(
-                        money(cost.total)
-                    ),
-                    "waarschuwingen": " | ".join(
-                        cost.warnings
-                    ),
-                    "bron": product.source,
-                }
-            )
-        except Exception as exc:
-            logging.warning(
-                "%s - %s overgeslagen: %s",
-                product.supplier,
-                product.name,
-                exc,
-            )
-
-    if not rows:
-        logging.error(
-            "Geen berekenbare producten gevonden voor "
-            "%s-%02d, segment %s.",
-            args.year,
-            args.month,
-            args.segment,
-        )
-        return 2
-
-    result = pd.DataFrame(rows).sort_values(
-        "totaal_incl_btw"
-    )
-
-    print(
-        result.head(args.top).to_string(
-            index=False
-        )
-    )
-
-    if args.csv:
-        output_path = args.csv.expanduser().resolve()
-        output_path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        result.to_csv(
-            output_path,
-            sep=";",
-            index=False,
-            encoding="utf-8-sig",
-            decimal=",",
-        )
-
-        logging.info(
-            "Resultaten opgeslagen in %s",
-            output_path,
-        )
-
-    return 0
-
-def load_market_data_if_required(
-    *,
-    args: argparse.Namespace,
-    settings: Settings,
-    products: list,
-    intervals: pd.DataFrame | None,
-) -> pd.DataFrame | None:
-    has_dynamic_products = any(
-        product.kind.startswith("dynamisch")
-        for product in products
-    )
-
-    if not has_dynamic_products:
-        return None
-
-    paths = DataPaths.from_settings(settings)
-
-    cache_path = (
-        args.entsoe_cache.expanduser().resolve()
-        if args.entsoe_cache
-        else paths.root / "entsoe_day_ahead_prices.json"
-    )
-
-    market_data = EntsoeMarketData(
-        cache_path,
-        args.api_key,
-    )
-
-    if intervals is not None and not intervals.empty:
-        start = intervals["timestamp"].min().to_pydatetime()
-        end = (
-            intervals["timestamp"].max()
-            + pd.Timedelta(minutes=15)
-        ).to_pydatetime()
-    else:
-        start = datetime(
-            args.year,
-            args.month,
-            1,
-        )
-
-        if args.month == 12:
-            end = datetime(
-                args.year + 1,
-                1,
-                1,
-            )
-        else:
-            end = datetime(
-                args.year,
-                args.month + 1,
-                1,
-            )
-
-    api_key_available = bool(
-        args.api_key
-        or os.getenv("ENTSOE_API_KEY")
-    )
-
-    return market_data.load(
-        start,
-        end,
-        allow_api=api_key_available,
-    )
-
-def run_source_validation(
-    *,
-    args: argparse.Namespace,
-    data_dir: Path,
-) -> int:
-    year = args.year
-
-    electricity_xlsx = (
-        data_dir
-        / f"Distributienettarieven elektriciteit {year}.xlsx"
-    )
-
-    electricity_csv = (
-        data_dir
-        / f"DNB_ELEK_{year}.csv"
-    )
-
-    gas_xlsx = (
-        data_dir
-        / f"Distributienettarieven aardgas {year}.xlsx"
-    )
-
-    gas_csv = (
-        data_dir
-        / f"DNB_GAS_{year}.csv"
-    )
-
-    required_files = (
-        electricity_xlsx,
-        electricity_csv,
-        gas_xlsx,
-        gas_csv,
-    )
-
-    missing = [
-        path
-        for path in required_files
-        if not path.is_file()
-    ]
-
-    if missing:
-        logging.error(
-            "Bronvalidatie kan niet worden uitgevoerd. "
-            "Ontbrekende bestanden:\n%s",
-            "\n".join(
-                f"  - {path}"
-                for path in missing
-            ),
-        )
-        return 2
-    '''
-    checks = [
-        validate_excel_against_csv(
-            electricity_xlsx,
-            electricity_csv,
-            "elektriciteit",
-        ),
-        validate_excel_against_csv(
-            gas_xlsx,
-            gas_csv,
-            "gas",
-        ),
-    ]
-    
-    print(
-        json.dumps(
-            checks,
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
-
-    return 0 if all(
-        check["ok"]
-        for check in checks
-    ) else 2
-    '''
 def run_sources(
     args: argparse.Namespace,
     settings: Settings,
@@ -939,6 +615,174 @@ def run_raw_status(
 
     return 0
 
+def run_parse_tariffs(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> int:
+    """Verifieer een raw-versie en verwerk het tarievenwerkboek naar staging."""
+    paths = DataPaths.from_settings(settings)
+    store = RawStore(paths)
+
+    # Controleer of we die versie eigenlijk wel in huis hebben gedownload
+    raw_report = store.verify(args.version)
+    if not raw_report.valid:
+        LOG.error("Raw-versie %s is ongeldig.", args.version)
+        for error in raw_report.errors:
+            LOG.error("%s", error)
+        return 2
+
+    manifest_path = raw_report.directory / "manifest.json"
+    try:
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        # We halen het bestand "electricity_tariffs" op, want zo hebben we dat benoemd in de downloader
+        artifact = manifest_data["artifacts"]["electricity_tariffs"]
+        stored_filename = artifact["stored_filename"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        LOG.error("Tarievenartifact ontbreekt of manifest is ongeldig: %s", exc)
+        return 2
+
+    source_path = raw_report.directory / stored_filename
+    if not source_path.is_file():
+        LOG.error("Tarievenwerkboek niet gevonden: %s", source_path)
+        return 2
+
+    # Doelmap aanmaken (het is niet ongebruikelijk dat we dezelfde staging map gebruiken als voor vtest)
+    staging_dest = paths.staging / args.version
+
+    try:
+        # Hier roepen we jouw kersverse pipeline aan!
+        result = TariffPipeline().process(
+            source_path=source_path,
+            destination=staging_dest,
+            version_id=args.version,
+        )
+    except TariffPipelineError as exc:
+        LOG.error("Tarievenpipeline geweigerd: %s", exc)
+        return 2
+
+    print(f"Tarieven stagingmap       : {result.directory}")
+    print(f"Rapport                   : {result.report_json}")
+    
+    # Optioneel kan je hier uit je JSON rapport de specifieke info halen (rows afname/injectie) 
+    # en naar het scherm printen, net zoals bij de V-test.
+    return 0
+
+def run_publish(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> int:
+    """Publiceer een gestagede versie naar de actieve datarepository."""
+    import shutil
+
+    paths = DataPaths.from_settings(settings)
+    version_id = args.version
+
+    # Valideer het versie-id formaat
+    try:
+        paths.validate_version_id(version_id)
+    except DataPathsError as exc:
+        LOG.error("%s", exc)
+        return 2
+
+    staging_dir = paths.staging / version_id
+    if not staging_dir.is_dir():
+        LOG.error(
+            "Staging-map bestaat niet: %s",
+            staging_dir,
+        )
+        return 2
+
+    vtest_staging = staging_dir / "vtest"
+    if not vtest_staging.is_dir():
+        LOG.error(
+            "V-test stagingmap ontbreekt in %s. "
+            "Voer eerst 'parse-vtest --version %s' uit.",
+            staging_dir,
+            version_id,
+        )
+        return 2
+
+    version_dir = paths.version_dir(version_id)
+    if version_dir.exists():
+        LOG.error(
+            "Versie-map bestaat al: %s. "
+            "Deze versie is mogelijk al gepubliceerd.",
+            version_dir,
+        )
+        return 2
+
+    # Kopieer staging → versions
+    try:
+        shutil.copytree(staging_dir, version_dir)
+    except Exception as exc:
+        LOG.error(
+            "Kopiëren van staging naar versions mislukt: %s",
+            exc,
+        )
+        shutil.rmtree(version_dir, ignore_errors=True)
+        return 2
+
+    # Valideer de kopie via DataRepository
+    try:
+        DataRepository(version_dir)
+    except DataRepositoryError as exc:
+        LOG.error(
+            "Gepubliceerde versie is ongeldig en werd teruggedraaid: %s",
+            exc,
+        )
+        shutil.rmtree(version_dir, ignore_errors=True)
+        return 2
+
+    # Activeer de versie (schrijft current.txt atomisch)
+    try:
+        paths.activate(version_id)
+    except DataPathsError as exc:
+        LOG.error(
+            "Activatie van versie %s mislukt: %s",
+            version_id,
+            exc,
+        )
+        shutil.rmtree(version_dir, ignore_errors=True)
+        return 2
+
+    # Ruim staging op (tenzij --keep-staging)
+    staging_removed = False
+    if not args.keep_staging:
+        try:
+            shutil.rmtree(staging_dir)
+            staging_removed = True
+        except Exception as exc:
+            LOG.warning(
+                "Staging-map kon niet worden verwijderd: %s",
+                exc,
+            )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "status": "published",
+                    "version_id": version_id,
+                    "version_dir": str(version_dir),
+                    "staging_removed": staging_removed,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    print(f"Gepubliceerde versie : {version_id}")
+    print(f"Versie-map           : {version_dir}")
+    print(
+        f"Staging verwijderd   : "
+        f"{'ja' if staging_removed else 'nee (--keep-staging)'}"
+    )
+    print(f"Actieve dataset      : {version_dir}")
+
+    return 0
+
+
 def run_parse_vtest(
     args: argparse.Namespace,
     settings: Settings,
@@ -968,10 +812,15 @@ def run_parse_vtest(
         LOG.error("V-testwerkboek niet gevonden: %s", source_path)
         return 2
 
+    staging_dest = paths.staging / args.version
+    if staging_dest.exists():
+        import shutil
+        shutil.rmtree(staging_dest, ignore_errors=True)
+
     try:
         result = VTestPipeline().process(
             source_path=source_path,
-            destination=paths.staging / args.version,
+            destination=staging_dest,
             version_id=args.version,
         )
     except VTestPipelineError as exc:
@@ -1008,6 +857,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (
         DataPathsError,
+        DataRepositoryError,
         FileNotFoundError,
         SourceDiscoveryError,
         ValueError,

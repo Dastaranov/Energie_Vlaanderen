@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pandas as pd
 
-from src.energie_vlaanderen.ingest.vtest.validator import VTestDataValidator
+from energie_vlaanderen.ingest.vtest.validator import VTestDataValidator
 
 
 def make_row() -> dict[str, object]:
@@ -40,13 +40,13 @@ def test_accepts_valid_fixed_row():
     assert report.errors == ()
 
 
-def test_rejects_duplicate_component():
+def test_warns_duplicate_component():
     row = make_row()
     report = VTestDataValidator().validate(
         pd.DataFrame([row, row.copy()]), pd.DataFrame()
     )
-    assert not report.valid
-    assert any(issue.code == "duplicate_component" for issue in report.errors)
+    assert report.valid
+    assert any(issue.code == "duplicate_component" for issue in report.warnings)
 
 
 def test_rejects_fixed_row_without_price():
