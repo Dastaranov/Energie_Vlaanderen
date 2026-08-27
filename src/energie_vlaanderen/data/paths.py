@@ -25,6 +25,7 @@ class DataPaths:
     staging: Path
     versions: Path
     failed: Path
+    market: Path
     current_legacy: Path
     current_pointer: Path
 
@@ -41,6 +42,7 @@ class DataPaths:
             staging=root / "staging",
             versions=root / "versions",
             failed=root / "failed",
+            market=root / "market",
             current_legacy=root / "current",
             current_pointer=root / "current.txt",
         )
@@ -58,6 +60,7 @@ class DataPaths:
             self.staging,
             self.versions,
             self.failed,
+            self.market,
         ):
             path.mkdir(parents=True, exist_ok=True)
 

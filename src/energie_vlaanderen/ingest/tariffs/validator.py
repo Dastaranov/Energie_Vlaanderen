@@ -7,7 +7,6 @@ class ValidationIssue:
     severity: str
     code: str
     message: str
-    source_sheet: str
 
 @dataclass(frozen=True)
 class TariffValidationReport:
@@ -26,7 +25,8 @@ class TariffValidationReport:
         return not self.errors
 
 class TariffDataValidator:
-    KEY_COLUMNS = ("dnb", "direction", "omschrijving")
+    # Dit zijn de verplichte kolommen die calculator.py nodig heeft
+    KEY_COLUMNS = ("Netbeheerder", "Contracttype", "Klanttype", "Tarieftype", "Tariefdetail", "Tariefnotering", "Prijs_num")
 
     def validate(self, afname: pd.DataFrame, injectie: pd.DataFrame) -> TariffValidationReport:
         issues: list[ValidationIssue] = []
@@ -43,16 +43,6 @@ class TariffDataValidator:
             issues.append(ValidationIssue(
                 severity="error", 
                 code="missing_columns",
-                message=f"Verplichte kolommen ontbreken: {', '.join(missing_columns)}",
-                source_sheet=""
+                message=f"Verplichte kolommen ontbreken: {', '.join(missing_columns)}"
             ))
             return
-
-        for _, row in frame.iterrows():
-            if not row.get("dnb") or row.get("dnb") == "Onbekende DNB":
-                issues.append(ValidationIssue(
-                    severity="error",
-                    code="unknown_dnb",
-                    message="Netbeheerder kon niet bepaald worden uit het tabblad.",
-                    source_sheet=str(row.get("source_sheet", ""))
-                ))

@@ -11,21 +11,28 @@ import pandas as pd
 from energie_vlaanderen.settings import Settings
 from energie_vlaanderen.utility.constants import D
 from energie_vlaanderen.utility.normalizer import money
+from energie_vlaanderen.utility.constants import LOCAL_TZ
 from energie_vlaanderen.data.paths import DataPaths, DataPathsError
 
 from energie_vlaanderen.metering.fluvius_csv import FluviusIntervals
 from energie_vlaanderen.metering.fluvius_csv import FluviusDataError
+
 from energie_vlaanderen.market.entsoe import EntsoeMarketData
+from energie_vlaanderen.market.sync import MarketSyncManager, MarketSyncError
 
 from energie_vlaanderen.ingest.sources import SourceDiscoveryError, VnrSourceScraper
 from energie_vlaanderen.ingest.downloader import ArtifactDownloader, DownloadBatch, DownloadedArtifact, DownloadError
 from energie_vlaanderen.ingest.raw_store import RawStore, RawStoreError
 from energie_vlaanderen.ingest.vtest.pipeline import VTestPipeline, VTestPipelineError
 from energie_vlaanderen.ingest.tariffs.pipeline import TariffPipeline, TariffPipelineError
+from energie_vlaanderen.ingest.curves.pipeline import CurvesPipeline, CurvesPipelineError
 
 from energie_vlaanderen.domain.models import Profile
 from energie_vlaanderen.data.repository import DataRepository, DataRepositoryError
 from energie_vlaanderen.calculation.calculator import Calculator
+
+from energie_vlaanderen.audit.manager import ApprovalManager, AuditError
+from energie_vlaanderen.audit.sanity import SanityChecker
 
 LOG = logging.getLogger("energievergelijker")
 
@@ -80,7 +87,6 @@ def show_paths(
         print("Current     : nog niet ingesteld")
 
     return 0
-
 
 def resolve_data_dir(
     args: argparse.Namespace,
@@ -275,6 +281,88 @@ def build_parser() -> argparse.ArgumentParser:
     parse_tariffs_parser.set_defaults(
         handler=run_parse_tariffs
     )
+
+    parse_tariffs_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overschrijf een bestaande tarieven-stagingmap.",
+    )
+    parse_tariffs_parser.set_defaults(
+        handler=run_parse_tariffs
+    )
+
+    # ---------------------------------------------------------
+    # sync-market
+    # ---------------------------------------------------------
+    sync_market_parser = subparsers.add_parser(
+        "sync-market",
+        help="Synchroniseer ENTSO-E marktprijzen voor een opgegeven periode naar de lokale cache.",
+    )
+    sync_market_parser.add_argument(
+        "--start",
+        required=True,
+        help="Startdatum (formaat: YYYY-MM-DD).",
+    )
+    sync_market_parser.add_argument(
+        "--end",
+        required=True,
+        help="Einddatum (formaat: YYYY-MM-DD).",
+    )
+    sync_market_parser.add_argument(
+        "--no-api",
+        action="store_true",
+        help="Gebruik enkel de bestaande lokale cache (geen externe API-aanroepen).",
+    )
+    sync_market_parser.set_defaults(
+        handler=run_sync_market
+    )
+
+    # ---------------------------------------------------------
+    # parse-curves
+    # ---------------------------------------------------------
+    parse_curves_parser = subparsers.add_parser(
+        "parse-curves",
+        help="Verwerk een ruwe energieprijscurves Excel via de pipeline naar CSV in de staging map.",
+    )
+    parse_curves_parser.add_argument(
+        "--version",
+        required=True,
+        help="Raw-versie-id die verwerkt moet worden.",
+    )
+    parse_curves_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overschrijf een bestaande curves-stagingmap.",
+    )
+    parse_curves_parser.set_defaults(
+        handler=run_parse_curves
+    )
+
+    # ---------------------------------------------------------
+    # audit-status / approve / set-golden
+    # ---------------------------------------------------------
+    audit_status_parser = subparsers.add_parser("audit-status", help="Bekijk de audit-status van een versie.")
+    audit_status_parser.add_argument("--version", required=True)
+    audit_status_parser.set_defaults(handler=run_audit_status)
+
+    audit_approve_parser = subparsers.add_parser("audit-approve", help="Keur een specifieke versie goed.")
+    audit_approve_parser.add_argument("--version", required=True)
+    audit_approve_parser.add_argument("--notes", default="", help="Optionele notities bij goedkeuring.")
+    audit_approve_parser.set_defaults(handler=run_audit_approve)
+
+    set_golden_parser = subparsers.add_parser("set-golden", help="Maak van een goedgekeurde versie de Golden Master.")
+    set_golden_parser.add_argument("--version", required=True)
+    set_golden_parser.set_defaults(handler=run_set_golden)
+
+    # ---------------------------------------------------------
+    # audit-sanity
+    # ---------------------------------------------------------
+    audit_sanity_parser = subparsers.add_parser(
+        "audit-sanity", 
+        help="Voer de volautomatische business logic checks uit op een versie."
+    )
+    audit_sanity_parser.add_argument("--version", required=True)
+    audit_sanity_parser.set_defaults(handler=run_audit_sanity)
 
     # ---------------------------------------------------------
     # publish
@@ -655,6 +743,7 @@ def run_parse_tariffs(
             source_path=source_path,
             destination=staging_dest,
             version_id=args.version,
+            overwrite=args.overwrite
         )
     except TariffPipelineError as exc:
         LOG.error("Tarievenpipeline geweigerd: %s", exc)
@@ -782,7 +871,6 @@ def run_publish(
 
     return 0
 
-
 def run_parse_vtest(
     args: argparse.Namespace,
     settings: Settings,
@@ -835,6 +923,156 @@ def run_parse_vtest(
     print(f"Validatiewarnings       : {result.validation_warnings}")
     print(f"Rapport                  : {result.report_json}")
     return 0
+
+def run_sync_market(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> int:
+    from energie_vlaanderen.utility.constants import LOCAL_TZ
+
+    try:
+        start_dt = datetime.fromisoformat(args.start).replace(tzinfo=LOCAL_TZ)
+        end_dt = datetime.fromisoformat(args.end).replace(tzinfo=LOCAL_TZ)
+    except ValueError as exc:
+        LOG.error("Ongeldige datumnotatie. Gebruik YYYY-MM-DD: %s", exc)
+        return 2
+
+    manager = MarketSyncManager(settings)
+
+    try:
+        result = manager.sync_period(
+            start=start_dt,
+            end=end_dt,
+            allow_api=not args.no_api,
+        )
+    except MarketSyncError as exc:
+        LOG.error("Marktsynchronisatie mislukt: %s", exc)
+        return 2
+
+    # Zet het absolute pad om naar een leesbaar relatief pad indien mogelijk
+    try:
+        display_path = result.cache_path.relative_to(settings.project_root)
+    except ValueError:
+        display_path = result.cache_path
+
+    print(f"Cache-pad       : {display_path}")
+    print(f"Periode         : {result.start_date.date()} tot {result.end_date.date()}")
+    print(f"Geladen records : {result.records_loaded}")
+    print(f"Verwerkt op     : {result.processed_at.isoformat()}")
+    return 0
+
+def run_parse_curves(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> int:
+    """Verifieer een raw-versie en verwerk het energiecurves werkboek naar staging."""
+    paths = DataPaths.from_settings(settings)
+    store = RawStore(paths)
+
+    raw_report = store.verify(args.version)
+    if not raw_report.valid:
+        LOG.error("Raw-versie %s is ongeldig.", args.version)
+        for error in raw_report.errors:
+            LOG.error("%s", error)
+        return 2
+
+    manifest_path = raw_report.directory / "manifest.json"
+    try:
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifact = manifest_data["artifacts"]["energy_curves"]
+        stored_filename = artifact["stored_filename"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        LOG.error("Curvesartifact ontbreekt of manifest is ongeldig: %s", exc)
+        return 2
+
+    source_path = raw_report.directory / stored_filename
+    if not source_path.is_file():
+        LOG.error("Curveswerkboek niet gevonden: %s", source_path)
+        return 2
+
+    staging_dest = paths.staging / args.version
+
+    try:
+        result = CurvesPipeline().process(
+            source_path=source_path,
+            destination=staging_dest,
+            version_id=args.version,
+            overwrite=args.overwrite,
+        )
+    except CurvesPipelineError as exc:
+        LOG.error("Curvespipeline geweigerd: %s", exc)
+        return 2
+
+    try:
+        display_path = result.directory.relative_to(settings.project_root)
+    except ValueError:
+        display_path = result.directory
+
+    print(f"Curves stagingmap       : {display_path}")
+    print(f"Rapport                 : {result.report_json.name}")
+    return 0
+
+def run_audit_status(args: argparse.Namespace, settings: Settings) -> int:
+    paths = DataPaths.from_settings(settings)
+    manager = ApprovalManager(paths)
+    status = manager.get_status(args.version)
+    
+    print(f"Versie     : {status.version_id}")
+    print(f"Status     : {status.status.upper()}")
+    print(f"Laatste up : {status.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Notities   : {status.notes}")
+    
+    golden = manager.get_golden_master()
+    if golden == args.version:
+        print("\n*** DIT IS DE HUIDIGE GOLDEN MASTER ***")
+    return 0
+
+def run_audit_approve(args: argparse.Namespace, settings: Settings) -> int:
+    paths = DataPaths.from_settings(settings)
+    manager = ApprovalManager(paths)
+    try:
+        manager.approve(args.version, args.notes)
+        print(f"Versie {args.version} is nu succesvol goedgekeurd (APPROVED).")
+        return 0
+    except AuditError as exc:
+        LOG.error("Kan niet goedkeuren: %s", exc)
+        return 2
+
+def run_set_golden(args: argparse.Namespace, settings: Settings) -> int:
+    paths = DataPaths.from_settings(settings)
+    manager = ApprovalManager(paths)
+    try:
+        manager.set_golden_master(args.version)
+        print(f"Versie {args.version} is nu de Golden Master.")
+        return 0
+    except AuditError as exc:
+        LOG.error("Fout bij instellen Golden Master: %s", exc)
+        return 2
+
+def run_audit_sanity(args: argparse.Namespace, settings: Settings) -> int:
+    paths = DataPaths.from_settings(settings)
+    checker = SanityChecker(paths)
+    
+    try:
+        report = checker.check_version(args.version)
+    except RuntimeError as exc:
+        LOG.error("Sanity check mislukt om te starten: %s", exc)
+        return 2
+
+    if report.valid:
+        print(f"✅ Sanity check GESLAAGD voor versie {args.version}!")
+        print("Alle geteste datasets voldoen aan de harde business rules (geen onlogische extremen of onmogelijke waarden gevonden).")
+        return 0
+    else:
+        print(f"❌ Sanity check GEFAALD voor versie {args.version}!")
+        print(f"Er zijn {len(report.violations)} schendingen gevonden die kritiek zijn voor een correcte berekening:\n")
+        
+        for viol in report.violations:
+            row_info = f" (rij {viol.row_index})" if viol.row_index is not None else ""
+            print(f"  - [{viol.file}{row_info}] RULE '{viol.rule}': {viol.message}")
+            
+        print("\nDit bestand moet gerepareerd worden (parser of data) voordat de goedkeuring ('audit-approve') kan doorgaan.")
+        return 2
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
