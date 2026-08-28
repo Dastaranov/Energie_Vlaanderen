@@ -33,6 +33,7 @@ from energie_vlaanderen.calculation.calculator import Calculator
 
 from energie_vlaanderen.audit.manager import ApprovalManager, AuditError
 from energie_vlaanderen.audit.sanity import SanityChecker
+from energie_vlaanderen.audit.sampler import DataSampler
 
 LOG = logging.getLogger("energievergelijker")
 
@@ -363,6 +364,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit_sanity_parser.add_argument("--version", required=True)
     audit_sanity_parser.set_defaults(handler=run_audit_sanity)
+
+    # ---------------------------------------------------------
+    # audit-sample
+    # ---------------------------------------------------------
+    audit_sample_parser = subparsers.add_parser(
+        "audit-sample", 
+        help="Neem een willekeurige steekproef uit de data voor visuele menselijke controle."
+    )
+    audit_sample_parser.add_argument("--version", required=True)
+    audit_sample_parser.add_argument(
+        "--count", 
+        type=int, 
+        default=3, 
+        help="Aantal rijen per dataset om te controleren (standaard: 3)."
+    )
+    audit_sample_parser.set_defaults(handler=run_audit_sample)
 
     # ---------------------------------------------------------
     # publish
@@ -1072,6 +1089,17 @@ def run_audit_sanity(args: argparse.Namespace, settings: Settings) -> int:
             print(f"  - [{viol.file}{row_info}] RULE '{viol.rule}': {viol.message}")
             
         print("\nDit bestand moet gerepareerd worden (parser of data) voordat de goedkeuring ('audit-approve') kan doorgaan.")
+        return 2
+
+def run_audit_sample(args: argparse.Namespace, settings: Settings) -> int:
+    paths = DataPaths.from_settings(settings)
+    sampler = DataSampler(paths)
+    
+    try:
+        sampler.generate_samples(args.version, args.count)
+        return 0
+    except RuntimeError as exc:
+        LOG.error("Kan steekproef niet genereren: %s", exc)
         return 2
 
 def main(argv: list[str] | None = None) -> int:
