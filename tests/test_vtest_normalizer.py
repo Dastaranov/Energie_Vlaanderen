@@ -7,6 +7,7 @@ import pandas as pd
 from energie_vlaanderen.ingest.vtest.normalizer import (
     VTestDataNormalizer,
 )
+from energie_vlaanderen.ingest.vtest.validator import VTestDataValidator
 
 
 def make_fixed_row() -> dict[str, object]:
@@ -225,3 +226,113 @@ def test_preserves_new_d_and_z() -> None:
         "d": Decimal("0.4"),
         "z": Decimal("0.5"),
     }
+
+def test_maps_single_meter_fixed_fee() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Vaste vergoeding enkelvoudige meter (€)"
+    )
+
+    assert result == "fixed_fee_single"
+
+def test_maps_double_meter_fixed_fee() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Vaste vergoeding tweevoudige meter (€)"
+    )
+
+    assert result == "fixed_fee_double"
+
+def test_maps_exclusive_night_fixed_fee() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Vaste vergoeding uitsluitend nachtmeter (€)"
+    )
+
+    assert result == (
+        "fixed_fee_exclusive_night"
+    )
+
+def test_maps_exclusive_night_fixed_fee() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Vaste vergoeding uitsluitend nachtmeter (€)"
+    )
+
+    assert result == (
+        "fixed_fee_exclusive_night"
+    )
+
+def test_maps_general_fixed_fee() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Vaste vergoeding (€)"
+    )
+
+    assert result == "fixed_fee"
+
+def test_meter_specific_fixed_fees_are_not_duplicates():
+    frame = pd.DataFrame(
+        [
+            {
+                "year": 2025,
+                "month": 1,
+                "segment": "Woning",
+                "energy": "Elektriciteit",
+                "direction": "Afname",
+                "supplier": "Ebem",
+                "product": "EBEM Groen B@sic+",
+                "product_type": "variabel",
+                "component": "fixed_fee_single",
+                "component_label": (
+                    "Vaste vergoeding "
+                    "enkelvoudige meter (€)"
+                ),
+                "price": Decimal("70.75"),
+                "source_sheet": "Producten var-dyn",
+                "source_row": 1861,
+            },
+            {
+                "year": 2025,
+                "month": 1,
+                "segment": "Woning",
+                "energy": "Elektriciteit",
+                "direction": "Afname",
+                "supplier": "Ebem",
+                "product": "EBEM Groen B@sic+",
+                "product_type": "variabel",
+                "component": "fixed_fee_double",
+                "component_label": (
+                    "Vaste vergoeding "
+                    "tweevoudige meter (€)"
+                ),
+                "price": Decimal("70.75"),
+                "source_sheet": "Producten var-dyn",
+                "source_row": 1862,
+            },
+            {
+                "year": 2025,
+                "month": 1,
+                "segment": "Woning",
+                "energy": "Elektriciteit",
+                "direction": "Afname",
+                "supplier": "Ebem",
+                "product": "EBEM Groen B@sic+",
+                "product_type": "variabel",
+                "component": (
+                    "fixed_fee_exclusive_night"
+                ),
+                "component_label": (
+                    "Vaste vergoeding "
+                    "uitsluitend nachtmeter (€)"
+                ),
+                "price": Decimal("33.06"),
+                "source_sheet": "Producten var-dyn",
+                "source_row": 1863,
+            },
+        ]
+    )
+
+    duplicates = frame.duplicated(
+        subset=list(
+            VTestDataValidator.KEY_COLUMNS
+        ),
+        keep=False,
+    )
+
+    assert not duplicates.any()
