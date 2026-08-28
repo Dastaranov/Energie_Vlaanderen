@@ -108,7 +108,6 @@ def variable_product_frame() -> pd.DataFrame:
         ]
     )
 
-
 def test_parser_finds_fixed_and_variable_sheets(
     tmp_path: Path,
 ):
@@ -117,25 +116,30 @@ def test_parser_finds_fixed_and_variable_sheets(
     fixed = fixed_product_frame()
     variable = variable_product_frame()
 
+    fixed_sheet_name = "Vaste producten"
+    variable_sheet_name = "Variabele en dynamische prod."
+
+    # Excel ondersteunt maximaal 31 tekens per werkbladnaam.
+    assert len(fixed_sheet_name) <= 31
+    assert len(variable_sheet_name) <= 31
+
     with pd.ExcelWriter(
         workbook,
         engine="openpyxl",
     ) as writer:
         write_sheet_with_title(
             writer,
-            "Vaste producten",
+            fixed_sheet_name,
             fixed,
         )
 
         write_sheet_with_title(
             writer,
-            "Variabele en dynamische producten",
+            variable_sheet_name,
             variable,
         )
 
-    parsed = VTestWorkbookParser().parse(
-        workbook
-    )
+    parsed = VTestWorkbookParser().parse(workbook)
 
     assert parsed.source_path == workbook.resolve()
     assert parsed.fixed_rows == 1
@@ -152,9 +156,7 @@ def test_parser_finds_fixed_and_variable_sheets(
     )
 
     assert set(
-        parsed.variable_dynamic[
-            "Productnaam"
-        ]
+        parsed.variable_dynamic["Productnaam"]
     ) == {
         "Variabel Product",
         "Dynamisch Product",
@@ -168,7 +170,7 @@ def test_parser_finds_fixed_and_variable_sheets(
             0,
             "source_sheet",
         ]
-        == "Vaste producten"
+        == fixed_sheet_name
     )
 
     assert (
@@ -184,9 +186,8 @@ def test_parser_finds_fixed_and_variable_sheets(
             0,
             "source_sheet",
         ]
-        == "Variabele en dynamische producten"
+        == variable_sheet_name
     )
-
 
 def test_parser_can_classify_by_sheet_name(
     tmp_path: Path,
@@ -245,7 +246,6 @@ def test_parser_can_classify_by_sheet_name(
         for warning in parsed.warnings
     )
 
-
 def test_parser_ignores_non_product_sheet(
     tmp_path: Path,
 ):
@@ -290,7 +290,6 @@ def test_parser_ignores_non_product_sheet(
         == "Vaste producten"
     )
 
-
 def test_parser_rejects_workbook_without_products(
     tmp_path: Path,
 ):
@@ -326,7 +325,6 @@ def test_parser_rejects_workbook_without_products(
     ):
         parser.parse(workbook_path)
 
-
 def test_parser_rejects_missing_workbook(
     tmp_path: Path,
 ):
@@ -342,7 +340,6 @@ def test_parser_rejects_missing_workbook(
         match="bestaat niet",
     ):
         parser.parse(workbook_path)
-
 
 def test_parser_skips_empty_sheets(
     tmp_path: Path,
@@ -402,7 +399,6 @@ def test_parser_skips_empty_sheets(
         result.fixed.iloc[0]["Productnaam"]
         == "Product X"
     )
-
 
 def test_parser_preserves_source_metadata(
     tmp_path: Path,
@@ -511,7 +507,6 @@ def test_parser_normalizes_empty_values(
         frame.iloc[0]["Indexatieparameter A"]
     )
 
-
 def test_parser_handles_belgian_decimal_values(
     tmp_path: Path,
 ):
@@ -554,3 +549,34 @@ def test_parser_handles_belgian_decimal_values(
     assert len(frame) == 1
 
     assert str(frame.iloc[0]["Prijs"]) == "1.234,56"
+
+def test_summary_detection_requires_consistent_markers():
+    row = pd.Series(
+        {
+            "Handelsnaam": "Echte leverancier",
+            "Productnaam": "Subtotal voordeel",
+            "Vast/variabel/dynamisch": "Vast",
+            "Prijsonderdeel": (
+                "Enkelvoudige meter dagtarief "
+                "(c€/kWh)"
+            ),
+        }
+    )
+
+    assert not VTestWorkbookParser.is_summary_row(
+        row
+    )
+
+def test_detects_vnr_subtotal_format():
+    row = pd.Series(
+        {
+            "Handelsnaam": "Subtotal",
+            "Productnaam": "Subtotal",
+            "Vast/variabel/dynamisch": "Subtotal",
+            "Prijsonderdeel": "Subtotal",
+        }
+    )
+
+    assert VTestWorkbookParser.is_summary_row(
+        row
+    )

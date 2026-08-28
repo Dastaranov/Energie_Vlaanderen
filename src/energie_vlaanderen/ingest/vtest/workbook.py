@@ -306,19 +306,39 @@ class VTestWorkbookParser:
         ).copy()
 
         frame["source_sheet"] = sheet_name
-
         frame["source_row"] = (
             frame.index
             + header_row
             + 2
         )
 
+        summary_mask = frame.apply(
+            self.is_summary_row,
+            axis=1,
+        )
+
+        summary_rows = frame.loc[
+            summary_mask,
+            "source_row",
+        ].astype(int).tolist()
+
+        if summary_rows:
+            LOG.info(
+                "Werkblad %s: %d samenvattingsrijen "
+                "genegeerd: %s",
+                sheet_name,
+                len(summary_rows),
+                summary_rows[:20],
+            )
+
+        frame = frame.loc[
+            ~summary_mask
+        ].copy()
+
         frame = frame.reset_index(
             drop=True
         )
 
-        # Bewaar bronwaarden ongewijzigd. Financiele conversie naar Decimal
-        # gebeurt uitsluitend in VTestDataNormalizer via normalizer.dec().
         return frame
 
     def split_contract_types(
@@ -456,3 +476,41 @@ class VTestWorkbookParser:
                 )
 
         return result
+
+
+    SUMMARY_MARKERS = frozenset(
+        {
+            "subtotal",
+            "subtotaal",
+            "total",
+            "totaal",
+            "grand total",
+            "eindtotaal",
+        }
+    )
+
+
+    @classmethod
+    def is_summary_row(
+        cls,
+        row: pd.Series,
+    ) -> bool:
+        identifying_columns = (
+            "Handelsnaam",
+            "Productnaam",
+            "Vast/variabel/dynamisch",
+            "Prijsonderdeel",
+        )
+
+        values = {
+            clean_text(row.get(column)).casefold()
+            for column in identifying_columns
+            if clean_text(row.get(column))
+        }
+
+        if not values:
+            return False
+
+        return values.issubset(
+            cls.SUMMARY_MARKERS
+        )

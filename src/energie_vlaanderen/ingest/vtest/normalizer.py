@@ -470,10 +470,27 @@ class VTestDataNormalizer:
         return None
 
     @staticmethod
-    def _component_key(
-        label: str,
-    ) -> str:
+    def _component_key(label: str) -> str:
         folded = label.casefold()
+
+        is_fixed_fee = (
+            "vaste vergoeding" in folded
+        )
+
+        if is_fixed_fee:
+            if (
+                "uitsluitend nacht" in folded
+                or "exclusief nacht" in folded
+            ):
+                return "fixed_fee_exclusive_night"
+
+            if "tweevoudig" in folded:
+                return "fixed_fee_double"
+
+            if "enkelvoudig" in folded:
+                return "fixed_fee_single"
+
+            return "fixed_fee"
 
         if (
             "tweevoudige" in folded
