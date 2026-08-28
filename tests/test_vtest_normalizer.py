@@ -27,7 +27,6 @@ def make_fixed_row() -> dict[str, object]:
         "source_row": 2,
     }
 
-
 def make_variable_row() -> dict[str, object]:
     return {
         "Jaar": "2026",
@@ -53,7 +52,6 @@ def make_variable_row() -> dict[str, object]:
         "source_row": 3,
     }
 
-
 def test_normalizes_fixed_decimal():
     fixed = pd.DataFrame(
         [make_fixed_row()]
@@ -76,7 +74,6 @@ def test_normalizes_fixed_decimal():
     )
 
     assert result.errors == ()
-
 
 def test_normalizes_variable_formula():
     variable = pd.DataFrame(
@@ -104,7 +101,6 @@ def test_normalizes_variable_formula():
 
     assert frame.loc[0, "index_name_A"] == "EPEX"
 
-
 def test_rejects_unknown_segment():
     row = make_fixed_row()
     row["Segment"] = "Onbekend"
@@ -118,8 +114,7 @@ def test_rejects_unknown_segment():
     assert len(result.errors) == 1
     assert "Segment" in result.errors[0].message
 
-
-def test_warns_for_missing_index_value():
+def test_errors_for_missing_index_value():
     row = make_variable_row()
     row["Waarde A (€/MWh)"] = "(Empty)"
 
@@ -132,9 +127,8 @@ def test_warns_for_missing_index_value():
 
     assert any(
         "indexwaarde A" in issue.message
-        for issue in result.warnings
-    )
-
+        for issue in result.errors
+    ), result.issues
 
 def test_rejects_product_in_wrong_table():
     row = make_fixed_row()
@@ -151,3 +145,83 @@ def test_rejects_product_in_wrong_table():
         "verkeerde tabel" in issue.message
         for issue in result.errors
     )
+
+def test_detects_legacy_index_schema() -> None:
+    row = pd.Series(
+        {
+            "Indexatieparameter X (a.X + b.Y + c.Z + d)": "Index X",
+            "Indexatieparameter Y (a.X + b.Y + c.Z + d)": "Index Y",
+            "Indexatieparameter Z (a.X + b.Y + c.Z + d)": "Index Z",
+            "a": 1,
+            "b": 2,
+            "c": 3,
+            "d": 4,
+        }
+    )
+
+    result = VTestDataNormalizer._uses_legacy_index_schema(row)
+
+    assert result is True
+
+def test_detects_new_index_schema() -> None:
+    row = pd.Series(
+        {
+            "Indexatieparameter A (a.A + b.B + c.C + d.D + z)": "Index A",
+            "Indexatieparameter B (a.A + b.B + c.C + d.D + z)": "Index B",
+            "Indexatieparameter C (a.A + b.B + c.C + d.D + z)": "Index C",
+            "Indexatieparameter D (a.A + b.B + c.C + d.D + z)": "Index D",
+            "a": 1,
+            "b": 2,
+            "c": 3,
+            "d": 4,
+            "z": 5,
+        }
+    )
+
+    result = VTestDataNormalizer._uses_legacy_index_schema(row)
+
+    assert result is False
+
+def test_maps_legacy_constant_d_to_z() -> None:
+    row = pd.Series(
+        {
+            "Indexatieparameter X (a.X + b.Y + c.Z + d)": "Index X",
+            "a": "0,129",
+            "b": "0",
+            "c": "0",
+            "d": "0,407",
+        }
+    )
+
+    result = VTestDataNormalizer._coefficients(row)
+
+    assert result == {
+        "a": Decimal("0.129"),
+        "b": Decimal("0"),
+        "c": Decimal("0"),
+        "d": Decimal("0"),
+        "z": Decimal("0.407"),
+    }
+
+def test_preserves_new_d_and_z() -> None:
+    row = pd.Series(
+        {
+            "Indexatieparameter A (a.A + b.B + c.C + d.D + z)": "Index A",
+            "Indexatieparameter D (a.A + b.B + c.C + d.D + z)": "Index D",
+            "a": "0,1",
+            "b": "0,2",
+            "c": "0,3",
+            "d": "0,4",
+            "z": "0,5",
+        }
+    )
+
+    result = VTestDataNormalizer._coefficients(row)
+
+    assert result == {
+        "a": Decimal("0.1"),
+        "b": Decimal("0.2"),
+        "c": Decimal("0.3"),
+        "d": Decimal("0.4"),
+        "z": Decimal("0.5"),
+    }

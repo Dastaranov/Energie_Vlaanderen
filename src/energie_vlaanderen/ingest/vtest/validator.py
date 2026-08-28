@@ -3,8 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from collections import Counter
 
 import pandas as pd
+
+from energie_vlaanderen.ingest.vtest.normalizer import NormalizedVTestData
+from energie_vlaanderen.ingest.vtest.workbook import ParsedVTestWorkbook
+
+SourceReference = tuple[str, int]
 
 
 @dataclass(frozen=True)
@@ -48,10 +54,18 @@ class VTestDataValidator:
 
     def validate(
         self,
+        parsed: ParsedVTestWorkbook,
         fixed: pd.DataFrame,
         variable_dynamic: pd.DataFrame,
     ) -> VTestValidationReport:
         issues: list[ValidationIssue] = []
+        issues.extend(
+            self._validate_source_coverage(
+                parsed=parsed,
+                fixed=fixed,
+                variable_dynamic=variable_dynamic,
+            )
+        )
 
         self._validate_frame(
             fixed,
@@ -183,6 +197,130 @@ class VTestDataValidator:
                         ),
                     )
 
+    def validate_source_coverage(
+        self,
+        parsed: ParsedVTestWorkbook,
+        normalized: NormalizedVTestData,
+    ) -> tuple[ValidationIssue, ...]:
+        issues: list[ValidationIssue] = []
+
+        output = pd.concat(
+            [
+                normalized.fixed,
+                normalized.variable_dynamic,
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+
+        if output.empty:
+            return (
+                ValidationIssue(
+                    severity="error",
+                    code="NO_OUTPUT_ROWS",
+                    message="Geen genormaliseerde rijen gevonden.",
+                    source_sheet="",
+                    source_row=None,
+                ),
+            )
+
+        source_keys = output[
+            ["source_sheet", "source_row"]
+        ].copy()
+
+        duplicate_mask = source_keys.duplicated(
+            keep=False
+        )
+
+        for _, row in source_keys.loc[
+            duplicate_mask
+        ].iterrows():
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="DUPLICATE_SOURCE_ROW",
+                    message=(
+                        "Bronrij komt meerdere keren voor "
+                        "in de uitvoer."
+                    ),
+                    source_sheet=str(
+                        row["source_sheet"]
+                    ),
+                    source_row=int(
+                        row["source_row"]
+                    ),
+                )
+            )
+
+        output_counts = (
+            source_keys
+            .groupby("source_sheet")
+            .size()
+            .to_dict()
+        )
+
+        for sheet in parsed.sheets:
+            expected = set(sheet.source_rows)
+
+            actual = set(
+                output.loc[
+                    output["source_sheet"].eq(
+                        sheet.sheet_name
+                    ),
+                    "source_row",
+                ]
+                .dropna()
+                .astype(int)
+            )
+
+            missing = sorted(expected - actual)
+            unexpected = sorted(actual - expected)
+
+            for source_row in missing:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="MISSING_SOURCE_ROW",
+                        message=(
+                            "Bronrij ontbreekt in de uitvoer."
+                        ),
+                        source_sheet=sheet.sheet_name,
+                        source_row=source_row,
+                    )
+                )
+
+            for source_row in unexpected:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="UNEXPECTED_SOURCE_ROW",
+                        message=(
+                            "Uitvoerrij heeft geen "
+                            "overeenkomstige bronrij."
+                        ),
+                        source_sheet=sheet.sheet_name,
+                        source_row=source_row,
+                    )
+                )
+
+            actual_rows = len(actual)
+            if actual_rows != sheet.rows:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="SOURCE_ROW_COUNT_MISMATCH",
+                        message=(
+                            f"Werkblad bevat {sheet.rows} "
+                            "bronrijen, maar de uitvoer bevat "
+                            f"{actual_rows} rijen."
+                        ),
+                        source_sheet=sheet.sheet_name,
+                        source_row=None,
+                    )
+                )
+
+        return tuple(issues)
+
     @classmethod
     def _has_formula(cls, row: pd.Series) -> bool:
         return any(
@@ -240,3 +378,182 @@ class VTestDataValidator:
                 source_row=cls._source_row(row.get("source_row")),
             )
         )
+
+    @staticmethod
+    def _expected_source_references(
+        parsed: ParsedVTestWorkbook,
+    ) -> set[SourceReference]:
+        """
+        Geef alle door de parser gevonden bronrijen terug.
+
+        Iedere combinatie van werkblad en Excel-rijnummer
+        moet exact eenmaal in de genormaliseerde uitvoer voorkomen.
+        """
+        references: set[SourceReference] = set()
+
+        for sheet in parsed.sheets:
+            for source_row in sheet.source_rows:
+                reference = (
+                    sheet.sheet_name,
+                    int(source_row),
+                )
+
+                if reference in references:
+                    raise ValueError(
+                        "Dubbele bronreferentie in parserresultaat: "
+                        f"{sheet.sheet_name}, rij {source_row}."
+                    )
+
+                references.add(reference)
+        return references
+
+    @staticmethod
+    def _actual_source_references(
+        frame: pd.DataFrame,
+    ) -> list[SourceReference]:
+        """
+        Lees de bronreferenties uit een genormaliseerd DataFrame.
+
+        Een list wordt gebruikt zodat dubbele referenties
+        nog gedetecteerd kunnen worden.
+        """
+        if frame.empty:
+            return []
+
+        required_columns = {
+            "source_sheet",
+            "source_row",
+        }
+
+        missing_columns = required_columns - set(frame.columns)
+
+        if missing_columns:
+            raise ValueError(
+                "Genormaliseerde dataset mist bronkolommen: "
+                + ", ".join(sorted(missing_columns))
+            )
+
+        references: list[SourceReference] = []
+
+        for row in frame[
+            ["source_sheet", "source_row"]
+        ].itertuples(index=False):
+            source_sheet = str(row.source_sheet).strip()
+
+            if not source_sheet:
+                raise ValueError(
+                    "Lege source_sheet in genormaliseerde dataset."
+                )
+
+            if pd.isna(row.source_row):
+                raise ValueError(
+                    "Lege source_row in genormaliseerde dataset."
+                )
+
+            references.append(
+                (
+                    source_sheet,
+                    int(row.source_row),
+                )
+            )
+
+        return references
+
+    @classmethod
+    def _validate_source_coverage(
+        cls,
+        parsed: ParsedVTestWorkbook,
+        fixed: pd.DataFrame,
+        variable_dynamic: pd.DataFrame,
+    ) -> list[ValidationIssue]:
+        """
+        Controleer dat iedere geparste bronrij exact eenmaal
+        in precies één uitvoertabel voorkomt.
+        """
+        issues: list[ValidationIssue] = []
+
+        expected = cls._expected_source_references(parsed)
+
+        fixed_references = cls._actual_source_references(fixed)
+        variable_references = cls._actual_source_references(
+            variable_dynamic
+        )
+
+        all_actual = fixed_references + variable_references
+        actual_set = set(all_actual)
+
+        missing = sorted(expected - actual_set)
+        unexpected = sorted(actual_set - expected)
+
+        fixed_set = set(fixed_references)
+        variable_set = set(variable_references)
+
+        wrong_table_overlap = sorted(
+            fixed_set & variable_set
+        )
+
+        reference_counts = Counter(all_actual)
+
+        duplicate_references = sorted(
+            reference
+            for reference, count in reference_counts.items()
+            if count > 1
+        )
+
+        for source_sheet, source_row in missing:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_source_row",
+                    message=(
+                        "Geparste bronrij ontbreekt in de "
+                        "genormaliseerde uitvoer."
+                    ),
+                    source_sheet=source_sheet,
+                    source_row=source_row,
+                )
+            )
+
+        for source_sheet, source_row in unexpected:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="unexpected_source_row",
+                    message=(
+                        "Uitvoerrij verwijst naar een bronrij "
+                        "die niet in het parserresultaat voorkomt."
+                    ),
+                    source_sheet=source_sheet,
+                    source_row=source_row,
+                )
+            )
+
+        for source_sheet, source_row in duplicate_references:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="duplicate_source_row",
+                    message=(
+                        "Bronrij komt meer dan eenmaal voor "
+                        "in de genormaliseerde uitvoer."
+                    ),
+                    source_sheet=source_sheet,
+                    source_row=source_row,
+                )
+            )
+
+        for source_sheet, source_row in wrong_table_overlap:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="source_row_in_both_tables",
+                    message=(
+                        "Bronrij komt zowel in de vaste als in "
+                        "de variabele/dynamische uitvoer voor."
+                    ),
+                    source_sheet=source_sheet,
+                    source_row=source_row,
+                )
+            )
+
+        return issues

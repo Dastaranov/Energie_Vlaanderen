@@ -51,14 +51,36 @@ class VTestPipeline:
         destination: Path,
         version_id: str,
     ) -> VTestPipelineResult:
+        # Stap 1 Parser starten
         parsed = self.workbook_parser.parse(source_path)
+
+        # Stap 2 Normalizer starten
         normalized = self.normalizer.normalize(
             parsed.fixed,
             parsed.variable_dynamic,
         )
+
+        if normalized.errors:
+            # Tijdelijk verwijderen
+            '''
+            examples = "\n".join(
+                (
+                    f"- {issue.source_sheet}:"
+                    f"{issue.source_row}: "
+                    f"{issue.message}"
+                )
+                for issue in normalized.errors[:20]
+            )
+            '''
+            raise VTestPipelineError(
+                "Normalisatie bevat "
+                f"{len(normalized.errors)} fouten."
+            )
+        
         validation = self.validator.validate(
-            normalized.fixed,
-            normalized.variable_dynamic,
+            parsed=parsed,
+            fixed=normalized.fixed,
+            variable_dynamic=normalized.variable_dynamic,
         )
 
         normalization_errors = normalized.errors

@@ -43,6 +43,7 @@ class ParsedSheet:
     header_row: int
     rows: int
     columns: tuple[str, ...]
+    source_rows: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,12 @@ class VTestWorkbookParser:
                     header_row=header_row,
                     rows=len(frame),
                     columns=tuple(frame.columns),
+                    source_rows=tuple(
+                        int(value)
+                        for value in frame[
+                            "source_row"
+                        ].tolist()
+                    ),
                 )
             )
 

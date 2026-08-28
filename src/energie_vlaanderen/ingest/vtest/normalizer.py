@@ -47,6 +47,13 @@ COMPONENT_MAPPING = {
     "enkelvoudige meter dagtarief": "single",
 }
 
+FORMULA_COMPONENTS = {
+    "single",
+    "day",
+    "night",
+    "exclusive_night",
+    "dynamic",
+}
 
 @dataclass(frozen=True)
 class RowIssue:
@@ -279,19 +286,7 @@ class VTestDataNormalizer:
             row.get("Prijs")
         )
 
-        coefficients = {
-            name: dec(
-                row.get(name),
-                Decimal("0"),
-            )
-            for name in (
-                "a",
-                "b",
-                "c",
-                "d",
-                "z",
-            )
-        }
+        coefficients = self._coefficients(row)
 
         index_names: dict[str, str] = {}
         index_values: dict[str, Decimal | None] = {}
@@ -307,25 +302,46 @@ class VTestDataNormalizer:
                 letter,
             )
 
-        for coefficient_name, index_letter in (
-            ("a", "A"),
-            ("b", "B"),
-            ("c", "C"),
-            ("d", "D"),
-        ):
-            coefficient = coefficients[
-                coefficient_name
-            ]
-
-            if (
-                coefficient != Decimal("0")
-                and index_values[index_letter] is None
+        if component_key in FORMULA_COMPONENTS:
+            for coefficient_name, index_letter in (
+                ("a", "A"),
+                ("b", "B"),
+                ("c", "C"),
+                ("d", "D"),
             ):
+                coefficient = coefficients[
+                    coefficient_name
+                ]
+
+                if (
+                    coefficient != Decimal("0")
+                    and index_values[index_letter] is None
+                ):
+                    add_issue(
+                        "error",
+                        "Niet-nulcoëfficiënt "
+                        f"{coefficient_name} zonder "
+                        f"indexwaarde {index_letter}.",
+                    )
+        if (
+            product_type in {"variabel", "dynamisch"}
+            and component_key in FORMULA_COMPONENTS
+        ):
+            has_coefficient = any(
+                coefficients[name] != Decimal("0")
+                for name in ("a", "b", "c", "d")
+            )
+
+            has_index = any(
+                value is not None
+                for value in index_values.values()
+            )
+
+            if has_coefficient and not has_index:
                 add_issue(
-                    "warning",
-                    "Niet-nulcoëfficiënt "
-                    f"{coefficient_name} zonder "
-                    f"indexwaarde {index_letter}.",
+                    "error",
+                    "Variabel of dynamisch tarief heeft "
+                    "coëfficiënten maar geen indexwaarden.",
                 )
 
         if (
@@ -483,53 +499,130 @@ class VTestDataNormalizer:
 
         return folded
 
-    @staticmethod
+    @classmethod
+    def _coefficients(
+        cls,
+        row: pd.Series,
+    ) -> dict[str, Decimal]:
+        zero = Decimal("0")
+
+        a = dec(row.get("a"), zero)
+        b = dec(row.get("b"), zero)
+        c = dec(row.get("c"), zero)
+
+        if cls._uses_legacy_index_schema(row):
+            # Oude formule: a.X + b.Y + c.Z + d
+            return {
+                "a": a,
+                "b": b,
+                "c": c,
+                "d": zero,
+                "z": dec(row.get("d"), zero),
+            }
+
+        # Nieuwe formule: a.A + b.B + c.C + d.D + z
+        return {
+            "a": a,
+            "b": b,
+            "c": c,
+            "d": dec(row.get("d"), zero),
+            "z": dec(row.get("z"), zero),
+        }
+
+    @classmethod
     def _index_name(
+        cls,
         row: pd.Series,
         letter: str,
     ) -> str:
-        exact_column = (
-            f"Indexatieparameter {letter} "
-            "(a.A + b.B + c.C + d.D + z)"
-        )
+        legacy_mapping = {
+            "A": "X",
+            "B": "Y",
+            "C": "Z",
+            "D": None,
+        }
 
-        value = clean_text(
-            row.get(exact_column)
-        )
+        source_letter = letter
 
-        if value:
-            return value
+        if cls._uses_legacy_index_schema(row):
+            source_letter = legacy_mapping[letter]
 
-        return clean_text(
-            row.get(
-                f"Indexatieparameter {letter}"
-            )
-        )
+        if source_letter is None:
+            return ""
 
-    @staticmethod
+        prefix = f"Indexatieparameter {source_letter}"
+
+        for column in row.index:
+            label = clean_text(column)
+
+            if label.casefold().startswith(
+                prefix.casefold()
+            ):
+                return clean_text(row.get(column))
+
+        return ""
+
+
+    @classmethod
     def _index_value(
+        cls,
         row: pd.Series,
         letter: str,
     ) -> Decimal | None:
+        legacy_mapping = {
+            "A": "X",
+            "B": "Y",
+            "C": "Z",
+            "D": None,
+        }
+
+        source_letter = letter
+
+        if cls._uses_legacy_index_schema(row):
+            source_letter = legacy_mapping[letter]
+
+        if source_letter is None:
+            return None
+
         prefixes = (
-            f"Waarde {letter} (€/MWh)",
-            f"Waarde {letter}",
+            f"Waarde {source_letter} (€/MWh)",
+            f"Waarde {source_letter}",
         )
 
-        for column in row.index:
-            label = clean_text(
-                column
-            )
+        candidate_columns = []
 
-            if not any(
-                label.startswith(prefix)
+        for column in row.index:
+            label = clean_text(column)
+
+            if any(
+                label.casefold().startswith(
+                    prefix.casefold()
+                )
                 for prefix in prefixes
             ):
+                candidate_columns.append(label)
+
+        # Geef voorrang aan de VNR/VREG-waarde, niet aan
+        # de laatst gekende waarde.
+        preferred_markers = (
+            "vnr waarde",
+            "vreg waarde",
+        )
+
+        for marker in preferred_markers:
+            for column in candidate_columns:
+                if marker in column.casefold():
+                    value = dec(row.get(column))
+
+                    if value is not None:
+                        return value
+
+        # Fallback als er slechts één geschikte waardekolom is.
+        for column in candidate_columns:
+            if "laatst gekende waarde" in column.casefold():
                 continue
 
-            value = dec(
-                row.get(column)
-            )
+            value = dec(row.get(column))
 
             if value is not None:
                 return value
@@ -553,3 +646,37 @@ class VTestDataNormalizer:
         return int(
             number
         )
+
+    @staticmethod
+    def _uses_legacy_index_schema(row: pd.Series) -> bool:
+        """
+        Bepaal of een bronrij het oude indexatieschema gebruikt.
+
+        Geeft True terug voor:
+            a.X + b.Y + c.Z + d
+
+        Geeft False terug voor:
+            a.A + b.B + c.C + d.D + z
+        """
+        columns = {
+            clean_text(column).casefold()
+            for column in row.index
+        }
+
+        has_legacy_columns = any(
+            "indexatieparameter x" in column
+            for column in columns
+        )
+
+        has_new_columns = any(
+            "indexatieparameter a" in column
+            for column in columns
+        )
+
+        if has_legacy_columns and has_new_columns:
+            raise VTestNormalizationError(
+                "Rij bevat zowel het oude als het nieuwe "
+                "indexatieschema."
+            )
+
+        return has_legacy_columns
