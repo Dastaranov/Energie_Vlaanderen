@@ -20,8 +20,13 @@ pytest tests/test_cli.py::test_paths_command_runs -q
 # Run only unit tests (skip integration tests that need a local dataset)
 pytest -q -m "not integration"
 
-# Run the CLI
+# Interactive shell (no arguments): opstart dashboard, then a prompt for
+# repeated commands without repeating "energievergelijker" each time.
+python energievergelijker.py
+
+# One-shot, non-interactive form (for scripts/CI) — <groep> <actie> [opties]
 python energievergelijker.py --help
+python energievergelijker.py staging parse --version <id> --only vtest
 energievergelijker --help   # after pip install -e .
 
 # Connect to the remote PostgreSQL database (Tailscale network only)
@@ -30,9 +35,47 @@ energievergelijker --help   # after pip install -e .
 
 Integration tests are skipped automatically when no local dataset is present. Set `ENERGIEVERGELIJKER_DATA_DIR` to point at a directory that contains `vtest/master_vast.csv` and `vtest/master_var_dyn.csv` to enable them.
 
+### CLI command groups
+
+The CLI is grouped as `<groep> <actie> [opties]`; every action also accepts `--json`:
+
+| Groep | Acties |
+|---|---|
+| `source` | `download --year`, `list --year` |
+| `raw` | `verify --version`, `status` |
+| `staging` | `parse --version [--only vtest\|tariffs\|curves\|all] [--overwrite]`, `refine --version` |
+| `market` | `sync --start --end [--no-api]` |
+| `audit` | `status`, `approve`, `golden`, `set-golden`, `sanity`, `sample` (all `--version`) |
+| `version` | `publish --version [--keep-staging]` |
+| `db` | `init`, `import --version`, `status` |
+| `paths` | *(no action)* |
+
+Running `energievergelijker` with no arguments starts the interactive shell instead of erroring; `energievergelijker <groep> <actie>` keeps working exactly as a normal one-shot CLI call for scripts.
+
 ## Architecture
 
-The package lives in `src/energie_vlaanderen/`. `energievergelijker.py` at the root is the entry point; it delegates to `src/energie_vlaanderen/cli.py`.
+The package lives in `src/energie_vlaanderen/`. `energievergelijker.py` at the root is the entry point; it delegates to `src/energie_vlaanderen/cli/` (a package, not a single module).
+
+### CLI package (`src/energie_vlaanderen/cli/`)
+
+```
+__init__.py    # build_parser(), main() — re-exports the public API used by tests/pyproject
+__main__.py    # `python -m energie_vlaanderen.cli`
+groups.py      # builds the group→action parser tree (source/raw/staging/market/audit/version/db/paths)
+shell.py       # interactive REPL: opstart/werking dashboards, generic ✓/!/✗ result rendering
+status.py      # dashboard data sources (live where possible, honest placeholders otherwise)
+paths_cmd.py   # `paths` — run_paths, show_paths
+ingest.py      # source/raw/staging/market/version handlers (incl. run_staging_parse)
+audit.py       # audit group handlers
+db.py          # db group handlers
+args.py        # add_version_arg(), add_json_flag() — shared argparse registration helpers
+output.py      # print_kv(), print_json(), emit() — shared text/--json output helpers
+helpers.py     # fail(), require_valid_raw_version(), resolve_artifact(), positive_integer()
+```
+
+Business logic lives in `paths_cmd.py`/`ingest.py`/`audit.py`/`db.py`; `groups.py` only decides the CLI's *shape* (which group/action maps to which handler). Handlers keep the signature `(args: argparse.Namespace, settings: Settings) -> int` and never call `Settings.load()` themselves — only `main()` does, so tests can call handlers directly with a hand-built `Settings`. Exit codes: `0` success, `2` an expected/business failure (invalid version, missing staging dir, pipeline rejection, ...); anything else is an uncaught bug (default Python traceback, exit 1).
+
+`main(argv=None)`: with no arguments it starts the interactive shell (`shell.run_shell`); with arguments it parses and dispatches exactly as before — one-shot invocations never go through the shell's rendering.
 
 ### Layer structure (`src/energie_vlaanderen/`)
 
