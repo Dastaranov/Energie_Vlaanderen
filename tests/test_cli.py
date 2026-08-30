@@ -27,29 +27,41 @@ def test_paths_command_runs(
     assert "Dataroot" in captured.out
     assert "Current     : nog niet ingesteld" in captured.out
 
-def test_sources_command_is_accepted():
+def test_paths_command_is_accepted():
+    parser = build_parser()
+
+    args = parser.parse_args(["paths"])
+
+    assert args.group == "paths"
+    assert callable(args.handler)
+
+
+def test_source_list_command_is_accepted():
     parser = build_parser()
 
     args = parser.parse_args(
         [
-            "sources",
+            "source",
+            "list",
             "--year",
             "2026",
         ]
     )
 
-    assert args.command == "sources"
+    assert args.group == "source"
+    assert args.action == "list"
     assert args.year == 2026
     assert args.json is False
     assert callable(args.handler)
 
 
-def test_sources_command_accepts_json():
+def test_source_list_command_accepts_json():
     parser = build_parser()
 
     args = parser.parse_args(
         [
-            "sources",
+            "source",
+            "list",
             "--year",
             "2026",
             "--json",
@@ -58,28 +70,31 @@ def test_sources_command_accepts_json():
 
     assert args.json is True
 
-def test_download_command_is_accepted():
+def test_source_download_command_is_accepted():
     parser = build_parser()
 
     args = parser.parse_args(
         [
+            "source",
             "download",
             "--year",
             "2026",
         ]
     )
 
-    assert args.command == "download"
+    assert args.group == "source"
+    assert args.action == "download"
     assert args.year == 2026
     assert args.json is False
     assert callable(args.handler)
 
 
-def test_download_command_accepts_json():
+def test_source_download_command_accepts_json():
     parser = build_parser()
 
     args = parser.parse_args(
         [
+            "source",
             "download",
             "--year",
             "2026",
@@ -89,18 +104,20 @@ def test_download_command_accepts_json():
 
     assert args.json is True
 
-def test_verify_raw_command_is_accepted():
+def test_raw_verify_command_is_accepted():
     parser = build_parser()
 
     args = parser.parse_args(
         [
-            "verify-raw",
+            "raw",
+            "verify",
             "--version",
             "20260820T120000Z-1234abcd",
         ]
     )
 
-    assert args.command == "verify-raw"
+    assert args.group == "raw"
+    assert args.action == "verify"
     assert (
         args.version
         == "20260820T120000Z-1234abcd"
@@ -113,35 +130,58 @@ def test_raw_status_command_is_accepted():
 
     args = parser.parse_args(
         [
-            "raw-status",
+            "raw",
+            "status",
             "--json",
         ]
     )
 
-    assert args.command == "raw-status"
+    assert args.group == "raw"
+    assert args.action == "status"
     assert args.json is True
     assert callable(args.handler)
 
-def test_parse_vtest_command_is_accepted():
+def test_staging_parse_command_is_accepted():
     parser = build_parser()
 
     args = parser.parse_args(
         [
-            "parse-vtest",
+            "staging",
+            "parse",
             "--version",
             "20260820T120000Z-1234abcd",
         ]
     )
 
-    assert args.command == "parse-vtest"
+    assert args.group == "staging"
+    assert args.action == "parse"
     assert args.version == "20260820T120000Z-1234abcd"
+    assert args.only == "all"
     assert callable(args.handler)
 
-def test_publish_command_is_accepted():
+
+def test_staging_parse_command_accepts_only():
     parser = build_parser()
 
     args = parser.parse_args(
         [
+            "staging",
+            "parse",
+            "--version",
+            "20260820T120000Z-1234abcd",
+            "--only",
+            "vtest",
+        ]
+    )
+
+    assert args.only == "vtest"
+
+def test_version_publish_command_is_accepted():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "version",
             "publish",
             "--version",
             "20260820T120000Z-1234abcd",
@@ -150,7 +190,8 @@ def test_publish_command_is_accepted():
         ]
     )
 
-    assert args.command == "publish"
+    assert args.group == "version"
+    assert args.action == "publish"
     assert args.version == "20260820T120000Z-1234abcd"
     assert args.keep_staging is True
     assert args.json is True
