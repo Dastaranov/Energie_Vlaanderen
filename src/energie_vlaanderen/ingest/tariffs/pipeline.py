@@ -1,19 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
-import shutil
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-import json
 
 from energie_vlaanderen.ingest.tariffs.normalizer import NormalizedTariffData, TariffDataNormalizer
 from energie_vlaanderen.ingest.tariffs.validator import TariffDataValidator, TariffValidationReport
@@ -27,6 +20,7 @@ class TariffPipelineError(RuntimeError):
 @dataclass(frozen=True)
 class TariffPipelineResult:
     version_id: str
+    energy_type: str
     directory: Path
     afname_csv: Path
     injectie_csv: Path
@@ -44,9 +38,10 @@ class TariffPipeline:
         source_path: Path,
         destination: Path,
         version_id: str,
+        energy_type: str = "electricity",
         overwrite: bool = False,
     ) -> TariffPipelineResult:
-        parsed = self.workbook_parser.parse(source_path)
+        parsed = self.workbook_parser.parse(source_path, energy_type=energy_type)
         normalized = self.normalizer.normalize(parsed.afname, parsed.injectie)
         validation = self.validator.validate(normalized.afname, normalized.injectie)
 
@@ -54,18 +49,19 @@ class TariffPipeline:
             raise TariffPipelineError("Tariefdata bevat blokkerende fouten en werd niet geëxporteerd.")
 
         target = destination / "tariffs"
-        if target.exists():
-            if not overwrite:
+        afname_csv = target / f"tariffs_{energy_type}_afname.csv"
+        injectie_csv = target / f"tariffs_{energy_type}_injectie.csv"
+        report_json = target / f"tariffs_{energy_type}_report.json"
+
+        if not overwrite:
+            existing = [f for f in [afname_csv, injectie_csv] if f.exists()]
+            if existing:
                 raise TariffPipelineError(
-                    f"Tarieven stagingmap bestaat al: {target}. "
+                    f"Tarieven voor {energy_type} bestaan al in {target}. "
                     "Gebruik --overwrite om deze te overschrijven."
                 )
-            shutil.rmtree(target)
 
-        target.mkdir(parents=True, exist_ok=False)
-        afname_csv = target / "tariffs_afname.csv"
-        injectie_csv = target / "tariffs_injectie.csv"
-        report_json = target / "tariffs_report.json"
+        target.mkdir(parents=True, exist_ok=True)
 
         try:
             self._write_frame(normalized.afname, afname_csv)
@@ -73,6 +69,7 @@ class TariffPipeline:
 
             report = {
                 "version_id": version_id,
+                "energy_type": energy_type,
                 "processed_at": datetime.now(timezone.utc).isoformat(),
                 "afname_rows": len(normalized.afname),
                 "injectie_rows": len(normalized.injectie),
@@ -80,11 +77,14 @@ class TariffPipeline:
             report_json.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
         except Exception:
-            shutil.rmtree(target, ignore_errors=True)
+            for f in [afname_csv, injectie_csv, report_json]:
+                if f.exists():
+                    f.unlink(missing_ok=True)
             raise
 
         return TariffPipelineResult(
             version_id=version_id,
+            energy_type=energy_type,
             directory=target,
             afname_csv=afname_csv,
             injectie_csv=injectie_csv,

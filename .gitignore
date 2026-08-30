@@ -218,17 +218,36 @@ __marimo__/
 .streamlit/secrets.toml
 
 # EnergieVergelijker runtime data
+# Rauwe downloads, gestagede en gepubliceerde versies zijn groot en reproduceerbaar
 data/raw/*
 !data/raw/.gitkeep
 data/staging/*
 !data/staging/.gitkeep
 data/versions/*
 !data/versions/.gitkeep
+data/failed/*
+!data/failed/.gitkeep
+
+# Actieve dataset (gegenereerd door pipeline, niet in git)
 data/current/*
 !data/current/.gitkeep
+data/current.txt
+
+# ENTSO-E marktprijscache en andere datacaches
+data/market/
+data/*.json
+
+# Simulatie-uitvoer
+output/
+
+# Persoonlijk gebruikersprofiel
+gebruiker.toml
 
 # Secret files
 .env
+
+# Stray bestanden van pip install (bv. "=5.0" bij foutieve aanroep)
+=*
 
 # Coding history
 docs/history/

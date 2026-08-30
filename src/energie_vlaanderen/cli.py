@@ -34,8 +34,15 @@ from energie_vlaanderen.calculation.calculator import Calculator
 from energie_vlaanderen.audit.manager import ApprovalManager, AuditError
 from energie_vlaanderen.audit.sanity import SanityChecker
 from energie_vlaanderen.audit.sampler import DataSampler
+from energie_vlaanderen.audit.golden import VTestGoldenAuditor, TariffGoldenAuditor
+from energie_vlaanderen.ingest.vtest.refine_pipeline import VTestRefinePipeline
 
 LOG = logging.getLogger("energievergelijker")
+
+_DB_IMPORT_ERROR = (
+    "psycopg / SQLAlchemy / alembic niet geïnstalleerd. "
+    "Voer 'pip install -e \".[db]\"' uit."
+)
 
 def positive_integer(value: str) -> int:
     try:
@@ -340,6 +347,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # ---------------------------------------------------------
+    # refine-vtest
+    # ---------------------------------------------------------
+    refine_vtest_parser = subparsers.add_parser(
+        "refine-vtest",
+        help="Scrape vtest.be voor contractmetadata (looptijd, datums, links, doelgroep).",
+    )
+    refine_vtest_parser.add_argument("--version", required=True)
+    refine_vtest_parser.add_argument("--postcode", default="9000")
+    refine_vtest_parser.add_argument(
+        "--no-download",
+        action="store_true",
+        help="Gebruik bestaande HTML-dump i.p.v. opnieuw te scrapen (vereist geen Selenium).",
+    )
+    refine_vtest_parser.add_argument(
+        "--browser",
+        default="chrome",
+        choices=("chrome", "firefox"),
+        help="Browser voor Selenium (standaard: chrome).",
+    )
+    refine_vtest_parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Open browser zichtbaar (niet headless).",
+    )
+    refine_vtest_parser.set_defaults(handler=run_refine_vtest)
+
+    # ---------------------------------------------------------
     # audit-status / approve / set-golden
     # ---------------------------------------------------------
     audit_status_parser = subparsers.add_parser("audit-status", help="Bekijk de audit-status van een versie.")
@@ -354,6 +388,16 @@ def build_parser() -> argparse.ArgumentParser:
     set_golden_parser = subparsers.add_parser("set-golden", help="Maak van een goedgekeurde versie de Golden Master.")
     set_golden_parser.add_argument("--version", required=True)
     set_golden_parser.set_defaults(handler=run_set_golden)
+
+    # ---------------------------------------------------------
+    # audit-golden
+    # ---------------------------------------------------------
+    audit_golden_parser = subparsers.add_parser(
+        "audit-golden",
+        help="Vergelijk gestagede CSVs cel voor cel met de bron-XLSX.",
+    )
+    audit_golden_parser.add_argument("--version", required=True)
+    audit_golden_parser.set_defaults(handler=run_audit_golden)
 
     # ---------------------------------------------------------
     # audit-sanity
@@ -380,6 +424,44 @@ def build_parser() -> argparse.ArgumentParser:
         help="Aantal rijen per dataset om te controleren (standaard: 3)."
     )
     audit_sample_parser.set_defaults(handler=run_audit_sample)
+
+    # ---------------------------------------------------------
+    # db-init
+    # ---------------------------------------------------------
+    db_init_parser = subparsers.add_parser(
+        "db-init",
+        help="Maak het databaseschema aan of upgrade het via Alembic-migraties.",
+    )
+    db_init_parser.set_defaults(handler=run_db_init)
+
+    # ---------------------------------------------------------
+    # db-import
+    # ---------------------------------------------------------
+    db_import_parser = subparsers.add_parser(
+        "db-import",
+        help="Importeer een gestagede versie (vtest, tarieven, ...) naar de databank.",
+    )
+    db_import_parser.add_argument("--version", required=True, help="Versie-id om te importeren.")
+    db_import_parser.add_argument(
+        "--gemeente",
+        action="store_true",
+        help="Importeer ook DnbPerGemeente.csv (referentiedata — normaal éénmalig).",
+    )
+    db_import_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Verwijder bestaande rijen van deze versie en herlaad.",
+    )
+    db_import_parser.set_defaults(handler=run_db_import)
+
+    # ---------------------------------------------------------
+    # db-status
+    # ---------------------------------------------------------
+    db_status_parser = subparsers.add_parser(
+        "db-status",
+        help="Toon welke versies in de databank staan en hun importstatus.",
+    )
+    db_status_parser.set_defaults(handler=run_db_status)
 
     # ---------------------------------------------------------
     # publish
@@ -724,11 +806,10 @@ def run_parse_tariffs(
     args: argparse.Namespace,
     settings: Settings,
 ) -> int:
-    """Verifieer een raw-versie en verwerk het tarievenwerkboek naar staging."""
+    """Verifieer een raw-versie en verwerk elektriciteits- en gastarieven naar staging."""
     paths = DataPaths.from_settings(settings)
     store = RawStore(paths)
 
-    # Controleer of we die versie eigenlijk wel in huis hebben gedownload
     raw_report = store.verify(args.version)
     if not raw_report.valid:
         LOG.error("Raw-versie %s is ongeldig.", args.version)
@@ -739,38 +820,54 @@ def run_parse_tariffs(
     manifest_path = raw_report.directory / "manifest.json"
     try:
         manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        # We halen het bestand "electricity_tariffs" op, want zo hebben we dat benoemd in de downloader
-        artifact = manifest_data["artifacts"]["electricity_tariffs"]
-        stored_filename = artifact["stored_filename"]
-    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        LOG.error("Tarievenartifact ontbreekt of manifest is ongeldig: %s", exc)
+    except (OSError, json.JSONDecodeError) as exc:
+        LOG.error("Manifest is ongeldig: %s", exc)
         return 2
 
-    source_path = raw_report.directory / stored_filename
-    if not source_path.is_file():
-        LOG.error("Tarievenwerkboek niet gevonden: %s", source_path)
-        return 2
-
-    # Doelmap aanmaken (het is niet ongebruikelijk dat we dezelfde staging map gebruiken als voor vtest)
     staging_dest = paths.staging / args.version
+    pipeline = TariffPipeline()
 
-    try:
-        # Hier roepen we jouw kersverse pipeline aan!
-        result = TariffPipeline().process(
-            source_path=source_path,
-            destination=staging_dest,
-            version_id=args.version,
-            overwrite=args.overwrite
-        )
-    except TariffPipelineError as exc:
-        LOG.error("Tarievenpipeline geweigerd: %s", exc)
-        return 2
+    sources = {
+        "electricity": "electricity_tariffs",
+        "gas": "gas_tariffs",
+    }
 
-    print(f"Tarieven stagingmap       : {result.directory}")
-    print(f"Rapport                   : {result.report_json}")
-    
-    # Optioneel kan je hier uit je JSON rapport de specifieke info halen (rows afname/injectie) 
-    # en naar het scherm printen, net zoals bij de V-test.
+    for energy_type, artifact_key in sources.items():
+        try:
+            artifact = manifest_data["artifacts"][artifact_key]
+            stored_filename = artifact["stored_filename"]
+        except (KeyError, TypeError) as exc:
+            LOG.warning("Artifact %r ontbreekt in manifest, overgeslagen: %s", artifact_key, exc)
+            continue
+
+        source_path = raw_report.directory / stored_filename
+        if not source_path.is_file():
+            LOG.error("Tarieven-werkboek niet gevonden: %s", source_path)
+            return 2
+
+        try:
+            result = pipeline.process(
+                source_path=source_path,
+                destination=staging_dest,
+                version_id=args.version,
+                energy_type=energy_type,
+                overwrite=args.overwrite,
+            )
+        except TariffPipelineError as exc:
+            LOG.error("Tarievenpipeline [%s] geweigerd: %s", energy_type, exc)
+            return 2
+
+        from energie_vlaanderen.ingest.tariffs.normalizer import TariffDataNormalizer
+        import json as _json
+        try:
+            rep = _json.loads(result.report_json.read_text(encoding="utf-8"))
+            afname_rows = rep.get("afname_rows", "?")
+            injectie_rows = rep.get("injectie_rows", "?")
+        except Exception:
+            afname_rows = injectie_rows = "?"
+
+        print(f"[{energy_type}] afname: {afname_rows} rijen, injectie: {injectie_rows} rijen → {result.directory}")
+
     return 0
 
 def run_publish(
@@ -1029,6 +1126,98 @@ def run_parse_curves(
     print(f"Rapport                 : {result.report_json.name}")
     return 0
 
+def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
+    """Vergelijk gestagede CSVs cel voor cel met de bron-XLSX."""
+    paths = DataPaths.from_settings(settings)
+    store = RawStore(paths)
+    version_id = args.version
+
+    raw_report = store.verify(version_id)
+    if not raw_report.valid:
+        LOG.error("Raw-versie %s is ongeldig.", version_id)
+        return 2
+
+    manifest_path = raw_report.directory / "manifest.json"
+    try:
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        LOG.error("Manifest is ongeldig: %s", exc)
+        return 2
+
+    staging_dir = paths.staging / version_id
+    vtest_dir = staging_dir / "vtest"
+    tariffs_dir = staging_dir / "tariffs"
+
+    all_results = []
+
+    # --- V-test ---
+    try:
+        vtest_artifact = manifest_data["artifacts"]["vtest"]
+        vtest_xlsx = raw_report.directory / vtest_artifact["stored_filename"]
+    except (KeyError, TypeError):
+        LOG.warning("V-testartifact ontbreekt in manifest, audit overgeslagen.")
+        vtest_xlsx = None
+
+    if vtest_xlsx and vtest_xlsx.is_file():
+        auditor = VTestGoldenAuditor()
+        for domain, csv_name in [("vtest_vast", "master_vast.csv"), ("vtest_var_dyn", "master_var_dyn.csv")]:
+            result = auditor.audit(
+                staged_csv=vtest_dir / csv_name,
+                source_xlsx=vtest_xlsx,
+                domain=domain,
+                version_id=version_id,
+            )
+            all_results.append(result)
+
+    # --- Tarieven ---
+    tariff_sources = {
+        "electricity": "electricity_tariffs",
+        "gas": "gas_tariffs",
+    }
+    t_auditor = TariffGoldenAuditor()
+    for energy_type, artifact_key in tariff_sources.items():
+        try:
+            artifact = manifest_data["artifacts"][artifact_key]
+            xlsx_path = raw_report.directory / artifact["stored_filename"]
+        except (KeyError, TypeError):
+            LOG.warning("Artifact %r ontbreekt, tarieven audit overgeslagen.", artifact_key)
+            continue
+
+        if not xlsx_path.is_file():
+            LOG.warning("Tarieven-werkboek niet gevonden: %s", xlsx_path)
+            continue
+
+        for direction in ("afname", "injectie"):
+            csv_path = tariffs_dir / f"tariffs_{energy_type}_{direction}.csv"
+            result = t_auditor.audit(
+                staged_csv=csv_path,
+                source_xlsx=xlsx_path,
+                energy_type=energy_type,
+                direction=direction,
+                version_id=version_id,
+            )
+            all_results.append(result)
+
+    if not all_results:
+        LOG.error("Geen auditresultaten — is de versie volledig geparsed?")
+        return 2
+
+    any_fail = False
+    for res in all_results:
+        status = "OK " if res.passed else "NOK"
+        print(f"{status}  {res.domain:<30} {res.verified_rows}/{res.total_rows} rijen geverifieerd")
+        if not res.passed:
+            any_fail = True
+            for mm in res.mismatches[:10]:
+                print(f"      [{mm.field}] {mm.row_key}")
+                print(f"        CSV : {mm.csv_value!r}")
+                print(f"        XLSX: {mm.xlsx_value!r}")
+            if len(res.mismatches) > 10:
+                print(f"      ... en {len(res.mismatches) - 10} meer.")
+
+    return 2 if any_fail else 0
+
+
 def run_audit_status(args: argparse.Namespace, settings: Settings) -> int:
     paths = DataPaths.from_settings(settings)
     manager = ApprovalManager(paths)
@@ -1101,6 +1290,173 @@ def run_audit_sample(args: argparse.Namespace, settings: Settings) -> int:
     except RuntimeError as exc:
         LOG.error("Kan steekproef niet genereren: %s", exc)
         return 2
+
+def run_db_init(args: argparse.Namespace, settings: Settings) -> int:
+    """Voer Alembic-migraties uit om het schema aan te maken of te upgraden."""
+    try:
+        from alembic.config import Config
+        from alembic import command as alembic_cmd
+    except ImportError:
+        LOG.error(_DB_IMPORT_ERROR)
+        return 2
+
+    alembic_ini = settings.project_root / "db" / "alembic.ini"
+    if not alembic_ini.is_file():
+        LOG.error("alembic.ini niet gevonden: %s", alembic_ini)
+        return 2
+
+    cfg = Config(str(alembic_ini))
+    # Overrule de DSN zodat .env geladen wordt
+    from energie_vlaanderen.infrastructure.db.connection import get_dsn
+    cfg.set_main_option("sqlalchemy.url", get_dsn(settings.project_root))
+
+    alembic_cmd.upgrade(cfg, "head")
+    print("Schema is up-to-date.")
+    return 0
+
+
+def run_db_import(args: argparse.Namespace, settings: Settings) -> int:
+    """Importeer een gestagede versie naar de databank."""
+    try:
+        from energie_vlaanderen.infrastructure.db.connection import get_engine
+        from energie_vlaanderen.infrastructure.db import importer as imp
+        import sqlalchemy as sa
+        from sqlalchemy.dialects import postgresql  # noqa: F401 — triggers dialect registration
+    except ImportError:
+        LOG.error(_DB_IMPORT_ERROR)
+        return 2
+
+    paths = DataPaths.from_settings(settings)
+    version_id = args.version
+    staging_dir = paths.staging / version_id
+
+    if not staging_dir.is_dir():
+        LOG.error("Staging-map niet gevonden: %s", staging_dir)
+        return 2
+
+    engine = get_engine(settings.project_root)
+
+    with engine.begin() as conn:
+        # Controleer dubbele import
+        from energie_vlaanderen.infrastructure.db.schema import data_version as dv_table
+        existing = conn.execute(
+            sa.select(dv_table.c.geimporteerd_op).where(dv_table.c.version_id == version_id)
+        ).first()
+
+        if existing and existing[0] is not None and not args.overwrite:
+            LOG.error(
+                "Versie %s is al geïmporteerd op %s. Gebruik --overwrite om te herladen.",
+                version_id, existing[0].strftime("%Y-%m-%d %H:%M")
+            )
+            return 2
+
+        if existing and args.overwrite:
+            for tbl_name in ("vtest_product", "product_component", "netwerk_tarief"):
+                conn.execute(sa.text(f"DELETE FROM {tbl_name} WHERE version_id = :v"), {"v": version_id})
+            LOG.info("Bestaande rijen voor versie %s verwijderd.", version_id)
+
+        # Versiebeheer upsert
+        imp.upsert_data_version(conn, version_id)
+
+        results = []
+
+        # Referentiedata gemeente (optioneel)
+        if args.gemeente:
+            gemeente_csv = settings.data_root / "current" / "DnbPerGemeente.csv"
+            if gemeente_csv.is_file():
+                r = imp.import_gemeente(conn, gemeente_csv)
+                results.append(r)
+            else:
+                LOG.warning("DnbPerGemeente.csv niet gevonden op %s", gemeente_csv)
+
+        # vtest metadata
+        vtest_csv = staging_dir / "vtest" / "vtest_products.csv"
+        results.append(imp.import_vtest_products(conn, version_id, vtest_csv))
+
+        # Productcomponenten
+        vtest_dir = staging_dir / "vtest"
+        results.append(imp.import_product_components(
+            conn,
+            vast_csv=vtest_dir / "master_vast.csv",
+            var_dyn_csv=vtest_dir / "master_var_dyn.csv",
+            version_id=version_id,
+        ))
+
+        # Netwerktarieven
+        results.append(imp.import_netwerk_tarieven(conn, version_id, staging_dir / "tariffs"))
+
+        # Markeer als geïmporteerd
+        imp.mark_imported(conn, version_id)
+
+    for r in results:
+        print(f"[{r.domain:<25}] {r.rows_inserted} rijen ingevoegd")
+    print(f"Versie {version_id} geïmporteerd.")
+    return 0
+
+
+def run_db_status(args: argparse.Namespace, settings: Settings) -> int:
+    """Toon geïmporteerde versies en hun status."""
+    try:
+        from energie_vlaanderen.infrastructure.db.connection import get_engine
+        from energie_vlaanderen.infrastructure.db.schema import data_version as dv_table
+        import sqlalchemy as sa
+    except ImportError:
+        LOG.error(_DB_IMPORT_ERROR)
+        return 2
+
+    engine = get_engine(settings.project_root)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa.select(
+                dv_table.c.version_id,
+                dv_table.c.status,
+                dv_table.c.geimporteerd_op,
+                dv_table.c.aangemaakt_op,
+            ).order_by(dv_table.c.version_id.desc())
+        ).fetchall()
+
+    if not rows:
+        print("Geen versies in de databank.")
+        return 0
+
+    for row in rows:
+        imp_str = row[2].strftime("%Y-%m-%d %H:%M") if row[2] else "niet geïmporteerd"
+        print(f"{row[0]}  {row[1]:<10}  {imp_str}")
+    return 0
+
+
+def run_refine_vtest(args: argparse.Namespace, settings: Settings) -> int:
+    """Scrape vtest.be en schrijf contractmetadata naar staging."""
+    from energie_vlaanderen.ingest.vtest.html_downloader import VTestDownloadError
+
+    paths = DataPaths.from_settings(settings)
+    staging_dir = paths.staging / args.version
+
+    try:
+        result = VTestRefinePipeline().process(
+            staging_dir=staging_dir,
+            version_id=args.version,
+            postcode=args.postcode,
+            headless=not args.show,
+            browser=args.browser,
+            skip_download=args.no_download,
+        )
+    except VTestDownloadError as exc:
+        LOG.error("Download mislukt: %s", exc)
+        return 2
+    except FileNotFoundError as exc:
+        LOG.error("%s", exc)
+        return 2
+
+    elek = sum(1 for _ in open(result.products_csv, encoding="utf-8-sig") if "Elektriciteit" in _)
+    gas = sum(1 for _ in open(result.products_csv, encoding="utf-8-sig") if ";Gas;" in _)
+
+    print(f"Scraped at     : {result.scraped_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Producten      : {result.products_found} ({elek - 1} elektriciteit, {gas} gas)")
+    print(f"CSV            : {result.products_csv}")
+    print(f"HTML dump      : {result.dump_html}")
+    return 0
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()

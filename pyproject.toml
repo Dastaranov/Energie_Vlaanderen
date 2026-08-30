@@ -12,6 +12,7 @@ dependencies = [
     "openpyxl>=3.1",
     "requests>=2.32",
     "beautifulsoup4>=4.12",
+    "lxml>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -20,7 +21,16 @@ test = [
 ]
 
 scrape = [
-    "beautifulsoup4>=4.12"
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "selenium>=4.0",
+]
+
+db = [
+    "psycopg[binary]>=3.1",
+    "SQLAlchemy>=2.0",
+    "alembic>=1.13",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

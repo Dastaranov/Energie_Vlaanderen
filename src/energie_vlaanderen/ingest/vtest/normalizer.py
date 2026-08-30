@@ -492,6 +492,14 @@ class VTestDataNormalizer:
 
             return "fixed_fee"
 
+        # "(vast)" marks the guaranteed fixed portion within a variable contract.
+        # Must not collapse onto the indexed formula component keys.
+        is_vast_variant = "(vast)" in folded
+
+        # ", 0-" detects the low end of a consumption-band split (e.g. "0-2500 kWh").
+        # Appending _low keeps it separate from the primary (high) bracket row.
+        is_low_bracket = ", 0-" in folded
+
         if (
             "tweevoudige" in folded
             and (
@@ -499,7 +507,8 @@ class VTestDataNormalizer:
                 or "dal" in folded
             )
         ):
-            return "night"
+            base = "night_vast" if is_vast_variant else "night"
+            return f"{base}_low" if is_low_bracket else base
 
         if (
             "tweevoudige" in folded
@@ -508,11 +517,16 @@ class VTestDataNormalizer:
                 or "piek" in folded
             )
         ):
-            return "day"
+            base = "day_vast" if is_vast_variant else "day"
+            return f"{base}_low" if is_low_bracket else base
 
         for phrase, key in COMPONENT_MAPPING.items():
             if phrase in folded:
-                return key
+                if is_vast_variant and key in FORMULA_COMPONENTS:
+                    base = f"{key}_vast"
+                else:
+                    base = key
+                return f"{base}_low" if is_low_bracket else base
 
         return folded
 

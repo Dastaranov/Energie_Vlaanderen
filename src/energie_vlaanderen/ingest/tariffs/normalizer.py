@@ -12,6 +12,18 @@ DNB_MAPPING = {
     "FL": "FL", "FMV": "FMV", "FW": "FW", "FZD": "FZD"
 }
 
+# Gas afname: (column_index, klanttype_label)
+GAS_AFNAME_COLS = [
+    (3, "GAS_T1"),
+    (4, "GAS_T2"),
+    (5, "GAS_T3"),
+    (6, "GAS_T4"),
+    (7, "GAS_T5"),
+    (8, "GAS_T6"),
+    (9, "GAS_LD"),
+    (10, "GAS_MD"),
+]
+
 @dataclass(frozen=True)
 class RowIssue:
     source_sheet: str
@@ -54,20 +66,23 @@ class TariffDataNormalizer:
             if not dnb_mapped:
                 continue
 
-            # Kolom 0 is in deze sheets vaak de groepsnummering (bijv. "1", "2")
+            source_row_raw = row.get("source_row")
+            try:
+                source_row: int | None = int(source_row_raw) if source_row_raw is not None and pd.notna(source_row_raw) else None
+            except (ValueError, TypeError):
+                source_row = None
+
+            is_gas = "GAS" in source_sheet
+
             col0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
-            # Kolom 1 bevat de tekst (bijv. "Tarieven voor het netgebruik *1")
             desc = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
 
-            # Detecteer een nieuwe hoofdgroep
             if col0.isdigit() and len(col0) == 1:
                 current_hoofdgroep = desc.split(" *")[0].strip()
-            
-            # Vul ontbrekende omschrijvingen op met de naam van de hoofdgroep
+
             if not desc and current_hoofdgroep:
                 desc = current_hoofdgroep
-            
-            # Poets de sterretjes (voetnoten) weg uit de beschrijving
+
             desc = desc.split(" *")[0].strip()
 
             base_data = {
@@ -75,32 +90,45 @@ class TariffDataNormalizer:
                 "Contracttype": direction,
                 "Tarieftype": current_hoofdgroep,
                 "Tariefdetail": desc,
+                "source_sheet": source_sheet,
+                "source_row": source_row,
             }
 
             if direction == "Afname":
-                # Afname heeft 15+ kolommen. Eenheid = col 3, Prijzen = col 13, 14, 15
-                if len(row) > 15:
-                    unit = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
-                    val_digi = self._safe_price(row.iloc[13])
-                    val_ana = self._safe_price(row.iloc[14])
-                    val_pro = self._safe_price(row.iloc[15])
+                if is_gas:
+                    if len(row) > 10:
+                        unit = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+                        for col_idx, klanttype in GAS_AFNAME_COLS:
+                            val = self._safe_price(row.iloc[col_idx])
+                            if val is not None:
+                                out.append({**base_data, "Tariefnotering": unit, "Klanttype": klanttype, "Prijs_num": val})
+                else:
+                    if len(row) > 15:
+                        unit = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
+                        val_digi = self._safe_price(row.iloc[13])
+                        val_ana = self._safe_price(row.iloc[14])
+                        val_pro = self._safe_price(row.iloc[15])
 
-                    if val_digi is not None:
-                        out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_DIGI", "Prijs_num": val_digi})
-                    if val_ana is not None:
-                        out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_ANA", "Prijs_num": val_ana})
-                    if val_pro is not None:
-                        out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_ANA_PRO", "Prijs_num": val_pro})
-            
+                        if val_digi is not None:
+                            out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_DIGI", "Prijs_num": val_digi})
+                        if val_ana is not None:
+                            out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_ANA", "Prijs_num": val_ana})
+                        if val_pro is not None:
+                            out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_ANA_PRO", "Prijs_num": val_pro})
+
             elif direction == "Injectie":
-                # Injectie heeft 5 kolommen. Prijs = col 3, Eenheid = col 4
-                if len(row) > 4:
-                    val = self._safe_price(row.iloc[3])
-                    unit = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else ""
-                    
-                    if val is not None:
-                        # Injectietarief is enkel voor digitale meters
-                        out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_DIGI", "Prijs_num": val})
+                if is_gas:
+                    if len(row) > 3:
+                        val = self._safe_price(row.iloc[3])
+                        unit = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+                        if val is not None:
+                            out.append({**base_data, "Tariefnotering": unit, "Klanttype": "GAS_INJ", "Prijs_num": val})
+                else:
+                    if len(row) > 4:
+                        val = self._safe_price(row.iloc[3])
+                        unit = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else ""
+                        if val is not None:
+                            out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_DIGI", "Prijs_num": val})
 
         return pd.DataFrame(out) if out else pd.DataFrame()
 

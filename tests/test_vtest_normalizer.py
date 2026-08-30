@@ -266,6 +266,41 @@ def test_maps_general_fixed_fee() -> None:
 
     assert result == "fixed_fee"
 
+def test_maps_vast_variant_single() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Enkelvoudige meter dagtarief (vast) (c€/kWh), <1000kWh"
+    )
+    assert result == "single_vast"
+
+
+def test_maps_vast_variant_day() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Tweevoudige meter dagtarief (vast) (c€/kWh), < 1000kWh"
+    )
+    assert result == "day_vast"
+
+
+def test_maps_night_high_bracket() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Tweevoudige meter nachttarief (c€/kWh), >2500kWh"
+    )
+    assert result == "night"
+
+
+def test_maps_night_low_bracket() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Tweevoudige meter nachttarief (c€/kWh), 0-2500kWh"
+    )
+    assert result == "night_low"
+
+
+def test_vast_variant_does_not_affect_fixed_fee() -> None:
+    result = VTestDataNormalizer._component_key(
+        "Vaste vergoeding (vast) (€)"
+    )
+    assert result == "fixed_fee"
+
+
 def test_meter_specific_fixed_fees_are_not_duplicates():
     frame = pd.DataFrame(
         [
