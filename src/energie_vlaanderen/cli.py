@@ -1351,8 +1351,13 @@ def run_db_import(args: argparse.Namespace, settings: Settings) -> int:
             return 2
 
         if existing and args.overwrite:
-            for tbl_name in ("vtest_product", "product_component", "netwerk_tarief"):
-                conn.execute(sa.text(f"DELETE FROM {tbl_name} WHERE version_id = :v"), {"v": version_id})
+            # FK-volgorde: kinderen eerst, dan ouders
+            conn.execute(sa.text("DELETE FROM vtest_product WHERE version_id = :v"), {"v": version_id})
+            conn.execute(sa.text("DELETE FROM vtest_scrape_run WHERE version_id = :v"), {"v": version_id})
+            conn.execute(sa.text("DELETE FROM product_component WHERE leverancier_product_id IN "
+                                 "(SELECT id FROM leverancier_product WHERE version_id = :v)"), {"v": version_id})
+            conn.execute(sa.text("DELETE FROM leverancier_product WHERE version_id = :v"), {"v": version_id})
+            conn.execute(sa.text("DELETE FROM netwerk_tarief WHERE version_id = :v"), {"v": version_id})
             LOG.info("Bestaande rijen voor versie %s verwijderd.", version_id)
 
         # Versiebeheer upsert
@@ -1369,12 +1374,17 @@ def run_db_import(args: argparse.Namespace, settings: Settings) -> int:
             else:
                 LOG.warning("DnbPerGemeente.csv niet gevonden op %s", gemeente_csv)
 
-        # vtest metadata
-        vtest_csv = staging_dir / "vtest" / "vtest_products.csv"
-        results.append(imp.import_vtest_products(conn, version_id, vtest_csv))
+        # vtest scrape-run registreren + producten importeren
+        vtest_dir = staging_dir / "vtest"
+        meta_json = vtest_dir / "vtest_dump_meta.json"
+        vtest_csv = vtest_dir / "vtest_products.csv"
+        if vtest_csv.is_file():
+            scrape_run_id = imp.import_vtest_scrape_run(conn, version_id, meta_json, vtest_dir)
+            results.append(imp.import_vtest_products(conn, version_id, vtest_csv, scrape_run_id=scrape_run_id))
+        else:
+            results.append(imp.import_vtest_products(conn, version_id, vtest_csv))
 
         # Productcomponenten
-        vtest_dir = staging_dir / "vtest"
         results.append(imp.import_product_components(
             conn,
             vast_csv=vtest_dir / "master_vast.csv",

@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install (editable, with test dependencies)
-pip install -e ".[test]"
+# Install (editable, with all dependencies)
+pip install -e ".[test,db,scrape]"
 
 # Run all tests
 pytest -q
@@ -32,14 +32,7 @@ Integration tests are skipped automatically when no local dataset is present. Se
 
 ## Architecture
 
-The project has **two package roots**:
-
-| Root | Package | Status |
-|---|---|---|
-| `src/energie_vlaanderen/` | `energie_vlaanderen` | Active, canonical |
-| `energievergelijker_v3/` | `energievergelijker_v3` | Legacy, being migrated away from |
-
-`energievergelijker.py` at the root is the entry point; it delegates to `src/energie_vlaanderen/cli.py`.
+The package lives in `src/energie_vlaanderen/`. `energievergelijker.py` at the root is the entry point; it delegates to `src/energie_vlaanderen/cli.py`.
 
 ### Layer structure (`src/energie_vlaanderen/`)
 

@@ -47,6 +47,19 @@ data_version = sa.Table(
 # Groep 3 — Productdata (vtest + XLSX)
 # ---------------------------------------------------------------------------
 
+vtest_scrape_run = sa.Table(
+    "vtest_scrape_run",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+    sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
+    sa.Column("scraped_at", sa.TIMESTAMP(timezone=True), nullable=False),
+    sa.Column("postcode", sa.String(10), nullable=True),
+    sa.Column("browser", sa.Text, nullable=True),
+    sa.Column("headless", sa.Boolean, nullable=True),
+    sa.Column("products_found", sa.Integer, nullable=True),
+    sa.Column("dump_bestand", sa.Text, nullable=True),
+)
+
 vtest_product = sa.Table(
     "vtest_product",
     metadata,
@@ -74,11 +87,12 @@ vtest_product = sa.Table(
     sa.Column("link_tariefkaart", sa.Text, nullable=True),
     sa.Column("link_voorwaarden", sa.Text, nullable=True),
     sa.Column("link_supplier", sa.Text, nullable=True),
+    sa.Column("scrape_run_id", sa.BigInteger, sa.ForeignKey("vtest_scrape_run.id"), nullable=True),
     sa.UniqueConstraint("version_id", "vreg_id", name="uq_vtest_product_version_vreg"),
 )
 
-product_component = sa.Table(
-    "product_component",
+leverancier_product = sa.Table(
+    "leverancier_product",
     metadata,
     sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
     sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
@@ -90,8 +104,25 @@ product_component = sa.Table(
     sa.Column("leverancier", sa.Text, nullable=False),
     sa.Column("product", sa.Text, nullable=False),
     sa.Column("bron_type", sa.Text, nullable=False),
-    sa.Column("component", sa.Text, nullable=False),
+    sa.Column("bron_bestand", sa.Text, nullable=True),
+    sa.Column("source_sheet", sa.Text, nullable=True),
+    sa.UniqueConstraint(
+        "version_id", "energie_type", "contract_richting", "leverancier", "product",
+        "jaar", "maand", "segment",
+        name="uq_leverancier_product",
+    ),
+    sa.Index("ix_leverancier_product_lookup", "version_id", "energie_type", "leverancier", "product", "jaar", "maand"),
+)
+
+product_component = sa.Table(
+    "product_component",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+    sa.Column("leverancier_product_id", sa.BigInteger, sa.ForeignKey("leverancier_product.id"), nullable=False),
+    sa.Column("component_code", sa.Text, nullable=False),
     sa.Column("component_label", sa.Text, nullable=True),
+    sa.Column("eenheid", sa.Text, nullable=True),
+    sa.Column("btw_code", sa.Text, nullable=True),
     sa.Column("prijs", sa.Numeric(14, 6), nullable=True),
     # Formule-coëfficiënten (NULL voor 'vast')
     sa.Column("a", sa.Numeric(12, 6), nullable=True),
@@ -107,11 +138,7 @@ product_component = sa.Table(
     sa.Column("index_waarde_b", sa.Numeric(14, 6), nullable=True),
     sa.Column("index_waarde_c", sa.Numeric(14, 6), nullable=True),
     sa.Column("index_waarde_d", sa.Numeric(14, 6), nullable=True),
-    # Herkomst
-    sa.Column("source_sheet", sa.Text, nullable=True),
     sa.Column("source_row", sa.Integer, nullable=True),
-    sa.Column("bron_bestand", sa.Text, nullable=True),
-    sa.Index("ix_product_component_lookup", "version_id", "energie_type", "leverancier", "product", "jaar", "maand"),
 )
 
 # ---------------------------------------------------------------------------
@@ -123,6 +150,7 @@ netwerk_tarief = sa.Table(
     metadata,
     sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
     sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
+    sa.Column("jaar", sa.SmallInteger, nullable=True),
     sa.Column("netbeheerder_code", sa.String(40), nullable=False),
     sa.Column("energie_type", sa.Text, nullable=False),
     sa.Column("contract_richting", sa.Text, nullable=False),
@@ -135,7 +163,7 @@ netwerk_tarief = sa.Table(
     sa.Column("source_row", sa.Integer, nullable=True),
     sa.UniqueConstraint(
         "version_id", "netbeheerder_code", "energie_type", "contract_richting",
-        "klanttype", "tarieftype", "tariefdetail",
+        "klanttype", "tarieftype", "tariefdetail", "jaar",
         name="uq_netwerk_tarief",
     ),
     sa.Index("ix_netwerk_tarief_lookup", "version_id", "netbeheerder_code", "energie_type", "klanttype"),

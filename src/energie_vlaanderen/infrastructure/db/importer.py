@@ -13,10 +13,12 @@ import sqlalchemy as sa
 from energie_vlaanderen.infrastructure.db.schema import (
     data_version,
     gemeente,
+    leverancier_product,
     netbeheerder,
     netwerk_tarief,
     product_component,
     vtest_product,
+    vtest_scrape_run,
 )
 
 LOG = logging.getLogger(__name__)
@@ -155,13 +157,24 @@ def import_gemeente(conn: sa.Connection, csv_path: Path) -> ImportResult:
 # Productcomponenten (master_vast.csv + master_var_dyn.csv)
 # ---------------------------------------------------------------------------
 
+def _eenheid(component_code: str) -> str:
+    """Leid de eenheid af van de component-code."""
+    return "EUR/jaar" if component_code.startswith("fixed_fee") else "ct/kWh"
+
+
+def _btw_code(component_code: str) -> str:
+    """Leid de btw-code af van de component-code."""
+    return "pct21" if component_code == "energiedelen" else "pct6"
+
+
 def import_product_components(
     conn: sa.Connection,
     vast_csv: Path,
     var_dyn_csv: Path,
     version_id: str,
 ) -> ImportResult:
-    total = 0
+    total_producten = 0
+    total_componenten = 0
 
     for csv_path, bron_type_fallback in [(vast_csv, "vast"), (var_dyn_csv, None)]:
         if not csv_path.is_file():
@@ -169,46 +182,85 @@ def import_product_components(
             continue
 
         df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
-        rows = []
-        for _, r in df.iterrows():
-            bt = _str(r.get("product_type")) or bron_type_fallback or "onbekend"
-            rows.append({
-                "version_id": version_id,
-                "jaar": _int(r.get("year")),
-                "maand": _int(r.get("month")),
-                "segment": _str(r.get("segment")) or "",
-                "energie_type": _str(r.get("energy")) or "",
-                "contract_richting": _str(r.get("direction")) or "",
-                "leverancier": _str(r.get("supplier")) or "",
-                "product": _str(r.get("product")) or "",
-                "bron_type": bt.lower() if bt else "onbekend",
-                "component": _str(r.get("component")) or "",
-                "component_label": _str(r.get("component_label")),
-                "prijs": _dec(r.get("price")),
-                "a": _dec(r.get("a")),
-                "b": _dec(r.get("b")),
-                "c": _dec(r.get("c")),
-                "d": _dec(r.get("d")),
-                "z": _dec(r.get("z")),
-                "index_naam_a": _str(r.get("index_name_A")),
-                "index_naam_b": _str(r.get("index_name_B")),
-                "index_naam_c": _str(r.get("index_name_C")),
-                "index_naam_d": _str(r.get("index_name_D")),
-                "index_waarde_a": _dec(r.get("index_value_A")),
-                "index_waarde_b": _dec(r.get("index_value_B")),
-                "index_waarde_c": _dec(r.get("index_value_C")),
-                "index_waarde_d": _dec(r.get("index_value_D")),
-                "source_sheet": _str(r.get("source_sheet")),
-                "source_row": _int(r.get("source_row")),
-                "bron_bestand": csv_path.name,
-            })
 
-        if rows:
-            conn.execute(sa.insert(product_component), rows)
-            total += len(rows)
-            LOG.info("product_component [%s]: %d rijen ingevoegd", csv_path.name, len(rows))
+        groep_cols = ["year", "month", "segment", "energy", "direction",
+                      "supplier", "product", "product_type"]
+        for groep_sleutel, groep in df.groupby(groep_cols, dropna=False):
+            jaar, maand, segment, energie, richting, lev, prod, bron_type_raw = groep_sleutel
+            bt = (_str(bron_type_raw) or bron_type_fallback or "onbekend").lower()
+            source_sheet = _str(groep.iloc[0].get("source_sheet"))
 
-    return ImportResult(domain="product_component", rows_inserted=total)
+            # Stap 1 — product-header upsert
+            stmt = sa.dialects.postgresql.insert(leverancier_product).values(
+                version_id=version_id,
+                jaar=_int(jaar) or 0,
+                maand=_int(maand) or 0,
+                segment=_str(segment) or "",
+                energie_type=_str(energie) or "",
+                contract_richting=_str(richting) or "",
+                leverancier=_str(lev) or "",
+                product=_str(prod) or "",
+                bron_type=bt,
+                bron_bestand=csv_path.name,
+                source_sheet=source_sheet,
+            ).on_conflict_do_nothing(constraint="uq_leverancier_product").returning(
+                leverancier_product.c.id
+            )
+            result = conn.execute(stmt)
+            row = result.fetchone()
+            if row is None:
+                # Rij bestond al — ophalen via SELECT
+                row = conn.execute(
+                    sa.select(leverancier_product.c.id).where(
+                        (leverancier_product.c.version_id == version_id)
+                        & (leverancier_product.c.energie_type == (_str(energie) or ""))
+                        & (leverancier_product.c.contract_richting == (_str(richting) or ""))
+                        & (leverancier_product.c.leverancier == (_str(lev) or ""))
+                        & (leverancier_product.c.product == (_str(prod) or ""))
+                        & (leverancier_product.c.jaar == (_int(jaar) or 0))
+                        & (leverancier_product.c.maand == (_int(maand) or 0))
+                        & (leverancier_product.c.segment == (_str(segment) or ""))
+                    )
+                ).fetchone()
+            product_id = row[0]
+            total_producten += 1
+
+            # Stap 2 — componenten invoegen
+            comp_rows = []
+            for _, r in groep.iterrows():
+                code = _str(r.get("component")) or ""
+                comp_rows.append({
+                    "leverancier_product_id": product_id,
+                    "component_code": code,
+                    "component_label": _str(r.get("component_label")),
+                    "eenheid": _eenheid(code),
+                    "btw_code": _btw_code(code),
+                    "prijs": _dec(r.get("price")),
+                    "a": _dec(r.get("a")),
+                    "b": _dec(r.get("b")),
+                    "c": _dec(r.get("c")),
+                    "d": _dec(r.get("d")),
+                    "z": _dec(r.get("z")),
+                    "index_naam_a": _str(r.get("index_name_A")),
+                    "index_naam_b": _str(r.get("index_name_B")),
+                    "index_naam_c": _str(r.get("index_name_C")),
+                    "index_naam_d": _str(r.get("index_name_D")),
+                    "index_waarde_a": _dec(r.get("index_value_A")),
+                    "index_waarde_b": _dec(r.get("index_value_B")),
+                    "index_waarde_c": _dec(r.get("index_value_C")),
+                    "index_waarde_d": _dec(r.get("index_value_D")),
+                    "source_row": _int(r.get("source_row")),
+                })
+
+            if comp_rows:
+                conn.execute(sa.insert(product_component), comp_rows)
+                total_componenten += len(comp_rows)
+
+        LOG.info("product_component [%s]: klaar", csv_path.name)
+
+    LOG.info("product_component totaal: %d producten, %d componenten ingevoegd",
+             total_producten, total_componenten)
+    return ImportResult(domain="product_component", rows_inserted=total_componenten)
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +280,8 @@ def import_netwerk_tarieven(
     ]
     total = 0
 
+    jaar = int(version_id[:4])
+
     for filename, energie_type, richting in files:
         csv_path = tariff_dir / filename
         if not csv_path.is_file():
@@ -236,9 +290,16 @@ def import_netwerk_tarieven(
 
         df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
         rows = []
+        overgeslagen = 0
         for _, r in df.iterrows():
+            prijs = _dec(r.get("Prijs_num"))
+            if prijs is None:
+                # Rijen zonder geldige prijs zijn voetnoten of commentaarregels
+                overgeslagen += 1
+                continue
             rows.append({
                 "version_id": version_id,
+                "jaar": jaar,
                 "netbeheerder_code": _str(r.get("Netbeheerder")) or "",
                 "energie_type": energie_type,
                 "contract_richting": richting,
@@ -246,7 +307,7 @@ def import_netwerk_tarieven(
                 "tarieftype": _str(r.get("Tarieftype")),
                 "tariefdetail": _str(r.get("Tariefdetail")),
                 "tariefnotering": _str(r.get("Tariefnotering")),
-                "prijs": _dec(r.get("Prijs_num")),
+                "prijs": prijs,
                 "source_sheet": _str(r.get("source_sheet")),
                 "source_row": _int(r.get("source_row")),
             })
@@ -258,9 +319,54 @@ def import_netwerk_tarieven(
             )
             conn.execute(stmt)
             total += len(rows)
-            LOG.info("netwerk_tarief [%s/%s]: %d rijen ingevoegd", energie_type, richting, len(rows))
+            LOG.info("netwerk_tarief [%s/%s]: %d rijen ingevoegd, %d voetnoten overgeslagen",
+                     energie_type, richting, len(rows), overgeslagen)
 
     return ImportResult(domain="netwerk_tarief", rows_inserted=total)
+
+
+# ---------------------------------------------------------------------------
+# vtest_scrape_run (metadata van de scrape-sessie)
+# ---------------------------------------------------------------------------
+
+def import_vtest_scrape_run(
+    conn: sa.Connection,
+    version_id: str,
+    meta_json_path: Path,
+    vtest_dir: Path,
+) -> int:
+    """Registreer de scrape-run in de DB en geef het gegenereerde id terug."""
+    import json as _json
+
+    meta: dict = {}
+    if meta_json_path.is_file():
+        try:
+            meta = _json.loads(meta_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    raw_ts = meta.get("scraped_at")
+    scraped_at = (
+        datetime.fromisoformat(raw_ts) if raw_ts else datetime.now(tz=timezone.utc)
+    )
+
+    dump_html = vtest_dir / "vtest_dump.html"
+    dump_bestand = str(dump_html.relative_to(dump_html.parent.parent.parent)) if dump_html.is_file() else None
+
+    result = conn.execute(
+        sa.insert(vtest_scrape_run).values(
+            version_id=version_id,
+            scraped_at=scraped_at,
+            postcode=meta.get("postcode") or None,
+            browser=meta.get("browser") or None,
+            headless=meta.get("headless"),
+            products_found=meta.get("products_found"),
+            dump_bestand=dump_bestand,
+        ).returning(vtest_scrape_run.c.id)
+    )
+    run_id: int = result.scalar_one()
+    LOG.info("vtest_scrape_run aangemaakt: id=%d (postcode=%s, %d producten)", run_id, meta.get("postcode"), meta.get("products_found") or 0)
+    return run_id
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +377,7 @@ def import_vtest_products(
     conn: sa.Connection,
     version_id: str,
     csv_path: Path,
+    scrape_run_id: int | None = None,
 ) -> ImportResult:
     if not csv_path.is_file():
         LOG.info("vtest_products.csv niet gevonden, overgeslagen: %s", csv_path)
@@ -303,6 +410,7 @@ def import_vtest_products(
             "link_tariefkaart": _str(r.get("link_tariefkaart")),
             "link_voorwaarden": _str(r.get("link_voorwaarden")),
             "link_supplier": _str(r.get("link_supplier")),
+            "scrape_run_id": scrape_run_id,
         })
 
     if not rows:

@@ -104,6 +104,18 @@ class VTestRefinePipeline:
         self._write_csv(normalized, products_csv)
         LOG.info("CSV geschreven: %s (%d rijen)", products_csv, len(normalized))
 
+        # Voeg products_found toe aan meta zodat de DB-import het kan lezen
+        if dump_meta.is_file():
+            try:
+                meta = json.loads(dump_meta.read_text(encoding="utf-8"))
+                meta["products_found"] = len(normalized)
+                dump_meta.write_text(
+                    json.dumps(meta, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+
         return VTestRefinePipelineResult(
             version_id=version_id,
             directory=vtest_dir,
