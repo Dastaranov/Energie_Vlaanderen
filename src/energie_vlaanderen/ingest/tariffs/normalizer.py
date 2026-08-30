@@ -85,6 +85,11 @@ class TariffDataNormalizer:
 
             desc = desc.split(" *")[0].strip()
 
+            # Rijen waarvan de omschrijving met "- " of "*" begint zijn voetnoten
+            # in de Excel-bron — geen echte tariefregels.
+            if desc.startswith("- ") or desc.startswith("*"):
+                continue
+
             base_data = {
                 "Netbeheerder": dnb_mapped,
                 "Contracttype": direction,
