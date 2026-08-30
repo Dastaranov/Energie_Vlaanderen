@@ -48,10 +48,15 @@ def project_versie() -> str:
 
 
 def actieve_dataversie(paths: DataPaths) -> str:
+    """current_version() geeft None terug (geen exception) als er nog geen
+    actieve versie is — bv. op een verse checkout zonder gepubliceerde data."""
+
     try:
-        return paths.current_version()
+        version_id = paths.current_version()
     except DataPathsError:
         return "nog niet ingesteld"
+
+    return version_id if version_id is not None else "nog niet ingesteld"
 
 
 def laatste_raw_run(paths: DataPaths) -> str:
@@ -82,6 +87,9 @@ def audit_status_voor_actieve_versie(paths: DataPaths) -> str:
     try:
         version_id = paths.current_version()
     except DataPathsError:
+        return "onbekend (geen actieve versie)"
+
+    if version_id is None:
         return "onbekend (geen actieve versie)"
 
     try:
