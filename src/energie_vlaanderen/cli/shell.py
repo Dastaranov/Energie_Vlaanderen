@@ -59,7 +59,13 @@ def _pick_headline(group: str, action: str | None, rc: int, has_warnings: bool) 
     return "✓", ok_text
 
 
-def _dispatch(args: argparse.Namespace, settings: Settings) -> int:
+def _clear_screen() -> None:
+    """Wist het scherm via de ANSI-escape (werkt in de gangbare terminals)."""
+
+    print("\033[2J\033[H", end="")
+
+
+def _dispatch(args: argparse.Namespace, settings: Settings) -> tuple[int, str]:
     from energie_vlaanderen.cli import KNOWN_EXCEPTIONS
 
     buffer = io.StringIO()
@@ -86,11 +92,8 @@ def _dispatch(args: argparse.Namespace, settings: Settings) -> int:
     text = buffer.getvalue()
     symbol, headline = _pick_headline(args.group, getattr(args, "action", None), rc, "WARNING" in text)
 
-    print(f"{symbol} {headline}")
-    print()
-    print(text, end="")
-
-    return rc
+    rendered = f"{symbol} {headline}\n\n{text}"
+    return rc, rendered
 
 
 def _print_kv_block(rows: list[tuple[str, str]], width: int = 16) -> None:
@@ -177,9 +180,8 @@ def print_werking_scherm(data: DashboardData) -> None:
 
 def run_shell(parser: argparse.ArgumentParser, settings: Settings) -> int:
     data = collect(settings)
+    _clear_screen()
     print_opstart_scherm(data)
-
-    eerste_commando_gehad = False
 
     while True:
         try:
@@ -194,7 +196,11 @@ def run_shell(parser: argparse.ArgumentParser, settings: Settings) -> int:
         if line in AFSLUITCOMMANDOS:
             break
         if line in HULPCOMMANDOS:
+            _clear_screen()
             parser.print_help()
+            input("\nDruk op Enter om verder te gaan ...")
+            _clear_screen()
+            print_werking_scherm(data)
             continue
 
         try:
@@ -209,14 +215,14 @@ def run_shell(parser: argparse.ArgumentParser, settings: Settings) -> int:
             # argparse heeft zelf al een foutmelding of hulptekst getoond.
             continue
 
-        _dispatch(args, settings)
+        _, rendered = _dispatch(args, settings)
 
-        if not eerste_commando_gehad:
-            eerste_commando_gehad = True
-
-        print()
-        if eerste_commando_gehad:
-            data = collect(settings)
-            print_werking_scherm(data)
+        # Scherm wissen en opnieuw tekenen met het condensed dashboard erboven
+        # en het resultaat van dit commando eronder — geeft telkens een frisse,
+        # interactieve schermweergave i.p.v. eindeloos oplopende scrollback.
+        data = collect(settings)
+        _clear_screen()
+        print_werking_scherm(data)
+        print(rendered, end="")
 
     return 0
