@@ -1,9 +1,25 @@
+---
+tags: [roadmap, status]
+---
+
 # ROADMAP: Energie_Vlaanderen
 
 > **Eigenaar:** Gert Botte  
 > **Licentie:** Apache License 2.0  
 > **Roadmapversie:** 0.2-concept  
 > **Datum:** 25 augustus 2026
+
+## 0. Status — recent voltooid werk
+
+Deze roadmap beschrijft de fasen op domein-/dataniveau en vermeldt de CLI zelf
+nergens expliciet. Ter aanvulling: de command-line interface is intussen
+herwerkt tot een package (`src/energie_vlaanderen/cli/`) met gegroepeerde
+commando's (`source`, `raw`, `staging`, `market`, `audit`, `version`, `db`,
+`paths`) én een interactieve shell (`energievergelijker` zonder argumenten).
+Dit ondersteunt onder meer al een deel van Fase 2/3 (bronontdekking, download,
+staging-pipelines, marktsync) operationeel — zie `CLAUDE.md` en [[MOC]] voor
+details. De onderliggende canonical domain model- en rekenengine-fasen
+hieronder blijven ongewijzigd van toepassing.
 
 ## 1. Geactualiseerde visie
 
@@ -320,3 +336,6 @@ Het platform is succesvol wanneer het voor ieder resultaat toont:
 - welke formule- en engineversie rekende;
 - hoe een onafhankelijke reviewer het resultaat kan reproduceren;
 - welke privacytoestemming de verwerking van meterdata rechtvaardigt.
+
+---
+terug naar [[MOC]]

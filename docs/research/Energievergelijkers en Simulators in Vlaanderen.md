@@ -1,4 +1,9 @@
-Systematisch Overzicht van Energievergelijkers, Simulators en Open-Source Ecosystemen in Vlaanderen
+---
+tags: [research, energievergelijkers, opensource]
+---
+
+# Systematisch Overzicht van Energievergelijkers, Simulators en Open-Source Ecosystemen in Vlaanderen
+
 De Vlaamse energiemarkt heeft zich ontwikkeld tot een complex digitaal ecosysteem waarin consumenten en bedrijven niet langer louter afhankelijk zijn van statische jaarlijkse prijsvergelijkingen. De introductie van het capaciteitstarief op 1 januari 2023, de grootschalige uitrol van digitale meters en de opkomst van dynamische energiecontracten hebben een nieuw paradigma gecreëerd. In dit landschap spelen zowel officieel gereglementeerde vergelijkers, gebouw- en renovatiesimulators, commerciële platformen als een snelgroeiend open-source ecosysteem op GitHub een cruciale rol.   
 
 Officieel Gereglementeerde Energievergelijkers en Nettariefsimulators
@@ -265,3 +270,6 @@ Opent in een nieuw venster
 community.home-assistant.io
 DSMR - monthly 15 minute peak values for Belgium - Home Assistant Community
 Opent in een nieuw venster
+
+---
+terug naar [[MOC]]

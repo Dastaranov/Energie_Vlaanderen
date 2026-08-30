@@ -1,4 +1,9 @@
-Architectuur van Publieke en Semi-Publieke Energie-API's en Model Predictive Control Platformen voor Particulieren en KMO's
+---
+tags: [research, api, mpc, ems]
+---
+
+# Architectuur van Publieke en Semi-Publieke Energie-API's en Model Predictive Control Platformen voor Particulieren en KMO's
+
 De transitie naar een gedecentraliseerd en variabel energiesysteem vereist een geavanceerde integratie van data-infrastructuur en geautomatiseerde sturing. Voor zowel particuliere prosumers als kleine tot middelgrote ondernemingen (KMO's) is de toegang tot realtime en historische energiedata, gecombineerd met voorspellende sturingsalgoritmen, essentieel om energiekosten te optimaliseren, netkosten zoals het capaciteitstarief te beperken en de zelfconsumptie van lokaal gegenereerde hernieuwbare energie te maximaliseren. Dit onderzoeksrapport biedt een diepgaande analyse van de beschikbare publieke en semi-publieke Application Programming Interfaces (API's) op het niveau van distributienetbeheerders, transmissienetbeheerders en Europese marktplatforms, gecombineerd met de architectuur van Model Predictive Control (MPC) serverplatformen en Energy Management Systems (EMS).
 
 1. Publieke en Semi-Publieke Energie-API Interfaces
@@ -514,3 +519,6 @@ Opent in een nieuw venster
 
 openems.io
 Seite 2 – the 100 % Energy Revolution needs a free and open source Energy Management System - OpenEMS
+
+---
+terug naar [[MOC]]

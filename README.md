@@ -20,13 +20,15 @@ pip install -e ".[test,db,scrape]"
 
 Maak daarnaast een `.env`-bestand aan in de projectroot (staat bewust niet in
 git — bevat geheimen):
-```
+
+```plain text
 ENTSOE_API_KEY=...
 DB_HOST=100.110.20.114
 DB_NAME=energie_vlaanderen
 DB_USER=...
 DB_PASSWORD=...
 ```
+
 Zonder `.env` blijft de CLI bruikbaar; enkel `market sync` en de `db`-commando's
 (en de bijhorende dashboardvelden) werken dan niet. De Postgres-databank is
 enkel bereikbaar via **Tailscale**.
@@ -43,6 +45,7 @@ pytest -q -m "not integration"  # zonder tests die een lokale dataset vereisen
 **Interactieve shell** — start zonder argumenten een dashboard en een prompt
 waarop je commando's typt zonder telkens `python energievergelijker.py` te
 herhalen:
+
 ```bash
 python energievergelijker.py
 Energie_vlaanderen >> raw status
@@ -51,6 +54,7 @@ Energie_vlaanderen >> exit
 ```
 
 **Eenmalige commando's** — voor scripts/CI, vorm `<groep> <actie> [opties]`:
+
 ```bash
 python energievergelijker.py source download --year 2026
 python energievergelijker.py raw verify --version <versie-id>
@@ -60,7 +64,7 @@ python energievergelijker.py version publish --version <versie-id>
 ```
 
 | Groep | Acties |
-|---|---|
+| --- | --- |
 | `source` | `download --year`, `list --year` |
 | `raw` | `verify --version`, `status` |
 | `staging` | `parse --version [--only vtest\|tariffs\|curves\|all] [--overwrite]`, `refine --version` |

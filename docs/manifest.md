@@ -1,3 +1,7 @@
+---
+tags: [manifest, specificatie]
+---
+
 # Manifest: Energie_Vlaanderen
 
 > **Project:** Energie_Vlaanderen  
@@ -326,3 +330,6 @@ Voor productiegebruik moeten nog officieel worden bevestigd:
 - maximumtarieven en analoge capaciteitstermen;
 - gebruiksrechten op product-, profiel- en meterdata;
 - representatieve validatieset voor grootverbruikers.
+
+---
+terug naar [[MOC]]

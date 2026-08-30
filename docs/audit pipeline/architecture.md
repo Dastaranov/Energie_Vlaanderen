@@ -1,5 +1,10 @@
-De 4 Controlepoorten (Audit Pipeline)
-1. Sanity Check (Volautomatisch)
+---
+tags: [architectuur, audit, cli]
+---
+
+# De 4 Controlepoorten (Audit Pipeline)
+
+## 1. Sanity Check (Volautomatisch)
 
 Wat het doet: Zodra de Ingest Pipeline klaar is, vuur je de sanity checker af. Deze module controleert de CSV's op harde business logica.
 
@@ -7,25 +12,52 @@ Voorbeelden: "Is de elektriciteitsprijs > €0 en < €2 per kWh?", "Zijn er gee
 
 Resultaat: Een groen of rood vinkje. Bij rood stopt het proces direct.
 
-2. Steekproeven / Spot Checks (Human-in-the-loop)
+Commando: `energievergelijker audit sanity --version <id>`
 
-Wat het doet: Als de sanity check slaagt, genereert het systeem een rapport met bijvoorbeeld 5 willekeurige rijen uit de dataset, inclusief exact de locatie in de originele Excel (SourceSheet, source_row).
+## 2. Steekproeven / Spot Checks (Human-in-the-loop)
+
+Wat het doet: Als de sanity check slaagt, genereert het systeem een rapport met bijvoorbeeld 5 willekeurige rijen
+uit de dataset, inclusief exact de locatie in de originele Excel (SourceSheet, source_row).
 
 Jouw rol: Jij opent de Excel, controleert deze 5 waarden visueel en valideert of de code de structuur correct heeft geïnterpreteerd.
 
-3. Golden Master (Volautomatisch / Regressie)
+Commando: `energievergelijker audit sample --version <id> [--count 5]`
 
-Wat het doet: Zodra je (via stap 2) hebt vastgesteld dat versie A klopt, bombardeer je die tot "Golden Master". Als je een maand later versie B inlaadt, trekt deze module automatisch een vergelijking (een zogenaamde diff) tussen de twee.
+## 3. Golden Master (Volautomatisch / Regressie)
 
-Resultaat: Een rapport dat zegt: "Let op, de databeheerkosten bij Fluvius Antwerpen zijn met 12% gestegen ten opzichte van de Golden Master. Klopt dit?"
+Wat het doet: Zodra je (via stap 2) hebt vastgesteld dat versie A klopt, bombardeer je die tot "Golden Master"
+(zie stap 4b). Als je een maand later versie B inlaadt, trekt deze module automatisch een vergelijking
+(een zogenaamde diff) tussen de twee.
 
-4. The Approval Gate (De Stempel)
+Resultaat: Een rapport dat zegt: "Let op, de databeheerkosten bij Fluvius Antwerpen zijn met 12% gestegen
+ten opzichte van de Golden Master. Klopt dit?"
 
-Wat het doet: Als jij als projectleider tevreden bent na de steekproeven en de Golden Master-vergelijking, voer je een commando uit (bijv. python -m energie_vlaanderen.cli approve --version <id>).
+Commando: `energievergelijker audit golden --version <id>` — vergelijkt de gestagede CSV's cel voor cel met
+de bron-XLSX (`VTestGoldenAuditor`/`TariffGoldenAuditor` in `audit/golden.py`).
 
-Het mechanisme: Dit schrijft een klein bestandje (bijv. approved.json of een tag) in de map van die versie. De DataRepository wordt zo geprogrammeerd dat hij uitsluitend mappen inlaadt die deze stempel dragen. Al het andere negeert hij.
+## 4. The Approval Gate (De Stempel)
 
-Mappenstructuur voor de Audit Module
+Wat het doet: Als jij als projectleider tevreden bent na de steekproeven en de Golden Master-vergelijking,
+doorloop je twee aparte stappen — dit is bewust géén één commando:
+
+**4a. Goedkeuren** — markeer de versie als betrouwbaar:
+```
+energievergelijker audit approve --version <id> [--notes "..."]
+```
+
+**4b. (optioneel) Tot Golden Master maken** — pas nodig als je deze versie als referentie voor toekomstige diffs wil gebruiken:
+```
+energievergelijker audit set-golden --version <id>
+```
+
+De status van een versie kun je op elk moment opvragen met `energievergelijker audit status --version <id>`.
+
+Het mechanisme: `audit approve` schrijft een statusbestand (via `ApprovalManager`, in `manager.py`) dat de versie
+van "quarantined" naar "approved" zet. `audit set-golden` wijzigt een apart pointerbestand (`golden_master.txt`
+in de dataroot) dat aangeeft welke versie de huidige referentie is voor `audit golden`-diffs. De `DataRepository`
+gebruikt de `approved`-status om te bepalen welke versies bruikbaar zijn; niet-goedgekeurde versies worden genegeerd.
+
+## Mappenstructuur voor de Audit Module
 
 ```text
 src/energie_vlaanderen/
@@ -34,5 +66,11 @@ src/energie_vlaanderen/
 │   ├── sanity.py       (De grenswaarden en business logica)
 │   ├── sampler.py      (De steekproef-generator)
 │   ├── golden.py       (De vergelijker met de referentieversie)
-│   └── manager.py      (Beheert de statussen: quarantaine -> approved)
+│   └── manager.py      (Beheert de statussen: quarantaine -> approved, en de Golden Master-pointer)
 ```
+
+De bijhorende CLI-commando's zitten in `src/energie_vlaanderen/cli/audit.py` (business-logica) en worden
+geregistreerd in `src/energie_vlaanderen/cli/groups.py` (de `audit`-commandogroep).
+
+---
+terug naar [[MOC]]

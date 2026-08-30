@@ -1,3 +1,7 @@
+---
+tags: [prijsmodel, laagspanning, specificatie]
+---
+
 # Opbouw van de energieprijs in Vlaanderen
 
 > **Doelgroep:** particulieren en kmo's
@@ -92,6 +96,12 @@ Een overzicht van indexatieparameters en bijbehorende beurzen kan in het project
 ```text
 /Energiekost/indexatieparameter.csv
 ```
+
+> [!NOTE]
+> Dit pad is conceptueel/illustratief. De werkelijke, geïmplementeerde datalay-out
+> is versiegebonden (`data/raw/<versie>/`, `data/staging/<versie>/`,
+> `data/versions/<versie>/`, zie `CLAUDE.md` § Data versioning) en wijkt af van
+> de voorbeeldpaden in dit document.
 
 ### 3.4 Dynamische energiecomponent
 
@@ -692,3 +702,6 @@ worden gevalideerd voordat de resultaten als factuurnauwkeurig worden beschouwd:
 - de btw-behandeling van alle vaste en afzonderlijke kosten;
 - de behandeling van ontbrekende marktprijsintervallen;
 - de selectie van een representatief standaardlastprofiel.
+
+---
+terug naar [[MOC]]
