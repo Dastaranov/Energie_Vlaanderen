@@ -104,20 +104,33 @@ def api_key_status() -> str:
     return "OK" if key else "NOK (ENTSOE_API_KEY ontbreekt)"
 
 
+DB_STATUS_TIMEOUT_SECONDS = 2
+
+
 def db_verbinding() -> tuple[str, str]:
-    """Geeft (verbindingsstatus, laatste_update) terug op basis van een live poging."""
+    """Geeft (verbindingsstatus, laatste_update) terug op basis van een live poging.
+
+    Gebruikt een korte connect_timeout: zonder Tailscale-toegang (bv. een
+    ander toestel/netwerk) blijft een TCP-verbinding naar de databankserver
+    anders minutenlang hangen en blokkeert dat de shell-opstart volledig.
+    """
 
     try:
         import sqlalchemy as sa
 
-        from energie_vlaanderen.infrastructure.db.connection import get_engine
+        from energie_vlaanderen.infrastructure.db.connection import get_dsn
         from energie_vlaanderen.infrastructure.db.schema import data_version as dv_table
     except ImportError:
         return "niet beschikbaar (pip install .[db])", "onbekend"
 
     try:
         settings = Settings.load()
-        engine = get_engine(settings.project_root)
+        dsn = get_dsn(settings.project_root)
+        engine = sa.create_engine(
+            dsn,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": DB_STATUS_TIMEOUT_SECONDS},
+        )
         with engine.connect() as conn:
             row = conn.execute(
                 sa.select(dv_table.c.geimporteerd_op)
