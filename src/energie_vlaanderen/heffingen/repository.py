@@ -52,6 +52,18 @@ class HeffingenRepository:
         self._energiefonds = energiefonds
         self._btw = btw
 
+    def accijns_tabellen(self) -> dict[str, AccijnsTabel]:
+        """Publieke accessor voor accijns-tabelgegevens (voor DB-import)."""
+        return self._accijns
+
+    def energiefonds_tarieven(self) -> tuple[EnergiefondsTarief, ...]:
+        """Publieke accessor voor energiefonds-tarievengegevens (voor DB-import)."""
+        return self._energiefonds
+
+    def btw_tarieven(self) -> tuple[BtwTarief, ...]:
+        """Publieke accessor voor btw-tarievengegevens (voor DB-import)."""
+        return self._btw
+
     @classmethod
     def load(cls, config_dir: Path) -> "HeffingenRepository":
         accijns = cls._load_accijns(config_dir / ACCIJNS_BESTAND)

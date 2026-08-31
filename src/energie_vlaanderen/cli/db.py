@@ -60,7 +60,19 @@ def run_db_init(args: argparse.Namespace, settings: Settings) -> int:
 # ---------------------------------------------------------
 
 def run_db_import(args: argparse.Namespace, settings: Settings) -> int:
-    """Importeer een gestagede versie naar de databank."""
+    """Importeer een gestagede versie naar de databank.
+
+    Importvolgorde (na 0007-migratie):
+    1. Referentiedata: netbeheerder, gemeente
+    2. Leverancier/product-data: uit CSV
+    3. vtest-contracten en postcode-prijzen
+    4. Netbeheerder-tarieven (SCD2)
+    5. Overheidsheffingen
+
+    BELANGRIJK: With --overwrite, alleen version_id-scoped data verwijderd
+    (vtest_scrape_run, vtest_postcode_prijs). Tariefhistoriek blijft intact
+    (netbeheerder_tarief en tarief_afname/injectie zijn SCD2, niet version_id-scoped).
+    """
     try:
         import sqlalchemy as sa
         from sqlalchemy.dialects import postgresql  # noqa: F401 — triggert dialectregistratie
@@ -94,18 +106,10 @@ def run_db_import(args: argparse.Namespace, settings: Settings) -> int:
             )
 
         if existing and args.overwrite:
-            LOG.info("Bestaande rijen voor versie %s verwijderen ...", version_id)
-            conn.execute(sa.text("DELETE FROM vtest_product WHERE version_id = :v"), {"v": version_id})
+            LOG.info("Bestaande version_id-scoped rijen voor %s verwijderen ...", version_id)
+            LOG.info("  (Tariefhistoriek (SCD2) blijft intact)")
+            conn.execute(sa.text("DELETE FROM vtest_postcode_prijs WHERE version_id = :v"), {"v": version_id})
             conn.execute(sa.text("DELETE FROM vtest_scrape_run WHERE version_id = :v"), {"v": version_id})
-            conn.execute(
-                sa.text(
-                    "DELETE FROM product_component WHERE leverancier_product_id IN "
-                    "(SELECT id FROM leverancier_product WHERE version_id = :v)"
-                ),
-                {"v": version_id},
-            )
-            conn.execute(sa.text("DELETE FROM leverancier_product WHERE version_id = :v"), {"v": version_id})
-            conn.execute(sa.text("DELETE FROM netwerk_tarief WHERE version_id = :v"), {"v": version_id})
             LOG.info("Bestaande rijen voor versie %s verwijderd.", version_id)
 
         imp.upsert_data_version(conn, version_id)
@@ -123,33 +127,41 @@ def run_db_import(args: argparse.Namespace, settings: Settings) -> int:
             else:
                 LOG.warning("DnbPerGemeente.csv niet gevonden op %s", gemeente_csv)
 
-        LOG.info("Importeren van vtest-producten ...")
+        LOG.info("Importeren van leverancier/product-data ...")
         vtest_dir = staging_dir / "vtest"
+        results.append(
+            imp.import_leverancier_en_product(
+                conn,
+                vast_csv=vtest_dir / "master_vast.csv",
+                var_dyn_csv=vtest_dir / "master_var_dyn.csv",
+            )
+        )
+
+        LOG.info("Koppelen van vreg_id's via product matcher ...")
+        results.append(
+            imp.link_energie_product_vreg_ids(
+                conn,
+                vast_csv=vtest_dir / "master_vast.csv",
+                var_dyn_csv=vtest_dir / "master_var_dyn.csv",
+                links_csv=vtest_dir / "vtest_product_links.csv",
+            )
+        )
+
+        LOG.info("Importeren van vtest-scrape-metada en contract-prijzen ...")
         meta_json = vtest_dir / "vtest_dump_meta.json"
         vtest_csv = vtest_dir / "vtest_products.csv"
         if vtest_csv.is_file():
             scrape_run_id = imp.import_vtest_scrape_run(conn, version_id, meta_json, vtest_dir)
-            results.append(imp.import_vtest_products(conn, version_id, vtest_csv, scrape_run_id=scrape_run_id))
+            results.append(imp.import_vtest_contract_en_prijzen(conn, version_id, vtest_csv))
         else:
-            results.append(imp.import_vtest_products(conn, version_id, vtest_csv))
+            LOG.warning("vtest_products.csv niet gevonden, overgeslagen")
 
-        LOG.info("Importeren van vtest-productkoppelingen (bulk-export) ...")
-        results.append(
-            imp.import_vtest_product_links(conn, version_id, vtest_dir / "vtest_product_links.csv")
-        )
+        LOG.info("Importeren van netbeheerder-tarieven (SCD2) ...")
+        jaar = int(version_id[:4])
+        results.append(imp.import_netbeheerder_tarieven(conn, staging_dir / "tariffs", jaar))
 
-        LOG.info("Importeren van productcomponenten ...")
-        results.append(
-            imp.import_product_components(
-                conn,
-                vast_csv=vtest_dir / "master_vast.csv",
-                var_dyn_csv=vtest_dir / "master_var_dyn.csv",
-                version_id=version_id,
-            )
-        )
-
-        LOG.info("Importeren van netwerktarieven ...")
-        results.append(imp.import_netwerk_tarieven(conn, version_id, staging_dir / "tariffs"))
+        LOG.info("Importeren van overheidsheffingen ...")
+        results.append(imp.import_overheidsheffingen(conn, settings.project_root / "config"))
 
         imp.mark_imported(conn, version_id)
 

@@ -44,7 +44,7 @@ data_version = sa.Table(
 )
 
 # ---------------------------------------------------------------------------
-# Groep 3 — Productdata (vtest + XLSX)
+# Groep 3a — Leveranciersproducten (nieuw model: identiteit + SCD2-tarieven)
 # ---------------------------------------------------------------------------
 
 vtest_scrape_run = sa.Table(
@@ -60,15 +60,94 @@ vtest_scrape_run = sa.Table(
     sa.Column("dump_bestand", sa.Text, nullable=True),
 )
 
-vtest_product = sa.Table(
-    "vtest_product",
+leverancier = sa.Table(
+    "leverancier",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("naam", sa.Text, unique=True, nullable=False),
+    sa.Column("website_url", sa.Text, nullable=True),
+    sa.Column("klantendienst_telefoon", sa.Text, nullable=True),
+    sa.Column("klantendienst_email", sa.Text, nullable=True),
+    sa.Column("vreg_service_score", sa.Numeric(3, 1), nullable=True),
+    sa.Column("bijgewerkt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
+)
+
+energie_product = sa.Table(
+    "energie_product",
     metadata,
     sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
-    sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
-    sa.Column("vreg_id", sa.Text, nullable=False),
-    sa.Column("scraped_at", sa.TIMESTAMP(timezone=True), nullable=False),
-    sa.Column("leverancier", sa.Text, nullable=False),
-    sa.Column("product", sa.Text, nullable=False),
+    sa.Column("leverancier_id", sa.Integer, sa.ForeignKey("leverancier.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("vreg_id", sa.Text, unique=True, nullable=True),
+    sa.Column("product_naam", sa.Text, nullable=False),
+    sa.Column("energie_type", sa.Text, nullable=False),
+    sa.Column("segment", sa.Text, nullable=False),
+    sa.Column("tariefkaart_url", sa.Text, nullable=True),
+    sa.Column("bijzondere_voorwaarden_url", sa.Text, nullable=True),
+    sa.Column("groene_stroom", sa.Boolean, nullable=True),
+    sa.Column("aangemaakt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
+    sa.UniqueConstraint("leverancier_id", "product_naam", "energie_type", "segment", name="uq_energie_product_identiteit"),
+)
+
+# Helper factory for tariff table columns to avoid duplication
+def _tarief_columns():
+    return [
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+        sa.Column("product_id", sa.BigInteger, nullable=False),
+        sa.Column("meter_type", sa.Text, nullable=False),
+        sa.Column("prijs_type", sa.Text, nullable=False),
+        sa.Column("energieprijs_kwh", sa.Numeric(12, 6), nullable=True),
+        sa.Column("vaste_vergoeding_jaar", sa.Numeric(10, 2), nullable=True),
+        sa.Column("groene_stroom_kwh", sa.Numeric(12, 6), nullable=True),
+        sa.Column("wkk_kwh", sa.Numeric(12, 6), nullable=True),
+        sa.Column("energiebijdrage_kwh", sa.Numeric(12, 6), nullable=True),
+        sa.Column("param_a", sa.Numeric(12, 6), nullable=True),
+        sa.Column("param_b", sa.Numeric(12, 6), nullable=True),
+        sa.Column("param_c", sa.Numeric(12, 6), nullable=True),
+        sa.Column("param_d", sa.Numeric(12, 6), nullable=True),
+        sa.Column("param_z", sa.Numeric(12, 6), nullable=True),
+        sa.Column("index_naam_a", sa.Text, nullable=True),
+        sa.Column("index_naam_b", sa.Text, nullable=True),
+        sa.Column("index_naam_c", sa.Text, nullable=True),
+        sa.Column("index_naam_d", sa.Text, nullable=True),
+        sa.Column("index_waarde_a", sa.Numeric(14, 6), nullable=True),
+        sa.Column("index_waarde_b", sa.Numeric(14, 6), nullable=True),
+        sa.Column("index_waarde_c", sa.Numeric(14, 6), nullable=True),
+        sa.Column("index_waarde_d", sa.Numeric(14, 6), nullable=True),
+        sa.Column("geldig_van", sa.Date, nullable=False),
+        sa.Column("geldig_tot", sa.Date, nullable=True),
+        sa.Column("bron_bestand", sa.Text, nullable=True),
+        sa.Column("source_row", sa.Integer, nullable=True),
+    ]
+
+tarief_afname = sa.Table(
+    "tarief_afname",
+    metadata,
+    *_tarief_columns(),
+    sa.ForeignKeyConstraint(["product_id"], ["energie_product.id"], ondelete="CASCADE"),
+    sa.Index("ix_tarief_afname_open", "product_id", "meter_type", unique=True,
+             postgresql_where=sa.text("geldig_tot IS NULL")),
+    sa.Index("ix_tarief_afname_lookup", "product_id", "geldig_van", "geldig_tot"),
+)
+
+tarief_injectie = sa.Table(
+    "tarief_injectie",
+    metadata,
+    *_tarief_columns(),
+    sa.ForeignKeyConstraint(["product_id"], ["energie_product.id"], ondelete="CASCADE"),
+    sa.Index("ix_tarief_injectie_open", "product_id", "meter_type", unique=True,
+             postgresql_where=sa.text("geldig_tot IS NULL")),
+)
+
+# ---------------------------------------------------------------------------
+# Groep 3b — Live vtest.be-scrape (contractmetadata + postcode-tarieven)
+# ---------------------------------------------------------------------------
+
+vtest_contract = sa.Table(
+    "vtest_contract",
+    metadata,
+    sa.Column("vreg_id", sa.Text, primary_key=True),
+    sa.Column("leverancier_raw", sa.Text, nullable=False),
+    sa.Column("product_raw", sa.Text, nullable=False),
     sa.Column("energie_type", sa.Text, nullable=True),
     sa.Column("tarief_type", sa.Text, nullable=True),
     sa.Column("looptijd_tekst", sa.Text, nullable=True),
@@ -83,92 +162,46 @@ vtest_product = sa.Table(
     sa.Column("doelgroep_leegstand", sa.Text, nullable=True),
     sa.Column("doelgroep_groepsaankoop", sa.Text, nullable=True),
     sa.Column("prijszekerheid_termijn", sa.Text, nullable=True),
-    sa.Column("prijs_indicatie_eur", sa.Numeric(10, 2), nullable=True),
     sa.Column("link_tariefkaart", sa.Text, nullable=True),
     sa.Column("link_voorwaarden", sa.Text, nullable=True),
     sa.Column("link_supplier", sa.Text, nullable=True),
-    sa.Column("scrape_run_id", sa.BigInteger, sa.ForeignKey("vtest_scrape_run.id"), nullable=True),
-    sa.UniqueConstraint("version_id", "vreg_id", name="uq_vtest_product_version_vreg"),
+    sa.Column("contracttype", sa.Text, nullable=True),
+    sa.Column("supplier_id", sa.Text, nullable=True),
+    sa.Column("product_id", sa.Text, nullable=True),
+    sa.Column("green_type", sa.Text, nullable=True),
+    sa.Column("stars", sa.Text, nullable=True),
+    sa.Column("complex_product", sa.Boolean, nullable=True),
+    sa.Column("grayedout", sa.Boolean, nullable=True),
+    sa.Column("laatst_gezien_versie", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
+    sa.Column("laatst_gezien_op", sa.TIMESTAMP(timezone=True), nullable=False),
 )
 
-vtest_product_match = sa.Table(
-    "vtest_product_match",
+vtest_postcode_prijs = sa.Table(
+    "vtest_postcode_prijs",
     metadata,
     sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
-    sa.Column("version_id", sa.String(26), nullable=False),
-    sa.Column("vreg_id", sa.Text, nullable=False),
-    sa.Column("handelsnaam", sa.Text, nullable=True),
-    sa.Column("productnaam", sa.Text, nullable=True),
-    sa.Column("match_status", sa.Text, nullable=False),
-    sa.Column("gekoppeld_op", sa.TIMESTAMP(timezone=True), nullable=False),
-    sa.UniqueConstraint("version_id", "vreg_id", name="uq_vtest_product_match_version_vreg"),
-    sa.ForeignKeyConstraint(
-        ["version_id", "vreg_id"],
-        ["vtest_product.version_id", "vtest_product.vreg_id"],
-        name="vtest_product_match_vtest_product_fkey",
-    ),
-)
-
-leverancier_product = sa.Table(
-    "leverancier_product",
-    metadata,
-    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
-    sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
-    sa.Column("jaar", sa.SmallInteger, nullable=False),
-    sa.Column("maand", sa.SmallInteger, nullable=False),
+    sa.Column("vreg_id", sa.Text, sa.ForeignKey("vtest_contract.vreg_id", ondelete="CASCADE"), nullable=False),
+    sa.Column("postcode", sa.String(10), nullable=False),
     sa.Column("segment", sa.Text, nullable=False),
-    sa.Column("energie_type", sa.Text, nullable=False),
-    sa.Column("contract_richting", sa.Text, nullable=False),
-    sa.Column("leverancier", sa.Text, nullable=False),
-    sa.Column("product", sa.Text, nullable=False),
-    sa.Column("bron_type", sa.Text, nullable=False),
-    sa.Column("bron_bestand", sa.Text, nullable=True),
-    sa.Column("source_sheet", sa.Text, nullable=True),
-    sa.UniqueConstraint(
-        "version_id", "energie_type", "contract_richting", "leverancier", "product",
-        "jaar", "maand", "segment",
-        name="uq_leverancier_product",
-    ),
-    sa.Index("ix_leverancier_product_lookup", "version_id", "energie_type", "leverancier", "product", "jaar", "maand"),
-)
-
-product_component = sa.Table(
-    "product_component",
-    metadata,
-    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
-    sa.Column("leverancier_product_id", sa.BigInteger, sa.ForeignKey("leverancier_product.id"), nullable=False),
-    sa.Column("component_code", sa.Text, nullable=False),
-    sa.Column("component_label", sa.Text, nullable=True),
-    sa.Column("eenheid", sa.Text, nullable=True),
-    sa.Column("btw_code", sa.Text, nullable=True),
-    sa.Column("prijs", sa.Numeric(14, 6), nullable=True),
-    # Formule-coëfficiënten (NULL voor 'vast')
-    sa.Column("a", sa.Numeric(12, 6), nullable=True),
-    sa.Column("b", sa.Numeric(12, 6), nullable=True),
-    sa.Column("c", sa.Numeric(12, 6), nullable=True),
-    sa.Column("d", sa.Numeric(12, 6), nullable=True),
-    sa.Column("z", sa.Numeric(12, 6), nullable=True),
-    sa.Column("index_naam_a", sa.Text, nullable=True),
-    sa.Column("index_naam_b", sa.Text, nullable=True),
-    sa.Column("index_naam_c", sa.Text, nullable=True),
-    sa.Column("index_naam_d", sa.Text, nullable=True),
-    sa.Column("index_waarde_a", sa.Numeric(14, 6), nullable=True),
-    sa.Column("index_waarde_b", sa.Numeric(14, 6), nullable=True),
-    sa.Column("index_waarde_c", sa.Numeric(14, 6), nullable=True),
-    sa.Column("index_waarde_d", sa.Numeric(14, 6), nullable=True),
-    sa.Column("source_row", sa.Integer, nullable=True),
-)
-
-# ---------------------------------------------------------------------------
-# Groep 4 — Netwerktarieven
-# ---------------------------------------------------------------------------
-
-netwerk_tarief = sa.Table(
-    "netwerk_tarief",
-    metadata,
-    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
     sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
-    sa.Column("jaar", sa.SmallInteger, nullable=True),
+    sa.Column("discount_eur", sa.Numeric(10, 2), nullable=True),
+    sa.Column("total_excl_btw", sa.Numeric(10, 2), nullable=True),
+    sa.Column("total_incl_btw", sa.Numeric(10, 2), nullable=True),
+    sa.Column("btw_bedrag", sa.Numeric(10, 2), nullable=True),
+    sa.Column("totaal_verbruik_kwh", sa.Numeric(10, 2), nullable=True),
+    sa.Column("prijs_indicatie_eur", sa.Numeric(10, 2), nullable=True),
+    sa.Column("scraped_at", sa.TIMESTAMP(timezone=True), nullable=False),
+    sa.UniqueConstraint("vreg_id", "postcode", "version_id", name="uq_vtest_postcode_prijs"),
+)
+
+# ---------------------------------------------------------------------------
+# Groep 4 — Netbeheerdertarieven & Overheidsheffingen
+# ---------------------------------------------------------------------------
+
+netbeheerder_tarief = sa.Table(
+    "netbeheerder_tarief",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
     sa.Column("netbeheerder_code", sa.String(40), sa.ForeignKey("netbeheerder.code"), nullable=False),
     sa.Column("energie_type", sa.Text, nullable=False),
     sa.Column("contract_richting", sa.Text, nullable=False),
@@ -177,14 +210,55 @@ netwerk_tarief = sa.Table(
     sa.Column("tariefdetail", sa.Text, nullable=True),
     sa.Column("tariefnotering", sa.Text, nullable=True),
     sa.Column("prijs", sa.Numeric(14, 6), nullable=True),
+    sa.Column("geldig_van", sa.Date, nullable=False),
+    sa.Column("geldig_tot", sa.Date, nullable=True),
     sa.Column("source_sheet", sa.Text, nullable=True),
     sa.Column("source_row", sa.Integer, nullable=True),
     sa.UniqueConstraint(
-        "version_id", "netbeheerder_code", "energie_type", "contract_richting",
-        "klanttype", "tarieftype", "tariefdetail", "jaar",
-        name="uq_netwerk_tarief",
+        "netbeheerder_code", "energie_type", "contract_richting",
+        "klanttype", "tarieftype", "tariefdetail", "geldig_van",
+        name="uq_netbeheerder_tarief",
     ),
-    sa.Index("ix_netwerk_tarief_lookup", "version_id", "netbeheerder_code", "energie_type", "klanttype"),
+    sa.Index("ix_netbeheerder_tarief_open", "netbeheerder_code", "energie_type", "klanttype", "tarieftype", "tariefdetail",
+             unique=True, postgresql_where=sa.text("geldig_tot IS NULL")),
+)
+
+overheidsheffing_accijns_schijf = sa.Table(
+    "overheidsheffing_accijns_schijf",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("energievorm", sa.Text, nullable=False),
+    sa.Column("klantcategorie", sa.Text, nullable=False),
+    sa.Column("van_mwh", sa.Numeric(12, 3), nullable=False),
+    sa.Column("tot_mwh", sa.Numeric(12, 3), nullable=True),
+    sa.Column("accijns_eur_mwh", sa.Numeric(10, 4), nullable=False),
+    sa.Column("bijzondere_accijns_eur_mwh", sa.Numeric(10, 4), nullable=False),
+    sa.Column("energiebijdrage_eur_mwh", sa.Numeric(10, 4), nullable=False),
+    sa.Column("bron", sa.Text, nullable=False),
+)
+
+overheidsheffing_energiefonds = sa.Table(
+    "overheidsheffing_energiefonds",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("jaar", sa.SmallInteger, nullable=False),
+    sa.Column("spanningsniveau", sa.Text, nullable=False),
+    sa.Column("klantcategorie", sa.Text, nullable=False, server_default=""),
+    sa.Column("eur_per_maand", sa.Numeric(10, 2), nullable=False),
+    sa.Column("bron", sa.Text, nullable=False),
+    sa.UniqueConstraint("jaar", "spanningsniveau", "klantcategorie", name="uq_overheidsheffing_energiefonds"),
+)
+
+overheidsheffing_btw = sa.Table(
+    "overheidsheffing_btw",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("component", sa.Text, nullable=False),
+    sa.Column("percentage", sa.Numeric(5, 4), nullable=False),
+    sa.Column("vrijgesteld", sa.Boolean, nullable=False, server_default="false"),
+    sa.Column("geldig_vanaf", sa.Date, nullable=False),
+    sa.Column("bron", sa.Text, nullable=False),
+    sa.UniqueConstraint("component", "geldig_vanaf", name="uq_overheidsheffing_btw"),
 )
 
 # ---------------------------------------------------------------------------
