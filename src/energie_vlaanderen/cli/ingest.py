@@ -7,6 +7,7 @@ import json
 import logging
 import shutil
 from datetime import datetime
+from pathlib import Path
 
 from energie_vlaanderen.cli.helpers import (
     RawVersionError,
@@ -400,18 +401,33 @@ def run_parse_curves(args: argparse.Namespace, settings: Settings) -> int:
 # ---------------------------------------------------------
 
 def run_refine_vtest(args: argparse.Namespace, settings: Settings) -> int:
-    """Scrape vtest.be en schrijf contractmetadata naar staging."""
+    """Scrape vtest.be en schrijf contractmetadata naar staging.
+
+    Standaard: één gerichte run (1 segment, 1 energietype, 1 postcode) —
+    handig om te debuggen met --show. Met --matrix: alle
+    segment x energie x DNB-combinaties (32 runs, met een pauze ertussen),
+    gevolgd door een best-effort koppeling met de bulk-export indien die
+    al in dezelfde staging-map staat (`staging parse --only vtest`).
+    """
     from energie_vlaanderen.ingest.vtest.html_downloader import VTestDownloadError
 
     paths = DataPaths.from_settings(settings)
     staging_dir = paths.staging / args.version
 
-    LOG.info("Scrapen van vtest.be voor postcode %s ...", args.postcode)
+    if args.matrix:
+        return _run_refine_matrix(args, settings, staging_dir)
+
+    LOG.info(
+        "Scrapen van vtest.be (segment=%s, energie=%s, postcode=%s) ...",
+        args.segment, args.energy, args.postcode,
+    )
     try:
         result = VTestRefinePipeline().process(
             staging_dir=staging_dir,
             version_id=args.version,
             postcode=args.postcode,
+            segment=args.segment,
+            energy=args.energy,
             headless=not args.show,
             browser=args.browser,
             skip_download=args.no_download,
@@ -421,13 +437,12 @@ def run_refine_vtest(args: argparse.Namespace, settings: Settings) -> int:
     except FileNotFoundError as exc:
         return fail("%s", exc)
 
-    elek = sum(1 for _ in open(result.products_csv, encoding="utf-8-sig") if "Elektriciteit" in _)
-    gas = sum(1 for _ in open(result.products_csv, encoding="utf-8-sig") if ";Gas;" in _)
-
     def _text() -> None:
         print(f"Scraped at     : {result.scraped_at.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Producten      : {result.products_found} ({elek - 1} elektriciteit, {gas} gas)")
+        print(f"Segment/energie: {result.segment} / {result.energy} (postcode {result.postcode})")
+        print(f"Producten      : {result.products_found}")
         print(f"CSV            : {result.products_csv}")
+        print(f"Componenten CSV: {result.components_csv}")
         print(f"HTML dump      : {result.dump_html}")
 
     emit(
@@ -435,11 +450,88 @@ def run_refine_vtest(args: argparse.Namespace, settings: Settings) -> int:
         text_fn=_text,
         json_obj={
             "scraped_at": result.scraped_at.isoformat(),
+            "segment": result.segment,
+            "energy": result.energy,
+            "postcode": result.postcode,
             "products_found": result.products_found,
-            "electricity": elek - 1,
-            "gas": gas,
             "products_csv": str(result.products_csv),
+            "components_csv": str(result.components_csv),
             "dump_html": str(result.dump_html),
+        },
+    )
+    return 0
+
+
+def _run_refine_matrix(args: argparse.Namespace, settings: Settings, staging_dir: Path) -> int:
+    from energie_vlaanderen.ingest.vtest.product_matcher import (
+        match_products,
+        write_links_csv,
+        write_report_json,
+    )
+    from energie_vlaanderen.ingest.vtest.refine_matrix import VTestRefineMatrix
+    import pandas as pd
+
+    dnb_csv = settings.data_root / "current" / "DnbPerGemeente.csv"
+    if not dnb_csv.is_file():
+        return fail("DnbPerGemeente.csv niet gevonden op %s (nodig voor --matrix).", dnb_csv)
+
+    LOG.info("Matrix-run gestart (segment x energietype x DNB, 32 combinaties) ...")
+    result = VTestRefineMatrix().run(
+        staging_dir=staging_dir,
+        version_id=args.version,
+        dnb_csv_path=dnb_csv,
+        headless=not args.show,
+        browser=args.browser,
+    )
+
+    vtest_dir = staging_dir / "vtest"
+    vast_csv = vtest_dir / "master_vast.csv"
+    dyn_csv = vtest_dir / "master_var_dyn.csv"
+    report = None
+    if vast_csv.is_file() or dyn_csv.is_file():
+        bulk_df = pd.concat(
+            [pd.read_csv(p, sep=";", encoding="utf-8-sig", dtype=str) for p in (vast_csv, dyn_csv) if p.is_file()],
+            ignore_index=True,
+        )
+        vtest_df = pd.read_csv(result.products_csv, sep=";", encoding="utf-8-sig", dtype=str)
+        matches, report = match_products(vtest_df, bulk_df)
+        write_links_csv(matches, vtest_dir / "vtest_product_links.csv")
+        write_report_json(report, vtest_dir / "product_match_report.json")
+    else:
+        LOG.warning(
+            "master_vast.csv/master_var_dyn.csv niet gevonden in %s — "
+            "QR-code-koppeling overgeslagen. Draai eerst "
+            "'staging parse --only vtest' voor dezelfde versie.",
+            vtest_dir,
+        )
+
+    def _text() -> None:
+        print(f"Combinaties    : {result.combinaties_geslaagd}/{result.combinaties_totaal} geslaagd")
+        if result.fouten:
+            print(f"Mislukt        : {len(result.fouten)}")
+            for f in result.fouten[:10]:
+                print(f"  - {f.segment}/{f.energy}/{f.dnb_code} ({f.postcode}): {f.fout}")
+        print(f"Producten      : {result.totaal_producten}")
+        print(f"CSV            : {result.products_csv}")
+        print(f"Componenten CSV: {result.components_csv}")
+        if report:
+            print(
+                f"Koppeling      : {report.exact} exact, {report.genormaliseerd} "
+                f"genormaliseerd, {report.geen_match} geen match "
+                f"(op {report.totaal_vtest_producten} unieke producten)"
+            )
+
+    emit(
+        args,
+        text_fn=_text,
+        json_obj={
+            "combinaties_totaal": result.combinaties_totaal,
+            "combinaties_geslaagd": result.combinaties_geslaagd,
+            "fouten": [f.__dict__ for f in result.fouten],
+            "totaal_producten": result.totaal_producten,
+            "products_csv": str(result.products_csv),
+            "components_csv": str(result.components_csv),
+            "match_report": report.__dict__ if report else None,
         },
     )
     return 0

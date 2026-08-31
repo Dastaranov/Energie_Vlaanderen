@@ -1,0 +1,174 @@
+# Bijzondere accijns en energiebijdrage op elektriciteit (GN-code 2716).
+#
+# Bron: art. 39 van de programmawet van 25 december 2021 (wijzigt art. 419,
+# punt k), van de wet van 22 december 2009 houdende diverse bepalingen inzake
+# accijnzen), B.S. 31/12/2021.
+# https://www.ejustice.just.fgov.be/cgi/article_body.pl?language=nl&pub_date=2021-12-31&caller=summary&numac=2021043625
+# Lokale kopie van de wettekst: docs/tarief bijzonder accijns.md
+#
+# Eenheid: EUR per MWh jaarverbruik, degressief per verbruiksschijf.
+#
+# LET OP: dit zijn de wettelijke basiswaarden uit de programmawet van 2021.
+# Latere indexeringen of hervormingen (bv. ongeverifieerde berichtgeving
+# medio 2026 over een geleidelijke hervorming van de bijzondere accijns
+# tussen 2026 en 2029) zijn hier NIET geverifieerd verwerkt. Periodiek
+# herbevestigen tegen een actuele officiële bron — zie docs/manifest.md §14
+# "Openstaande validaties".
+#
+# Aardgas wordt door deze bron niet gedekt (art. 39 regelt enkel GN-code
+# 2716 = elektriciteit) — aardgas-heffingen zijn nog een open backlog-item.
+
+energievorm = "elektriciteit"
+bron = "Programmawet 25 december 2021, art. 39 (B.S. 31/12/2021)"
+
+# --- Niet-zakelijk gebruik (art. 419 k) 2.) — enkel laagspanning ---
+
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "0"
+tot_mwh = "20"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "13.60"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "20"
+tot_mwh = "50"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "11.58"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "50"
+tot_mwh = "1000"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "10.90"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "1000"
+tot_mwh = "25000"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "10.23"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "25000"
+tot_mwh = "100000"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "2.40"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "100000"
+tot_mwh = ""
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "1.00"
+energiebijdrage_eur_mwh = "1.9261"
+
+# --- Zakelijk gebruik, aansluiting ≤1kV = laagspanning (art. 419 k) 1.b) ---
+
+[[schijf]]
+klantcategorie = "zakelijk_laagspanning"
+van_mwh = "0"
+tot_mwh = "20"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "14.21"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "zakelijk_laagspanning"
+van_mwh = "20"
+tot_mwh = "50"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "12.09"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "zakelijk_laagspanning"
+van_mwh = "50"
+tot_mwh = "1000"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "11.39"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "zakelijk_laagspanning"
+van_mwh = "1000"
+tot_mwh = "25000"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "10.69"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "zakelijk_laagspanning"
+van_mwh = "25000"
+tot_mwh = "100000"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "2.73"
+energiebijdrage_eur_mwh = "1.9261"
+
+[[schijf]]
+klantcategorie = "zakelijk_laagspanning"
+van_mwh = "100000"
+tot_mwh = ""
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "0.50"
+energiebijdrage_eur_mwh = "1.9261"
+
+# --- Zakelijk gebruik, aansluiting >1kV = midden-/hoogspanning
+# (art. 419 k) 1.a) — data-only, (nog) niet aan de Calculator gekoppeld,
+# zelfde voorbehoud als de hoogspanning-tariefdata uit Fase 1. ---
+
+[[schijf]]
+klantcategorie = "zakelijk_hoogspanning"
+van_mwh = "0"
+tot_mwh = "20"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "14.21"
+energiebijdrage_eur_mwh = "0"
+
+[[schijf]]
+klantcategorie = "zakelijk_hoogspanning"
+van_mwh = "20"
+tot_mwh = "50"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "12.09"
+energiebijdrage_eur_mwh = "0"
+
+[[schijf]]
+klantcategorie = "zakelijk_hoogspanning"
+van_mwh = "50"
+tot_mwh = "1000"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "11.39"
+energiebijdrage_eur_mwh = "0"
+
+[[schijf]]
+klantcategorie = "zakelijk_hoogspanning"
+van_mwh = "1000"
+tot_mwh = "25000"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "10.69"
+energiebijdrage_eur_mwh = "0"
+
+[[schijf]]
+klantcategorie = "zakelijk_hoogspanning"
+van_mwh = "25000"
+tot_mwh = "100000"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "2.73"
+energiebijdrage_eur_mwh = "0"
+
+[[schijf]]
+klantcategorie = "zakelijk_hoogspanning"
+van_mwh = "100000"
+tot_mwh = ""
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "0.50"
+energiebijdrage_eur_mwh = "0"

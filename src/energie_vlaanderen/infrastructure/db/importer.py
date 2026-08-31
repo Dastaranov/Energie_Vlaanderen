@@ -18,8 +18,10 @@ from energie_vlaanderen.infrastructure.db.schema import (
     netwerk_tarief,
     product_component,
     vtest_product,
+    vtest_product_match,
     vtest_scrape_run,
 )
+from energie_vlaanderen.utility.constants import DNB_CODES
 
 LOG = logging.getLogger(__name__)
 
@@ -106,16 +108,52 @@ def mark_imported(conn: sa.Connection, version_id: str) -> None:
 # Referentiedata: gemeente + netbeheerder
 # ---------------------------------------------------------------------------
 
+def _dnb_code(full_name: str) -> str:
+    """Vertaal een volledige netbeheerdernaam naar zijn afkorting.
+
+    Valt terug op de volledige naam als code wanneer de naam niet in
+    DNB_CODES voorkomt (bv. 'Enexis Netbeheer', een niet-Fluvius DNB die
+    voor een klein aantal grensgemeenten in DnbPerGemeente.csv verschijnt),
+    zodat de import niet crasht.
+    """
+    code = DNB_CODES.get(full_name)
+    if code is None:
+        LOG.warning(
+            "Netbeheerder %r staat niet in DNB_CODES; volledige naam "
+            "wordt als code gebruikt.",
+            full_name,
+        )
+        return full_name
+    return code
+
+
+def seed_netbeheerder(conn: sa.Connection) -> ImportResult:
+    """Zaai de statische netbeheerder-referentietabel vanuit DNB_CODES.
+
+    Version-onafhankelijke (Groep 1) referentiedata — idempotent en veilig
+    om bij elke import opnieuw uit te voeren.
+    """
+    rows = [{"code": code, "naam": naam} for naam, code in DNB_CODES.items()]
+    stmt = sa.dialects.postgresql.insert(netbeheerder).values(rows)
+    stmt = stmt.on_conflict_do_nothing(index_elements=["code"])
+    conn.execute(stmt)
+    return ImportResult(domain="netbeheerder", rows_inserted=len(rows))
+
+
 def import_gemeente(conn: sa.Connection, csv_path: Path) -> ImportResult:
     df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
-    # Collect unique DNB codes first
-    dnb_codes: set[str] = set()
+    # Collect unique DNB-namen first
+    dnb_names: set[str] = set()
     for col in ("DNB Elektriciteit", "DNB Gas"):
         if col in df.columns:
-            dnb_codes.update(v.strip() for v in df[col].unique() if v.strip())
+            dnb_names.update(v.strip() for v in df[col].unique() if v.strip())
 
-    if dnb_codes:
-        nb_rows = [{"code": c, "naam": c} for c in dnb_codes]
+    code_by_name: dict[str, str] = {naam: _dnb_code(naam) for naam in dnb_names}
+
+    if dnb_names:
+        nb_rows = [
+            {"code": code_by_name[naam], "naam": naam} for naam in dnb_names
+        ]
         stmt = sa.dialects.postgresql.insert(netbeheerder).values(nb_rows)
         stmt = stmt.on_conflict_do_nothing(index_elements=["code"])
         conn.execute(stmt)
@@ -128,11 +166,13 @@ def import_gemeente(conn: sa.Connection, csv_path: Path) -> ImportResult:
         if not pc or pc in seen:
             continue
         seen.add(pc)
+        elek_naam = _str(r.get("DNB Elektriciteit"))
+        gas_naam = _str(r.get("DNB Gas"))
         rows.append({
             "postcode": pc,
             "naam": _str(r.get("Gemeente")) or "",
-            "dnb_elektriciteit": _str(r.get("DNB Elektriciteit")),
-            "dnb_gas": _str(r.get("DNB Gas")),
+            "dnb_elektriciteit": code_by_name.get(elek_naam) if elek_naam else None,
+            "dnb_gas": code_by_name.get(gas_naam) if gas_naam else None,
             "gastype_oud": _str(r.get("GasType Oud")),
             "gastype_nieuw": _str(r.get("GasType Nieuw")),
         })
@@ -275,6 +315,7 @@ def import_netwerk_tarieven(
     files = [
         ("tariffs_electricity_afname.csv", "elektriciteit", "afname"),
         ("tariffs_electricity_injectie.csv", "elektriciteit", "injectie"),
+        ("tariffs_electricity_hoogspanning.csv", "elektriciteit", None),
         ("tariffs_gas_afname.csv", "gas", "afname"),
         ("tariffs_gas_injectie.csv", "gas", "injectie"),
     ]
@@ -297,12 +338,23 @@ def import_netwerk_tarieven(
                 # Rijen zonder geldige prijs zijn voetnoten of commentaarregels
                 overgeslagen += 1
                 continue
+            # De hoogspanning-CSV bevat zowel afname- als injectierijen (geen
+            # vast richting per bestand); leid de richting dan per rij af uit
+            # de Contracttype-kolom i.p.v. de bestandsbrede `richting`.
+            row_richting = richting or (_str(r.get("Contracttype")) or "").lower()
+            if row_richting not in ("afname", "injectie"):
+                LOG.warning(
+                    "netwerk_tarief [%s]: onherkenbare Contracttype-waarde %r overgeslagen",
+                    energie_type, r.get("Contracttype"),
+                )
+                overgeslagen += 1
+                continue
             rows.append({
                 "version_id": version_id,
                 "jaar": jaar,
                 "netbeheerder_code": _str(r.get("Netbeheerder")) or "",
                 "energie_type": energie_type,
-                "contract_richting": richting,
+                "contract_richting": row_richting,
                 "klanttype": _str(r.get("Klanttype")) or "",
                 "tarieftype": _str(r.get("Tarieftype")),
                 "tariefdetail": _str(r.get("Tariefdetail")),
@@ -320,7 +372,7 @@ def import_netwerk_tarieven(
             conn.execute(stmt)
             total += len(rows)
             LOG.info("netwerk_tarief [%s/%s]: %d rijen ingevoegd, %d voetnoten overgeslagen",
-                     energie_type, richting, len(rows), overgeslagen)
+                     energie_type, richting or "gemengd", len(rows), overgeslagen)
 
     return ImportResult(domain="netwerk_tarief", rows_inserted=total)
 
@@ -421,3 +473,44 @@ def import_vtest_products(
     conn.execute(stmt)
     LOG.info("vtest_product: %d rijen ingevoegd", len(rows))
     return ImportResult(domain="vtest_product", rows_inserted=len(rows))
+
+
+# ---------------------------------------------------------------------------
+# vtest_product_match (vtest_product_links.csv — optioneel, best-effort
+# koppeling tussen vreg_id en de bulk-export van energie_vlaanderen.ingest.
+# vtest.product_matcher). Vereist dat vtest_product al gevuld is (FK).
+# ---------------------------------------------------------------------------
+
+def import_vtest_product_links(
+    conn: sa.Connection,
+    version_id: str,
+    csv_path: Path,
+) -> ImportResult:
+    if not csv_path.is_file():
+        LOG.info("vtest_product_links.csv niet gevonden, overgeslagen: %s", csv_path)
+        return ImportResult(domain="vtest_product_match", rows_inserted=0)
+
+    df = pd.read_csv(csv_path, sep=";", encoding=_ENC).fillna("")
+    now = datetime.now(tz=timezone.utc)
+    rows = []
+    for _, r in df.iterrows():
+        vreg_id = _str(r.get("vreg_id")) or ""
+        if not vreg_id:
+            continue
+        rows.append({
+            "version_id": version_id,
+            "vreg_id": vreg_id,
+            "handelsnaam": _str(r.get("matched_handelsnaam")) or None,
+            "productnaam": _str(r.get("matched_productnaam")) or None,
+            "match_status": _str(r.get("match_status")) or "geen_match",
+            "gekoppeld_op": now,
+        })
+
+    if not rows:
+        return ImportResult(domain="vtest_product_match", rows_inserted=0)
+
+    stmt = sa.dialects.postgresql.insert(vtest_product_match).values(rows)
+    stmt = stmt.on_conflict_do_nothing(constraint="uq_vtest_product_match_version_vreg")
+    conn.execute(stmt)
+    LOG.info("vtest_product_match: %d rijen ingevoegd", len(rows))
+    return ImportResult(domain="vtest_product_match", rows_inserted=len(rows))

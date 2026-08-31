@@ -1,0 +1,36 @@
+# Btw-percentages op energie — versioned masterdata (manifest.md §8/§14: "geen
+# percentage wordt permanent in de financiële kerncode vastgelegd").
+#
+# Bron: docs/price_model_low_voltage.md §6, inhoudelijke referentiedatum
+# 26 januari 2026.
+#
+# Deze data wordt in Fase 2 nog NIET automatisch aan de Calculator
+# gekoppeld (die accepteert al een expliciete `vat`-parameter) — enkel de
+# data en loader worden klaargezet zodat een latere caller
+# `heffingen.btw_percentage(...)` kan doorgeven.
+
+bron = "docs/price_model_low_voltage.md §6 (referentiedatum 2026-01-26)"
+
+[[tarief]]
+component = "elektriciteit"
+percentage = "0.06"
+vrijgesteld = false
+geldig_vanaf = "2026-01-01"
+
+[[tarief]]
+component = "aardgas"
+percentage = "0.06"
+vrijgesteld = false
+geldig_vanaf = "2026-01-01"
+
+[[tarief]]
+component = "energiedelen_administratiekost"
+percentage = "0.21"
+vrijgesteld = false
+geldig_vanaf = "2026-01-01"
+
+[[tarief]]
+component = "bijdrage_energiefonds"
+percentage = "0"
+vrijgesteld = true
+geldig_vanaf = "2026-01-01"

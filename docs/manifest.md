@@ -329,7 +329,15 @@ Voor productiegebruik moeten nog officieel worden bevestigd:
 - btw op injectievergoedingen en afzonderlijke kosten;
 - maximumtarieven en analoge capaciteitstermen;
 - gebruiksrechten op product-, profiel- en meterdata;
-- representatieve validatieset voor grootverbruikers.
+- representatieve validatieset voor grootverbruikers;
+- bijzondere-accijns-/energiebijdrage-cijfers in `config/heffingen/bijzondere_accijns_elektriciteit.toml`
+  zijn overgenomen uit art. 39 programmawet 25/12/2021; latere indexeringen
+  of hervormingen (bv. ongeverifieerde berichtgeving medio 2026 over een
+  geleidelijke hervorming 2026-2029) zijn niet geverifieerd verwerkt —
+  periodiek te herbevestigen tegen een actuele officiële bron;
+- aardgas-heffingen (bijzondere accijns, energiebijdrage, Bijdrage
+  Energiefonds) zijn nog niet gedekt — geen bron aangeleverd, `Calculator`
+  weigert vandaag expliciet elke berekening voor aardgas.
 
 ---
 terug naar [[MOC]]

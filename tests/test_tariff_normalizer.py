@@ -7,10 +7,27 @@ import pytest
 from energie_vlaanderen.ingest.tariffs.normalizer import TariffDataNormalizer
 
 
-def _elek_row(col0, desc, digi=None, ana=None, pro=None, sheet="FA ELEK Afname", source_row=10):
-    """Bouw een minimale elektriciteitsrij met de vereiste kolomindices."""
-    # Kolommen: 0=col0, 1=desc, 2=x, 3=unit, 4-12=x, 13=DIGI, 14=ANA, 15=ANA_PRO
-    data = [col0, desc] + [None] * 11 + [digi, ana, pro]
+def _elek_row(col0, desc, hs1=None, hs2=None, ms1=None, ms2=None, ls_dc=None,
+              digi=None, ana=None, pro=None, sheet="FA ELEK Afname", source_row=10):
+    """Bouw een minimale elektriciteitsrij met de vereiste kolomindices.
+
+    Kolommen: 0=col0, 1=desc, 2=x, 3=unit, 4=x,
+              5=HS1, 6=HS2, 7=x, 8=MS1, 9=MS2, 10=x, 11=LS_DC, 12=x,
+              13=DIGI, 14=ANA, 15=ANA_PRO
+    """
+    data = [col0, desc, None, None, None, hs1, hs2, None, ms1, ms2, None, ls_dc, None, digi, ana, pro]
+    return {i: v for i, v in enumerate(data)} | {"source_sheet": sheet, "source_row": source_row}
+
+
+def _elek_injectie_row(col0, desc, val=None, unit="EUR/kWh", sheet="FA ELEK Injectie", source_row=6):
+    """Bouw een minimale elektriciteit-injectierij (5 kolommen: col0, desc, x, Tarief, Eenheid)."""
+    data = [col0, desc, None, val, unit]
+    return {i: v for i, v in enumerate(data)} | {"source_sheet": sheet, "source_row": source_row}
+
+
+def _gas_injectie_row(col0, desc, val=None, unit="EUR/kWh", sheet="FA GAS Injectie", source_row=8):
+    """Bouw een minimale gas-injectierij (4 kolommen: col0, desc, Eenheid, Tarief)."""
+    data = [col0, desc, unit, val]
     return {i: v for i, v in enumerate(data)} | {"source_sheet": sheet, "source_row": source_row}
 
 
@@ -116,3 +133,75 @@ class TestNormalizerOutput:
         ]
         result = _normalizer().normalize(_make_frame(rows), pd.DataFrame())
         assert result.afname.empty
+
+    def test_hs_ms_only_row_produces_hs_ms_klanttypes(self):
+        """Rijen als 'Toegangsvermogen' bestaan enkel in de HS/MS-kolommen
+        (geen LS-waarden) en waren voorheen volledig onzichtbaar."""
+        rows = [
+            _elek_row("1", "Afnameklanten op 26-36 kV, 1-26 kV en distributiecabine"),
+            _elek_row("", "Toegangsvermogen", hs1=3.470105, hs2=2.804856, ms1=3.470105, ms2=2.804856, ls_dc=4.24418),
+        ]
+        result = _normalizer().normalize(_make_frame(rows), pd.DataFrame())
+        assert set(result.afname["Klanttype"]) == {
+            "ELEK_HS1", "ELEK_HS2", "ELEK_MS1", "ELEK_MS2", "ELEK_LS_DC",
+        }
+        assert len(result.afname) == 5
+
+    def test_row_with_ls_and_hs_ms_values_produces_all_eight_klanttypes(self):
+        rows = [
+            _elek_row("1", "Netgebruik"),
+            _elek_row(
+                "", "kWh-tarief",
+                hs1=0.02, hs2=0.02, ms1=0.02, ms2=0.02, ls_dc=0.02,
+                digi=0.023, ana=0.023, pro=0.023,
+            ),
+        ]
+        result = _normalizer().normalize(_make_frame(rows), pd.DataFrame())
+        assert len(result.afname) == 8
+        assert set(result.afname["Klanttype"]) == {
+            "ELEK_HS1", "ELEK_HS2", "ELEK_MS1", "ELEK_MS2", "ELEK_LS_DC",
+            "ELEK_LS_DIGI", "ELEK_LS_ANA", "ELEK_LS_ANA_PRO",
+        }
+
+
+class TestInjectieFanOut:
+    """Injectietarieven moeten uitwaaieren naar de klanttypes waarop ze
+    daadwerkelijk van toepassing zijn, i.p.v. hardcoded ELEK_LS_DIGI."""
+
+    def test_netgebruik_fans_out_to_all_eight_klanttypes(self):
+        rows = [_elek_injectie_row("1", "Tarief voor het netgebruik", val=0.001751)]
+        result = _normalizer().normalize(pd.DataFrame(), _make_frame(rows))
+        assert len(result.injectie) == 8
+        assert set(result.injectie["Klanttype"]) == {
+            "ELEK_HS1", "ELEK_HS2", "ELEK_MS1", "ELEK_MS2", "ELEK_LS_DC",
+            "ELEK_LS_DIGI", "ELEK_LS_ANA", "ELEK_LS_ANA_PRO",
+        }
+        assert (result.injectie["Prijs_num"] == 0.001751).all()
+
+    def test_hs_ms_dc_group_fans_out_to_five_klanttypes(self):
+        rows = [_elek_injectie_row("", "26-36 kV, 1-26 kV, distributiecabine", val=57.65)]
+        result = _normalizer().normalize(pd.DataFrame(), _make_frame(rows))
+        assert set(result.injectie["Klanttype"]) == {
+            "ELEK_HS1", "ELEK_HS2", "ELEK_MS1", "ELEK_MS2", "ELEK_LS_DC",
+        }
+        assert len(result.injectie) == 5
+
+    def test_laagspanningsnet_group_fans_out_to_three_klanttypes(self):
+        rows = [_elek_injectie_row("", "Laagspanningnet", val=17.85)]
+        result = _normalizer().normalize(pd.DataFrame(), _make_frame(rows))
+        assert set(result.injectie["Klanttype"]) == {
+            "ELEK_LS_DIGI", "ELEK_LS_ANA", "ELEK_LS_ANA_PRO",
+        }
+        assert len(result.injectie) == 3
+
+    def test_unmatched_injectie_text_produces_warning_not_silent_drop(self):
+        rows = [_elek_injectie_row("", "Een volledig onbekende tariefomschrijving", val=1.23)]
+        result = _normalizer().normalize(pd.DataFrame(), _make_frame(rows))
+        assert result.injectie.empty
+        assert any("onbekende tariefomschrijving" in w.message for w in result.warnings)
+
+    def test_gas_injectie_unaffected_single_klanttype(self):
+        rows = [_gas_injectie_row("1)", "Het tarief voor het systeembeheer", val=0.000963)]
+        result = _normalizer().normalize(pd.DataFrame(), _make_frame(rows))
+        assert len(result.injectie) == 1
+        assert result.injectie.iloc[0]["Klanttype"] == "GAS_INJ"

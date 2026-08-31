@@ -2,15 +2,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 import pandas as pd
+from energie_vlaanderen.utility.constants import DNB_CODES
 from energie_vlaanderen.utility.normalizer import clean_text
 
 class TariffNormalizationError(RuntimeError):
     pass
 
-DNB_MAPPING = {
-    "FA": "FA", "FHV": "FHV", "FI": "FI", "FK": "FK",
-    "FL": "FL", "FMV": "FMV", "FW": "FW", "FZD": "FZD"
-}
+# Geldige DNB-afkortingen zoals ze als prefix in werkbladnamen voorkomen
+# (bv. "FA ELEK Afname" -> "FA"). Afgeleid van DNB_CODES (utility/constants.py)
+# zodat deze whitelist en de netbeheerder-tabel nooit uit elkaar groeien.
+VALID_DNB_ABBREVIATIONS = frozenset(DNB_CODES.values())
 
 # Gas afname: (column_index, klanttype_label)
 GAS_AFNAME_COLS = [
@@ -22,6 +23,34 @@ GAS_AFNAME_COLS = [
     (8, "GAS_T6"),
     (9, "GAS_LD"),
     (10, "GAS_MD"),
+]
+
+# Elektriciteit afname: (column_index, klanttype_label). Kolommen 7, 10, 12
+# zijn altijd-lege scheidingskolommen in de bron en komen hier niet in voor.
+ELEK_AFNAME_COLS = [
+    (5, "ELEK_HS1"),
+    (6, "ELEK_HS2"),
+    (8, "ELEK_MS1"),
+    (9, "ELEK_MS2"),
+    (11, "ELEK_LS_DC"),
+    (13, "ELEK_LS_DIGI"),
+    (14, "ELEK_LS_ANA"),
+    (15, "ELEK_LS_ANA_PRO"),
+]
+
+# Elektriciteit injectie: Tariefdetail-tekst -> klanttypes waarop de prijs van
+# toepassing is (fan-out). Eerste match wint.
+ELEK_INJECTIE_GROUPS: list[tuple[str, tuple[str, ...]]] = [
+    ("Tarief voor het netgebruik", (
+        "ELEK_HS1", "ELEK_HS2", "ELEK_MS1", "ELEK_MS2", "ELEK_LS_DC",
+        "ELEK_LS_DIGI", "ELEK_LS_ANA", "ELEK_LS_ANA_PRO",
+    )),
+    ("26-36 kV, 1-26 kV, distributiecabine", (
+        "ELEK_HS1", "ELEK_HS2", "ELEK_MS1", "ELEK_MS2", "ELEK_LS_DC",
+    )),
+    ("Laagspanningnet", (
+        "ELEK_LS_DIGI", "ELEK_LS_ANA", "ELEK_LS_ANA_PRO",
+    )),
 ]
 
 @dataclass(frozen=True)
@@ -61,7 +90,7 @@ class TariffDataNormalizer:
         for _, row in frame.iterrows():
             source_sheet = clean_text(row.get("source_sheet", ""))
             dnb_code = source_sheet.split(" ")[0] if source_sheet else ""
-            dnb_mapped = DNB_MAPPING.get(dnb_code)
+            dnb_mapped = dnb_code if dnb_code in VALID_DNB_ABBREVIATIONS else None
 
             if not dnb_mapped:
                 continue
@@ -110,16 +139,10 @@ class TariffDataNormalizer:
                 else:
                     if len(row) > 15:
                         unit = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
-                        val_digi = self._safe_price(row.iloc[13])
-                        val_ana = self._safe_price(row.iloc[14])
-                        val_pro = self._safe_price(row.iloc[15])
-
-                        if val_digi is not None:
-                            out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_DIGI", "Prijs_num": val_digi})
-                        if val_ana is not None:
-                            out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_ANA", "Prijs_num": val_ana})
-                        if val_pro is not None:
-                            out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_ANA_PRO", "Prijs_num": val_pro})
+                        for col_idx, klanttype in ELEK_AFNAME_COLS:
+                            val = self._safe_price(row.iloc[col_idx])
+                            if val is not None:
+                                out.append({**base_data, "Tariefnotering": unit, "Klanttype": klanttype, "Prijs_num": val})
 
             elif direction == "Injectie":
                 if is_gas:
@@ -133,9 +156,28 @@ class TariffDataNormalizer:
                         val = self._safe_price(row.iloc[3])
                         unit = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else ""
                         if val is not None:
-                            out.append({**base_data, "Tariefnotering": unit, "Klanttype": "ELEK_LS_DIGI", "Prijs_num": val})
+                            klanttypes = self._match_elek_injectie_klanttypes(desc)
+                            if klanttypes:
+                                for klanttype in klanttypes:
+                                    out.append({**base_data, "Tariefnotering": unit, "Klanttype": klanttype, "Prijs_num": val})
+                            else:
+                                issues.append(RowIssue(
+                                    source_sheet=source_sheet,
+                                    severity="warning",
+                                    message=(
+                                        f"Injectietarief {desc!r} (rij {source_row}) komt niet overeen "
+                                        "met een bekende klanttype-groep en werd niet geëxporteerd."
+                                    ),
+                                ))
 
         return pd.DataFrame(out) if out else pd.DataFrame()
+
+    @staticmethod
+    def _match_elek_injectie_klanttypes(desc: str) -> tuple[str, ...]:
+        for needle, klanttypes in ELEK_INJECTIE_GROUPS:
+            if needle in desc:
+                return klanttypes
+        return ()
 
     @staticmethod
     def _safe_price(val: Any) -> float | None:

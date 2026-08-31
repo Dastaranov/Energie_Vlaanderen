@@ -112,6 +112,9 @@ def run_db_import(args: argparse.Namespace, settings: Settings) -> int:
 
         results = []
 
+        LOG.info("Netbeheerder-referentiedata zaaien ...")
+        results.append(imp.seed_netbeheerder(conn))
+
         if args.gemeente:
             LOG.info("Importeren van DnbPerGemeente.csv ...")
             gemeente_csv = settings.data_root / "current" / "DnbPerGemeente.csv"
@@ -129,6 +132,11 @@ def run_db_import(args: argparse.Namespace, settings: Settings) -> int:
             results.append(imp.import_vtest_products(conn, version_id, vtest_csv, scrape_run_id=scrape_run_id))
         else:
             results.append(imp.import_vtest_products(conn, version_id, vtest_csv))
+
+        LOG.info("Importeren van vtest-productkoppelingen (bulk-export) ...")
+        results.append(
+            imp.import_vtest_product_links(conn, version_id, vtest_dir / "vtest_product_links.csv")
+        )
 
         LOG.info("Importeren van productcomponenten ...")
         results.append(

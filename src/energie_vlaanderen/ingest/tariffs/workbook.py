@@ -12,6 +12,13 @@ class TariffWorkbookError(RuntimeError):
 
 SKIP_SHEET_MARKERS = frozenset({"Overzicht", "Per DNB"})
 
+# Header staat normaal op Excel-rij 5 (0-indexed 4), behalve bij de "* ELEK
+# Injectie"-sheets: daar staat de échte kop op Excel-rij 3 (0-indexed 2). Met
+# header=4 werd voor die sheets de eerste datarij ("Tarief voor het
+# netgebruik") als kop verbruikt en zo stil weggegooid.
+HEADER_ROW_DEFAULT = 4          # Excel rij 5 — Afname-sheets, GAS Injectie
+HEADER_ROW_ELEK_INJECTIE = 2    # Excel rij 3 — enkel "* ELEK Injectie"
+
 @dataclass(frozen=True)
 class ParsedTariffSheet:
     sheet_name: str
@@ -45,8 +52,10 @@ class TariffWorkbookParser:
             if sheet_filter not in sheet_name or any(m in sheet_name for m in SKIP_SHEET_MARKERS):
                 continue
 
-            # Header is at Excel row 5 (0-indexed row 4); data starts at Excel row 6.
-            frame = pd.read_excel(source_path, sheet_name=sheet_name, header=4, dtype=object, engine="openpyxl")
+            is_elek_injectie = "ELEK" in sheet_name and "Injectie" in sheet_name
+            header_row = HEADER_ROW_ELEK_INJECTIE if is_elek_injectie else HEADER_ROW_DEFAULT
+
+            frame = pd.read_excel(source_path, sheet_name=sheet_name, header=header_row, dtype=object, engine="openpyxl")
             frame = frame.dropna(how="all").copy()
 
             if frame.empty:
@@ -54,8 +63,9 @@ class TariffWorkbookParser:
                 continue
 
             frame["source_sheet"] = sheet_name
-            # DataFrame index 0 corresponds to Excel row 6 (header=4 → row 5 is header).
-            frame["source_row"] = frame.index + 6
+            # DataFrame index 0 correspondeert met de Excel-rij net na de header
+            # (Excel-rijnummer = header_row + 2, 1-indexed: header op rij header_row+1).
+            frame["source_row"] = frame.index + header_row + 2
 
             parsed_sheets.append(ParsedTariffSheet(
                 sheet_name=sheet_name,

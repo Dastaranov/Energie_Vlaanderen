@@ -109,9 +109,30 @@ def _add_staging_group(subparsers: argparse._SubParsersAction) -> None:
     add_version_arg(refine_parser)
     refine_parser.add_argument("--postcode", default="9000")
     refine_parser.add_argument(
+        "--segment",
+        default="woning",
+        choices=("woning", "onderneming"),
+        help="Klantsegment ('Mijn woning' of 'Mijn onderneming'), standaard woning.",
+    )
+    refine_parser.add_argument(
+        "--energy",
+        default="elektriciteit",
+        choices=("elektriciteit", "gas"),
+        help="Energietype, standaard elektriciteit.",
+    )
+    refine_parser.add_argument(
+        "--matrix",
+        action="store_true",
+        help=(
+            "Draai alle segment x energie x DNB-combinaties (32 runs, 1 postcode "
+            "per netbeheerder uit DnbPerGemeente.csv) i.p.v. één gerichte run. "
+            "Negeert --postcode/--segment/--energy."
+        ),
+    )
+    refine_parser.add_argument(
         "--no-download",
         action="store_true",
-        help="Gebruik bestaande HTML-dump i.p.v. opnieuw te scrapen (vereist geen Selenium).",
+        help="Gebruik bestaande HTML-dump i.p.v. opnieuw te scrapen (vereist geen Selenium, niet beschikbaar bij --matrix).",
     )
     refine_parser.add_argument(
         "--browser",

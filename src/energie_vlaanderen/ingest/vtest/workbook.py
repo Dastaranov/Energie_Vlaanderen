@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,23 @@ REQUIRED_PRODUCT_COLUMNS = frozenset(
         "Prijsonderdeel",
     }
 )
+
+
+# Sommige (nieuwere) werkbladen gebruiken Engelse koppen voor Jaar/Maand
+# (bv. "Var-dyn (excl. btw) (2026)") terwijl de rest van het werkblad
+# Nederlands is. Alias ze naar de Nederlandse kolomnaam zodat
+# REQUIRED_PRODUCT_COLUMNS ze nog steeds herkent — analoog aan hoe
+# _uses_legacy_index_schema de X/Y/Z-vs-A/B/C/D-variatie opvangt.
+COLUMN_ALIASES: dict[str, str] = {
+    "year": "Jaar",
+    "month": "Maand",
+}
+
+# Werkbladnamen die op een jaartal eindigen (bv. "... (2026)") zijn
+# vermoedelijk jaargebonden producttabellen. Als voor zo'n werkblad geen
+# geldige header gevonden wordt, is dat een teken van een gewijzigd
+# kolomformaat (stille dataverlies-bug) en geen onschuldig niet-productblad.
+SHEET_YEAR_SUFFIX_RE = re.compile(r"\(\d{4}\)\s*$")
 
 
 TYPE_COLUMN_CANDIDATES = (
@@ -109,6 +127,18 @@ class VTestWorkbookParser:
             )
 
             if header_row is None:
+                if SHEET_YEAR_SUFFIX_RE.search(sheet_name):
+                    raise VTestWorkbookError(
+                        f"Werkblad {sheet_name!r} lijkt een jaargebonden "
+                        "producttabel (naam eindigt op een jaartal), maar "
+                        "de verplichte kolommen "
+                        f"({', '.join(sorted(REQUIRED_PRODUCT_COLUMNS))}) "
+                        "konden niet worden gevonden binnen de eerste "
+                        f"{self.max_header_rows} rijen. Controleer of het "
+                        "kolomformaat van dit werkblad gewijzigd is (bv. "
+                        "nieuwe Engelse kolomnamen) en werk COLUMN_ALIASES "
+                        "bij indien nodig."
+                    )
                 LOG.debug(
                     "Werkblad %s bevat geen producttabel.",
                     sheet_name,
@@ -226,7 +256,7 @@ class VTestWorkbookParser:
 
         for row_number in range(len(preview)):
             values = {
-                clean_text(value)
+                self._alias_column(clean_text(value))
                 for value in preview.iloc[
                     row_number
                 ].tolist()
@@ -239,6 +269,13 @@ class VTestWorkbookParser:
                 return row_number
 
         return None
+
+    @staticmethod
+    def _alias_column(name: str) -> str:
+        """Vertaal een (mogelijk Engelse) kolomnaam naar zijn canonieke
+        Nederlandse variant, zie COLUMN_ALIASES. Onbekende namen worden
+        ongewijzigd teruggegeven."""
+        return COLUMN_ALIASES.get(name.casefold(), name)
 
     def read_product_sheet(
         self,
@@ -263,7 +300,7 @@ class VTestWorkbookParser:
 
         frame.columns = self.unique_columns(
             [
-                clean_text(column)
+                self._alias_column(clean_text(column))
                 for column in frame.columns
             ]
         )

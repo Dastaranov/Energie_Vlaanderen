@@ -91,6 +91,24 @@ vtest_product = sa.Table(
     sa.UniqueConstraint("version_id", "vreg_id", name="uq_vtest_product_version_vreg"),
 )
 
+vtest_product_match = sa.Table(
+    "vtest_product_match",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+    sa.Column("version_id", sa.String(26), nullable=False),
+    sa.Column("vreg_id", sa.Text, nullable=False),
+    sa.Column("handelsnaam", sa.Text, nullable=True),
+    sa.Column("productnaam", sa.Text, nullable=True),
+    sa.Column("match_status", sa.Text, nullable=False),
+    sa.Column("gekoppeld_op", sa.TIMESTAMP(timezone=True), nullable=False),
+    sa.UniqueConstraint("version_id", "vreg_id", name="uq_vtest_product_match_version_vreg"),
+    sa.ForeignKeyConstraint(
+        ["version_id", "vreg_id"],
+        ["vtest_product.version_id", "vtest_product.vreg_id"],
+        name="vtest_product_match_vtest_product_fkey",
+    ),
+)
+
 leverancier_product = sa.Table(
     "leverancier_product",
     metadata,
@@ -151,7 +169,7 @@ netwerk_tarief = sa.Table(
     sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
     sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
     sa.Column("jaar", sa.SmallInteger, nullable=True),
-    sa.Column("netbeheerder_code", sa.String(40), nullable=False),
+    sa.Column("netbeheerder_code", sa.String(40), sa.ForeignKey("netbeheerder.code"), nullable=False),
     sa.Column("energie_type", sa.Text, nullable=False),
     sa.Column("contract_richting", sa.Text, nullable=False),
     sa.Column("klanttype", sa.Text, nullable=False),

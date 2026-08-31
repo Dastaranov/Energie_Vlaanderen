@@ -22,6 +22,12 @@ _POSTCODE_SELECTORS = (
 )
 
 _SUBMIT_KEYWORDS = ("vergelijk", "zoeken", "toon", "bereken", "result", "start", "v-test")
+# Bij segment "onderneming" (na tab2) toont de site twee knoppen die allebei
+# op _SUBMIT_KEYWORDS matchen: "Sla op in mijn profiel en doe de V-test®"
+# (opent een profiel-aanmaakflow, blokkeert de resultaten) en "Sla deze stap
+# over en doe de V-test®" (de eigenlijke doorgaan-knop). De eerste wordt
+# expliciet uitgesloten.
+_SUBMIT_EXCLUDE_KEYWORDS = ("sla op",)
 
 
 class VTestDownloadError(RuntimeError):
@@ -38,13 +44,31 @@ class VTestHtmlDownloader:
     def download(
         self,
         postcode: str = "9000",
+        segment: str = "woning",
+        energy: str = "elektriciteit",
+        kwh_elektriciteit: int = 15000,
+        kwh_gas: int = 10000,
         headless: bool = True,
         browser: str = "chrome",
         timeout: int = 60,
     ) -> str:
-        """Navigeer naar vtest.be, vul het formulier in en retourneer de volledige HTML."""
+        """Navigeer naar vtest.be, vul het formulier in en retourneer de volledige HTML.
+
+        `segment`: "woning" (= "Mijn woning", standaard — zelfde waarde als
+        `Segment` in de bulk-export en `Profile.segment`) of "onderneming"
+        (= "Mijn onderneming"). `energy`: "elektriciteit" of "gas" — de
+        checkboxes staan standaard beide aan, de niet-gekozene wordt uitgevinkt.
+
+        `kwh_elektriciteit`/`kwh_gas`: representatief jaarverbruik, enkel
+        gebruikt voor segment "onderneming" — daar is "Ik ken mijn verbruik
+        niet" uitgeschakeld en moet een verbruik ingevuld worden. Bevestigd
+        met Gert: 15.000 kWh elektriciteit / 10.000 kWh gas als vast
+        representatief KMO-profiel — de exacte waarde is hier niet kritiek,
+        enkel bepalend voor welke prijs vtest.be per contract berekent.
+        """
         try:
             from selenium import webdriver
+            from selenium.common.exceptions import NoSuchElementException
             from selenium.webdriver.chrome.options import Options as ChromeOptions
             from selenium.webdriver.firefox.options import Options as FirefoxOptions
             from selenium.webdriver.common.by import By
@@ -97,7 +121,11 @@ class VTestHtmlDownloader:
             except Exception:
                 pass
 
-            # Postcode invoeren
+            # Postcode invoeren — het onderliggende <select id="PostalCode">
+            # heeft interne id-waarden i.p.v. de postcode zelf
+            # (<option value="7758">1500 - Halle</option>), dus typen+Enter
+            # kan de verkeerde gemeente selecteren. We klikken daarom
+            # expliciet op de juiste <a>-optie in de opengeklapte lijst.
             postcode_field = None
             for css in _POSTCODE_SELECTORS:
                 els = driver.find_elements(By.CSS_SELECTOR, css)
@@ -112,28 +140,90 @@ class VTestHtmlDownloader:
                 postcode_field.clear()
                 postcode_field.send_keys(postcode)
                 time.sleep(1.0)
-                postcode_field.send_keys(Keys.ENTER)
-                time.sleep(1.0)
 
+                gekozen = False
                 try:
-                    opts = driver.find_elements(By.XPATH, f"//*[contains(text(), '{postcode}')]")
+                    opts = driver.find_elements(
+                        By.XPATH,
+                        "//div[@id='PostalcodesInput']"
+                        f"//a[starts-with(normalize-space(.), '{postcode}')]",
+                    )
                     if opts:
-                        opts[0].click()
-                        time.sleep(1.0)
-                except Exception:
-                    pass
+                        label = opts[0].text.strip()
+                        driver.execute_script("arguments[0].click();", opts[0])
+                        gekozen = True
+                        LOG.info("Postcode %s geselecteerd (%s).", postcode, label)
+                except Exception as exc:
+                    LOG.warning("Postcode-optie klikken mislukt: %s", exc)
 
-                LOG.info("Postcode %s ingevuld.", postcode)
+                if not gekozen:
+                    LOG.warning(
+                        "Geen exacte postcode-optie gevonden voor %s; "
+                        "resultaat kan een verkeerde gemeente betreffen.",
+                        postcode,
+                    )
+                time.sleep(1.0)
             else:
                 LOG.warning("Postcode-invoerveld niet gevonden.")
 
-            # Elektriciteit-tab selecteren
+            # Klantsegment: "Mijn woning" (woning) of
+            # "Mijn onderneming" (onderneming) — standaard staat woning aan.
+            segment_id = "PropertyTypeCommercial" if segment == "onderneming" else "PropertyTypeDomicile"
             try:
-                el = driver.find_element(By.ID, "EnergyTypeElectricity")
+                el = driver.find_element(By.ID, segment_id)
                 if not el.is_selected():
-                    el.click()
-            except Exception:
-                pass
+                    driver.execute_script("arguments[0].click();", el)
+                LOG.info("Klantsegment ingesteld op %s.", segment)
+            except Exception as exc:
+                LOG.warning("Klantsegment (%s) instellen mislukt: %s", segment_id, exc)
+
+            # Verplichte stap "Ken je je verbruik?" — zonder deze keuze
+            # blijft de submitknop onzichtbaar. "Ik ken mijn verbruik niet"
+            # (tab1) gebruikt VREG's eigen schattingsprofiel, maar is
+            # uitgeschakeld voor segment "onderneming" ("Voor een onderneming
+            # moet je het verbruik invullen.") — daar kiezen we tab2
+            # ("Ik ken mijn verbruik") en vullen we het representatieve
+            # jaarverbruik in.
+            try:
+                tab1 = driver.find_element(By.ID, "tab1")
+                if tab1.get_property("disabled"):
+                    LOG.info(
+                        "'Ik ken mijn verbruik niet' uitgeschakeld voor segment '%s' — "
+                        "vul representatief verbruik in (%s kWh elek, %s kWh gas).",
+                        segment, kwh_elektriciteit, kwh_gas,
+                    )
+                    tab2 = driver.find_element(By.ID, "tab2")
+                    driver.execute_script("arguments[0].click();", tab2)
+                    time.sleep(0.5)
+                    for veld_id, waarde in (
+                        ("UsageDay", kwh_elektriciteit),
+                        ("UsageGas", kwh_gas),
+                    ):
+                        try:
+                            veld = driver.find_element(By.ID, veld_id)
+                            veld.clear()
+                            veld.send_keys(str(waarde))
+                        except NoSuchElementException as exc:
+                            LOG.warning("Verbruikveld %s invullen mislukt: %s", veld_id, exc)
+                elif not tab1.is_selected():
+                    driver.execute_script("arguments[0].click();", tab1)
+            except NoSuchElementException as exc:
+                LOG.warning("Verbruik-stap mislukt: %s", exc)
+            time.sleep(0.5)
+
+            # Energietype: beide checkboxes staan standaard aan; vink de
+            # ongewenste uit.
+            gewenst_id = "EnergyTypeElectricity" if energy == "elektriciteit" else "EnergyTypeGas"
+            ongewenst_id = "EnergyTypeGas" if energy == "elektriciteit" else "EnergyTypeElectricity"
+            try:
+                gewenst = driver.find_element(By.ID, gewenst_id)
+                if not gewenst.is_selected():
+                    driver.execute_script("arguments[0].click();", gewenst)
+                ongewenst = driver.find_element(By.ID, ongewenst_id)
+                if ongewenst.is_selected():
+                    driver.execute_script("arguments[0].click();", ongewenst)
+            except Exception as exc:
+                LOG.warning("Energietype (%s) instellen mislukt: %s", energy, exc)
 
             # Submit-knop zoeken en klikken
             btn = None
@@ -146,6 +236,8 @@ class VTestHtmlDownloader:
                     + " "
                     + (candidate.get_attribute("value") or "")
                 ).strip().lower()
+                if any(kw in text for kw in _SUBMIT_EXCLUDE_KEYWORDS):
+                    continue
                 if any(kw in text for kw in _SUBMIT_KEYWORDS):
                     if candidate.is_displayed() and candidate.is_enabled():
                         btn = candidate

@@ -580,3 +580,161 @@ def test_detects_vnr_subtotal_format():
     assert VTestWorkbookParser.is_summary_row(
         row
     )
+
+
+def test_parser_recognizes_english_year_month_headers(
+    tmp_path: Path,
+):
+    """Regressietest voor de stille dataverlies-bug: een werkblad dat
+    'Year'/'Month' i.p.v. 'Jaar'/'Maand' gebruikt (zoals het echte
+    "Var-dyn (excl. btw) (2026)"-tabblad) moet nog steeds herkend worden."""
+    workbook_path = tmp_path / "vtest_engelse_koppen.xlsx"
+
+    product_data = pd.DataFrame(
+        {
+            "Year": [2026],
+            "Month": ["jan"],
+            "Segment": ["Onderneming"],
+            "Energietype": ["Elektriciteit"],
+            "Contracttype": ["Afname"],
+            "Handelsnaam": ["Leverancier E"],
+            "Productnaam": ["Variabel Product 2026"],
+            "Variabel/Dynamisch": ["Variabel"],
+            "Prijsonderdeel": [
+                "Enkelvoudige meter dagtarief"
+            ],
+            "Prijs": ["16,18"],
+        }
+    )
+
+    with pd.ExcelWriter(
+        workbook_path,
+        engine="openpyxl",
+    ) as writer:
+        product_data.to_excel(
+            writer,
+            sheet_name="Var-dyn (excl. btw) (2026)",
+            index=False,
+        )
+
+    parser = VTestWorkbookParser()
+    result = parser.parse(workbook_path)
+
+    assert result.variable_dynamic_rows == 1
+    assert result.fixed_rows == 0
+
+    frame = result.variable_dynamic
+    assert "Jaar" in frame.columns
+    assert "Maand" in frame.columns
+    assert "Year" not in frame.columns
+    assert "Month" not in frame.columns
+    assert str(frame.loc[0, "Jaar"]) == "2026"
+    assert frame.loc[0, "Maand"] == "jan"
+
+
+def test_parser_matches_real_var_dyn_2026_header_shape(
+    tmp_path: Path,
+):
+    """Nabootsing van de échte kolomstructuur van
+    'Var-dyn (excl. btw) (2026)' (Engelse Year/Month, index-kolommen A/B/C/D/z
+    met 'VNR waarde'), naast het reeds correct verwerkte
+    'Vast (excl. btw) (2026)'-tabblad met Nederlandse koppen."""
+    workbook_path = tmp_path / "vtest_2026.xlsx"
+
+    var_dyn_data = pd.DataFrame(
+        {
+            "Year": [2026],
+            "Month": ["jan"],
+            "Segment": ["Onderneming"],
+            "Energietype": ["Elektriciteit"],
+            "Contracttype": ["Afname"],
+            "Handelsnaam": ["Belvus"],
+            "Productnaam": ["Flex Online Pro EL"],
+            "Variabel/Dynamisch": ["Variabel"],
+            "Prijsonderdeel": ["Enkelvoudige meter dagtarief"],
+            "Indexatieparameter A (a.A+b.B+c.C+d.D+z)": ["A"],
+            "Beschrijving A": ["Maandgemiddelde"],
+            "Waarde A (€/MWh) - VNR waarde": ["45,00"],
+            "Waarde A (€/MWh) - laatst gekende waarde": ["45,00"],
+            "a": ["1"],
+            "b": ["0"],
+            "c": ["0"],
+            "d": ["0"],
+            "z": ["0"],
+            "Prijs": ["16,18"],
+        }
+    )
+
+    vast_data = pd.DataFrame(
+        {
+            "Jaar": [2026],
+            "Maand": ["jan"],
+            "Segment": ["Onderneming"],
+            "Energietype": ["Elektriciteit"],
+            "Contracttype": ["Afname"],
+            "Handelsnaam": ["Bolt"],
+            "Productnaam": ["Bolt Vast"],
+            "Vast/variabel/dynamisch": ["Vast"],
+            "Prijsonderdeel": ["Enkelvoudige meter dagtarief"],
+            "Prijs": ["16,18"],
+        }
+    )
+
+    with pd.ExcelWriter(
+        workbook_path,
+        engine="openpyxl",
+    ) as writer:
+        var_dyn_data.to_excel(
+            writer,
+            sheet_name="Var-dyn (excl. btw) (2026)",
+            index=False,
+        )
+        vast_data.to_excel(
+            writer,
+            sheet_name="Vast (excl. btw) (2026)",
+            index=False,
+        )
+
+    parser = VTestWorkbookParser()
+    result = parser.parse(workbook_path)
+
+    sheet_names = {sheet.sheet_name for sheet in result.sheets}
+    assert "Var-dyn (excl. btw) (2026)" in sheet_names
+    assert "Vast (excl. btw) (2026)" in sheet_names
+
+    assert result.variable_dynamic_rows > 0
+    assert result.fixed_rows > 0
+
+
+def test_parser_raises_when_year_suffixed_sheet_header_not_found(
+    tmp_path: Path,
+):
+    """Als een tabblad met een jaartal in de naam geen herkenbare
+    producttabel-header bevat, moet dit hard falen i.p.v. stil worden
+    overgeslagen (silent-data-loss-bescherming)."""
+    workbook_path = tmp_path / "vtest_onherkenbaar_2099.xlsx"
+
+    unrelated = pd.DataFrame(
+        {
+            "Foo": ["a"],
+            "Bar": ["b"],
+        }
+    )
+
+    with pd.ExcelWriter(
+        workbook_path,
+        engine="openpyxl",
+    ) as writer:
+        unrelated.to_excel(
+            writer,
+            sheet_name="Var-dyn (excl. btw) (2099)",
+            index=False,
+        )
+
+    parser = VTestWorkbookParser()
+
+    with pytest.raises(
+        VTestWorkbookError,
+        match="jaargebonden",
+    ):
+        parser.parse(workbook_path)

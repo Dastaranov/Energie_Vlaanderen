@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,6 +32,21 @@ class RawVTestProduct:
         "onderdelen": "", "termijn": "", "formule": "", "indexatieparameter": "", "ToU": "",
     })
     links: dict[str, str] = field(default_factory=dict)
+    # Rechtstreeks van het .resultitem-div (data-*-attributen) — robuuster
+    # dan tekst uit kindelementen te vissen.
+    price_raw: str = ""
+    discount_raw: str = ""
+    contracttype: str = ""
+    supplier_id: str = ""
+    product_id: str = ""
+    green_type: str = ""
+    tariff_type_attr: str = ""
+    stars: str = ""
+    complex_product: str = ""
+    grayedout: bool = False
+    # Volledige JSON-kostenopbouw uit data-productinvoicestring
+    # (button.toContractDetails) — None als niet gevonden/onparseerbaar.
+    invoice_raw: dict[str, Any] | None = None
 
 
 class VTestProductParser:
@@ -86,6 +102,8 @@ class VTestProductParser:
                     c["prijs_indicatie"] = _clean(pr_el.get_text())
 
             self._collect_links(el, c["links"])
+            self._collect_result_attrs(el, c)
+            self._collect_invoice_json(el, c)
 
         # Pass 2: contractdetail-{id} blokken
         for block in soup.select("[id^='contractdetail-']"):
@@ -120,6 +138,17 @@ class VTestProductParser:
                 doelgroep=dict(c["doelgroep"]),
                 prijszekerheid=dict(c["prijszekerheid"]),
                 links=dict(c["links"]),
+                price_raw=c["price_raw"],
+                discount_raw=c["discount_raw"],
+                contracttype=c["contracttype"],
+                supplier_id=c["supplier_id"],
+                product_id=c["product_id"],
+                green_type=c["green_type"],
+                tariff_type_attr=c["tariff_type_attr"],
+                stars=c["stars"],
+                complex_product=c["complex_product"],
+                grayedout=c["grayedout"],
+                invoice_raw=c["invoice_raw"],
             ))
         return results
 
@@ -138,7 +167,49 @@ class VTestProductParser:
             "doelgroep": {"zonnepanelen": "", "EV": "", "energiedelen": "", "leegstand": "", "groepsaankoop": ""},
             "prijszekerheid": {"onderdelen": "", "termijn": "", "formule": "", "indexatieparameter": "", "ToU": ""},
             "links": {},
+            "price_raw": "",
+            "discount_raw": "",
+            "contracttype": "",
+            "supplier_id": "",
+            "product_id": "",
+            "green_type": "",
+            "tariff_type_attr": "",
+            "stars": "",
+            "complex_product": "",
+            "grayedout": False,
+            "invoice_raw": None,
         }
+
+    @staticmethod
+    def _collect_result_attrs(el: Any, c: dict[str, Any]) -> None:
+        """Leest de data-*-attributen op het .resultitem-div zelf."""
+        if "resultitem" not in (el.get("class") or []):
+            return
+        c["price_raw"] = c["price_raw"] or (el.get("data-price") or "")
+        c["discount_raw"] = c["discount_raw"] or (el.get("data-discount") or "")
+        c["contracttype"] = c["contracttype"] or (el.get("data-contracttype") or "")
+        c["supplier_id"] = c["supplier_id"] or (el.get("data-supplier") or "")
+        c["product_id"] = c["product_id"] or (el.get("data-productid") or "")
+        c["green_type"] = c["green_type"] or (el.get("data-greentype") or "")
+        c["tariff_type_attr"] = c["tariff_type_attr"] or (el.get("data-tarifftype") or "")
+        c["stars"] = c["stars"] or (el.get("data-stars") or "")
+        c["complex_product"] = c["complex_product"] or (el.get("data-complexproduct") or "")
+        if "grayedout" in (el.get("class") or []):
+            c["grayedout"] = True
+
+    @staticmethod
+    def _collect_invoice_json(el: Any, c: dict[str, Any]) -> None:
+        """Leest de volledige JSON-kostenopbouw uit data-productinvoicestring
+        (staat op de "Meer details"-knop, niet op het resultitem-div zelf)."""
+        if c["invoice_raw"] is not None:
+            return
+        raw = el.get("data-productinvoicestring")
+        if not raw:
+            return
+        try:
+            c["invoice_raw"] = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     @staticmethod
     def _collect_links(el: Any, links: dict[str, str]) -> None:

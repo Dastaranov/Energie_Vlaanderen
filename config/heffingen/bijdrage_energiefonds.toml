@@ -1,0 +1,172 @@
+# Vlaamse Bijdrage energiefonds — heffing op afnamepunten van elektriciteit.
+#
+# Bron: https://www.vlaanderen.be/belastingen-en-begroting/vlaamse-belastingen/energieheffingen/bijdrage-energiefonds-heffing-op-afnamepunten-van-elektriciteit/tarief-van-de-bijdrage-energiefonds
+# Lokale kopie van de brontabel: docs/tarief energiebijdrage.md
+# Onafhankelijk bevestigd via WebFetch op dezelfde pagina — cijfers komen
+# exact overeen.
+#
+# Eenheid: EUR per maand per afnamepunt. "Beschermde klanten" en
+# residentiële afnemers op laagspanning betalen sinds 2023 een tarief van
+# 0,00 EUR/maand.
+#
+# Enkel elektriciteit — deze heffing bestaat niet voor aardgas.
+# Midden-/hoogspanning zijn hier als data opgenomen, maar (nog) niet aan de
+# Calculator gekoppeld — zelfde voorbehoud als de hoogspanning-tariefdata
+# uit Fase 1 (manifest §7.2/§12).
+
+bron = "vlaanderen.be — Tarief van de bijdrage energiefonds"
+
+# --- Laagspanning, residentiële afnemer ---
+[[tarief]]
+jaar = 2022
+spanningsniveau = "laag"
+klantcategorie = "residentieel"
+eur_per_maand = "0.45"
+
+[[tarief]]
+jaar = 2023
+spanningsniveau = "laag"
+klantcategorie = "residentieel"
+eur_per_maand = "0.00"
+
+[[tarief]]
+jaar = 2024
+spanningsniveau = "laag"
+klantcategorie = "residentieel"
+eur_per_maand = "0.00"
+
+[[tarief]]
+jaar = 2025
+spanningsniveau = "laag"
+klantcategorie = "residentieel"
+eur_per_maand = "0.00"
+
+[[tarief]]
+jaar = 2026
+spanningsniveau = "laag"
+klantcategorie = "residentieel"
+eur_per_maand = "0.00"
+
+# --- Laagspanning, niet-residentiële afnemer ---
+[[tarief]]
+jaar = 2022
+spanningsniveau = "laag"
+klantcategorie = "niet_residentieel"
+eur_per_maand = "8.49"
+
+[[tarief]]
+jaar = 2023
+spanningsniveau = "laag"
+klantcategorie = "niet_residentieel"
+eur_per_maand = "9.54"
+
+[[tarief]]
+jaar = 2024
+spanningsniveau = "laag"
+klantcategorie = "niet_residentieel"
+eur_per_maand = "9.57"
+
+[[tarief]]
+jaar = 2025
+spanningsniveau = "laag"
+klantcategorie = "niet_residentieel"
+eur_per_maand = "9.88"
+
+[[tarief]]
+jaar = 2026
+spanningsniveau = "laag"
+klantcategorie = "niet_residentieel"
+eur_per_maand = "10.07"
+
+# --- Laagspanning, beschermde klanten ---
+[[tarief]]
+jaar = 2022
+spanningsniveau = "laag"
+klantcategorie = "beschermd"
+eur_per_maand = "0.00"
+
+[[tarief]]
+jaar = 2023
+spanningsniveau = "laag"
+klantcategorie = "beschermd"
+eur_per_maand = "0.00"
+
+[[tarief]]
+jaar = 2024
+spanningsniveau = "laag"
+klantcategorie = "beschermd"
+eur_per_maand = "0.00"
+
+[[tarief]]
+jaar = 2025
+spanningsniveau = "laag"
+klantcategorie = "beschermd"
+eur_per_maand = "0.00"
+
+[[tarief]]
+jaar = 2026
+spanningsniveau = "laag"
+klantcategorie = "beschermd"
+eur_per_maand = "0.00"
+
+# --- Middenspanning (geen klantcategorie-onderscheid) ---
+[[tarief]]
+jaar = 2022
+spanningsniveau = "midden"
+klantcategorie = ""
+eur_per_maand = "161.98"
+
+[[tarief]]
+jaar = 2023
+spanningsniveau = "midden"
+klantcategorie = ""
+eur_per_maand = "181.85"
+
+[[tarief]]
+jaar = 2024
+spanningsniveau = "midden"
+klantcategorie = ""
+eur_per_maand = "182.51"
+
+[[tarief]]
+jaar = 2025
+spanningsniveau = "midden"
+klantcategorie = ""
+eur_per_maand = "188.35"
+
+[[tarief]]
+jaar = 2026
+spanningsniveau = "midden"
+klantcategorie = ""
+eur_per_maand = "192.11"
+
+# --- Hoogspanning (geen klantcategorie-onderscheid) ---
+[[tarief]]
+jaar = 2022
+spanningsniveau = "hoog"
+klantcategorie = ""
+eur_per_maand = "944.91"
+
+[[tarief]]
+jaar = 2023
+spanningsniveau = "hoog"
+klantcategorie = ""
+eur_per_maand = "1060.83"
+
+[[tarief]]
+jaar = 2024
+spanningsniveau = "hoog"
+klantcategorie = ""
+eur_per_maand = "1064.64"
+
+[[tarief]]
+jaar = 2025
+spanningsniveau = "hoog"
+klantcategorie = ""
+eur_per_maand = "1098.73"
+
+[[tarief]]
+jaar = 2026
+spanningsniveau = "hoog"
+klantcategorie = ""
+eur_per_maand = "1120.66"

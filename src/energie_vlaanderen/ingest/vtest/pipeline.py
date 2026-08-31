@@ -13,7 +13,11 @@ import pandas as pd
 
 from energie_vlaanderen.ingest.vtest.normalizer import NormalizedVTestData, VTestDataNormalizer
 from energie_vlaanderen.ingest.vtest.validator import VTestDataValidator, VTestValidationReport
-from energie_vlaanderen.ingest.vtest.workbook import ParsedVTestWorkbook, VTestWorkbookParser
+from energie_vlaanderen.ingest.vtest.workbook import (
+    ParsedVTestWorkbook,
+    VTestWorkbookError,
+    VTestWorkbookParser,
+)
 
 
 class VTestPipelineError(RuntimeError):
@@ -52,7 +56,10 @@ class VTestPipeline:
         version_id: str,
     ) -> VTestPipelineResult:
         # Stap 1 Parser starten
-        parsed = self.workbook_parser.parse(source_path)
+        try:
+            parsed = self.workbook_parser.parse(source_path)
+        except VTestWorkbookError as exc:
+            raise VTestPipelineError(str(exc)) from exc
 
         # Stap 2 Normalizer starten
         normalized = self.normalizer.normalize(

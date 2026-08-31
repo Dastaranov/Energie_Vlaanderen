@@ -8,6 +8,7 @@ import pytest
 from energie_vlaanderen.ingest.vtest.product_normalizer import (
     NormalizedVTestProduct,
     VTestProductNormalizer,
+    parse_comma_price,
     parse_date_range,
     parse_looptijd,
     parse_price,
@@ -152,3 +153,122 @@ class TestVTestProductNormalizer:
         p = result[0]
         assert p.energy == "Gas"
         assert p.looptijd_maanden == 24
+
+
+class TestParseCommaPrice:
+    def test_parses_simple_value(self):
+        assert parse_comma_price("859,63") == Decimal("859.63")
+
+    def test_parses_value_above_thousand_no_separator(self):
+        # data-price gebruikt geen duizendtalscheiding, anders dan parse_price().
+        assert parse_comma_price("1867,03") == Decimal("1867.03")
+
+    def test_empty_returns_none(self):
+        assert parse_comma_price("") is None
+
+
+class TestVTestProductNormalizerResultAttrs:
+    """data-*-attributen en data-productinvoicestring krijgen voorrang op de
+    oude tekst-uit-detailtabel-aanpak."""
+
+    _INVOICE = {
+        "summary": {
+            "totalUsage": 3434.0,
+            "price": {"totalExVAT": 890.63, "total": 944.07, "totalVAT": 53.44},
+        },
+        "groupResults": [
+            {
+                "name": "Energiekost",
+                "componentResults": [
+                    {
+                        "id": "1", "name": "Vaste vergoeding", "calculationType": "Fixed",
+                        "price": {"totalExVAT": 47.17, "total": 50.0, "totalVAT": 2.83, "vatRates": {"0.06": 2.83}},
+                        "flowResults": {},
+                    },
+                    {
+                        "id": "2", "name": "Energiecomponent", "calculationType": "Variable",
+                        "price": {"totalExVAT": 266.02, "total": 281.98, "totalVAT": 15.96, "vatRates": {"0.06": 15.96}},
+                        "flowResults": {
+                            "variabel": {"flowOutput": {"Formula": ["(0,112 * indexatieparameter)", "2"]}},
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+    def test_tariff_type_attr_takes_precedence(self):
+        raw = _make_raw(tarief_type="Vast tarief", tariff_type_attr="VARIABLE")
+        result = VTestProductNormalizer().normalize([raw], _SCRAPED_AT)
+        assert result[0].tariff_type == "Variabel"
+
+    def test_tariff_type_falls_back_to_raw_text_when_attr_missing(self):
+        raw = _make_raw(tarief_type="Vast tarief", tariff_type_attr="")
+        result = VTestProductNormalizer().normalize([raw], _SCRAPED_AT)
+        assert result[0].tariff_type == "Vast tarief"
+
+    def test_energy_prefers_contracttype_over_energietype_text(self):
+        raw = _make_raw(energietype="", contracttype="GAS")
+        result = VTestProductNormalizer().normalize([raw], _SCRAPED_AT)
+        assert result[0].energy == "Gas"
+
+    def test_stars_and_complex_product_and_grayedout(self):
+        raw = _make_raw(stars="5", complex_product="True", grayedout=True)
+        result = VTestProductNormalizer().normalize([raw], _SCRAPED_AT)
+        p = result[0]
+        assert p.stars == 5
+        assert p.complex_product is True
+        assert p.grayedout is True
+
+    def test_missing_stars_is_none(self):
+        raw = _make_raw(stars="")
+        result = VTestProductNormalizer().normalize([raw], _SCRAPED_AT)
+        assert result[0].stars is None
+
+    def test_summary_totals_extracted_from_invoice_raw(self):
+        raw = _make_raw(invoice_raw=self._INVOICE, price_raw="944,07")
+        result = VTestProductNormalizer().normalize([raw], _SCRAPED_AT)
+        p = result[0]
+        assert p.total_excl_btw == Decimal("890.63")
+        assert p.total_incl_btw == Decimal("944.07")
+        assert p.btw_bedrag == Decimal("53.44")
+        assert p.totaal_verbruik_kwh == Decimal("3434.0")
+        assert p.prijs_indicatie_eur == Decimal("944.07")
+
+    def test_summary_totals_none_when_no_invoice(self):
+        raw = _make_raw(invoice_raw=None)
+        result = VTestProductNormalizer().normalize([raw], _SCRAPED_AT)
+        p = result[0]
+        assert p.total_excl_btw is None
+        assert p.totaal_verbruik_kwh is None
+
+
+class TestNormalizeComponents:
+    _INVOICE = TestVTestProductNormalizerResultAttrs._INVOICE
+
+    def test_extracts_one_row_per_component(self):
+        raw = _make_raw(vreg_id="456", invoice_raw=self._INVOICE)
+        components = VTestProductNormalizer().normalize_components([raw])
+        assert len(components) == 2
+        assert {c.component_naam for c in components} == {"Vaste vergoeding", "Energiecomponent"}
+
+    def test_component_amounts_and_vat(self):
+        raw = _make_raw(vreg_id="456", invoice_raw=self._INVOICE)
+        components = VTestProductNormalizer().normalize_components([raw])
+        vaste = next(c for c in components if c.component_naam == "Vaste vergoeding")
+        assert vaste.totaal_excl_btw == Decimal("47.17")
+        assert vaste.totaal_incl_btw == Decimal("50.0")
+        assert vaste.btw_bedrag == Decimal("2.83")
+        assert vaste.btw_percentage == Decimal("0.06")
+        assert vaste.groep_naam == "Energiekost"
+
+    def test_formule_extracted_from_flow_output(self):
+        raw = _make_raw(vreg_id="456", invoice_raw=self._INVOICE)
+        components = VTestProductNormalizer().normalize_components([raw])
+        energiecomponent = next(c for c in components if c.component_naam == "Energiecomponent")
+        assert "indexatieparameter" in energiecomponent.formule
+
+    def test_no_invoice_raw_produces_no_rows(self):
+        raw = _make_raw(vreg_id="789", invoice_raw=None)
+        components = VTestProductNormalizer().normalize_components([raw])
+        assert components == []

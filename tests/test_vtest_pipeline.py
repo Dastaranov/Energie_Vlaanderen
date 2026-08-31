@@ -101,3 +101,75 @@ def test_csv_value_preserves_decimal_precision():
     result = VTestPipeline._csv_value(value)
 
     assert result == "1,9710771"
+
+
+def test_pipeline_parses_var_dyn_sheet_with_english_year_month_headers(
+    tmp_path: Path,
+):
+    """Regressietest voor de stille dataverlies-bug: het echte
+    'Var-dyn (excl. btw) (2026)'-tabblad gebruikt 'Year'/'Month' i.p.v.
+    'Jaar'/'Maand' en moet toch in master_var_dyn.csv terechtkomen."""
+    workbook = tmp_path / "vtest.xlsx"
+
+    variable = pd.DataFrame(
+        [
+            {
+                "Year": 2026,
+                "Month": "jan",
+                "Segment": "Onderneming",
+                "Energietype": "Elektriciteit",
+                "Contracttype": "Afname",
+                "Handelsnaam": "Belvus",
+                "Productnaam": "Flex Online Pro EL",
+                "Variabel/Dynamisch": "Variabel",
+                "Prijsonderdeel": "Enkelvoudige meter dagtarief",
+                "Prijs": "16,18",
+            }
+        ]
+    )
+
+    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
+        variable.to_excel(
+            writer,
+            sheet_name="Var-dyn (excl. btw) (2026)",
+            index=False,
+        )
+
+    result = VTestPipeline().process(
+        source_path=workbook,
+        destination=tmp_path / "staging",
+        version_id="20260820T120000Z-1234abcd",
+    )
+
+    assert result.variable_dynamic_rows == 1
+    assert result.fixed_rows == 0
+
+    report = json.loads(result.report_json.read_text(encoding="utf-8"))
+    assert report["variable_dynamic_rows"] == 1
+    assert any(
+        sheet["sheet_name"] == "Var-dyn (excl. btw) (2026)"
+        for sheet in report["sheets"]
+    )
+
+
+def test_pipeline_wraps_workbook_error_as_pipeline_error(tmp_path: Path):
+    """Een jaartal-gesuffixt tabblad zonder herkenbare header moet als
+    VTestPipelineError naar buiten komen (niet de ruwe VTestWorkbookError),
+    zodat de CLI dit als verwachte fout (exit code 2) kan afhandelen."""
+    workbook = tmp_path / "vtest.xlsx"
+
+    unrelated = pd.DataFrame({"Foo": ["a"], "Bar": ["b"]})
+
+    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
+        unrelated.to_excel(
+            writer,
+            sheet_name="Var-dyn (excl. btw) (2099)",
+            index=False,
+        )
+
+    with pytest.raises(VTestPipelineError, match="jaargebonden"):
+        VTestPipeline().process(
+            source_path=workbook,
+            destination=tmp_path / "staging",
+            version_id="20260820T120000Z-1234abcd",
+        )

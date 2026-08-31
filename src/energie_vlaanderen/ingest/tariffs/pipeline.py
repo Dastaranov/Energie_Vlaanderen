@@ -25,9 +25,15 @@ class TariffPipelineResult:
     afname_csv: Path
     injectie_csv: Path
     report_json: Path
+    hoogspanning_csv: Path | None = None
 
 
 class TariffPipeline:
+    # Klanttypes die naar de aparte hoogspanning/middenspanning-CSV gaan
+    # i.p.v. naar de gewone afname/injectie-CSV's (enkel elektriciteit; gas
+    # kent geen HS/MS-equivalent).
+    HS_MS_KLANTTYPES = frozenset({"ELEK_HS1", "ELEK_HS2", "ELEK_MS1", "ELEK_MS2", "ELEK_LS_DC"})
+
     def __init__(self) -> None:
         self.workbook_parser = TariffWorkbookParser()
         self.normalizer = TariffDataNormalizer()
@@ -53,8 +59,20 @@ class TariffPipeline:
         injectie_csv = target / f"tariffs_{energy_type}_injectie.csv"
         report_json = target / f"tariffs_{energy_type}_report.json"
 
+        hoogspanning_csv: Path | None = None
+        afname_out, injectie_out = normalized.afname, normalized.injectie
+        hoogspanning_out = pd.DataFrame()
+
+        if energy_type == "electricity":
+            hoogspanning_csv = target / "tariffs_electricity_hoogspanning.csv"
+            hoogspanning_out, afname_out, injectie_out = self._split_hoogspanning(
+                normalized.afname, normalized.injectie
+            )
+
+        outputs = [afname_csv, injectie_csv] + ([hoogspanning_csv] if hoogspanning_csv else [])
+
         if not overwrite:
-            existing = [f for f in [afname_csv, injectie_csv] if f.exists()]
+            existing = [f for f in outputs if f.exists()]
             if existing:
                 raise TariffPipelineError(
                     f"Tarieven voor {energy_type} bestaan al in {target}. "
@@ -64,20 +82,24 @@ class TariffPipeline:
         target.mkdir(parents=True, exist_ok=True)
 
         try:
-            self._write_frame(normalized.afname, afname_csv)
-            self._write_frame(normalized.injectie, injectie_csv)
+            self._write_frame(afname_out, afname_csv)
+            self._write_frame(injectie_out, injectie_csv)
+            if hoogspanning_csv is not None:
+                self._write_frame(hoogspanning_out, hoogspanning_csv)
 
             report = {
                 "version_id": version_id,
                 "energy_type": energy_type,
                 "processed_at": datetime.now(timezone.utc).isoformat(),
-                "afname_rows": len(normalized.afname),
-                "injectie_rows": len(normalized.injectie),
+                "afname_rows": len(afname_out),
+                "injectie_rows": len(injectie_out),
             }
+            if hoogspanning_csv is not None:
+                report["hoogspanning_rows"] = len(hoogspanning_out)
             report_json.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
         except Exception:
-            for f in [afname_csv, injectie_csv, report_json]:
+            for f in outputs + [report_json]:
                 if f.exists():
                     f.unlink(missing_ok=True)
             raise
@@ -89,7 +111,37 @@ class TariffPipeline:
             afname_csv=afname_csv,
             injectie_csv=injectie_csv,
             report_json=report_json,
+            hoogspanning_csv=hoogspanning_csv,
         )
+
+    @classmethod
+    def _split_hoogspanning(
+        cls, afname: pd.DataFrame, injectie: pd.DataFrame
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Splits afname/injectie in een hoogspanning/middenspanning-deel
+        (ELEK_HS1/HS2/MS1/MS2/LS_DC) en een laagspanning-deel (de rest)."""
+
+        def _mask(frame: pd.DataFrame) -> pd.Series:
+            return frame["Klanttype"].isin(cls.HS_MS_KLANTTYPES)
+
+        if afname.empty:
+            afname_hs, afname_ls = pd.DataFrame(), afname
+        else:
+            mask = _mask(afname)
+            afname_hs, afname_ls = afname[mask], afname[~mask].reset_index(drop=True)
+
+        if injectie.empty:
+            injectie_hs, injectie_ls = pd.DataFrame(), injectie
+        else:
+            mask = _mask(injectie)
+            injectie_hs, injectie_ls = injectie[mask], injectie[~mask].reset_index(drop=True)
+
+        if afname_hs.empty and injectie_hs.empty:
+            hoogspanning = pd.DataFrame()
+        else:
+            hoogspanning = pd.concat([afname_hs, injectie_hs], ignore_index=True)
+
+        return hoogspanning, afname_ls, injectie_ls
 
     @staticmethod
     def _write_frame(frame: pd.DataFrame, path: Path) -> None:

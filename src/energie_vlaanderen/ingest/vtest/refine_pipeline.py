@@ -10,6 +10,7 @@ import pandas as pd
 
 from energie_vlaanderen.ingest.vtest.html_downloader import VTestHtmlDownloader
 from energie_vlaanderen.ingest.vtest.product_normalizer import (
+    NormalizedVTestComponent,
     NormalizedVTestProduct,
     VTestProductNormalizer,
 )
@@ -18,7 +19,7 @@ from energie_vlaanderen.utility.constants import LOCAL_TZ
 
 LOG = logging.getLogger(__name__)
 
-_CSV_COLUMNS = [
+_PRODUCT_CSV_COLUMNS = [
     "vreg_id", "supplier_raw", "product_raw", "energy", "tariff_type",
     "looptijd_tekst", "looptijd_maanden",
     "datum_intekenen_van", "datum_intekenen_tot",
@@ -28,28 +29,51 @@ _CSV_COLUMNS = [
     "prijszekerheid_termijn",
     "prijs_indicatie_eur",
     "link_tariefkaart", "link_voorwaarden", "link_supplier",
+    "contracttype", "supplier_id", "product_id", "green_type", "stars",
+    "complex_product", "grayedout", "discount_eur",
+    "total_excl_btw", "total_incl_btw", "btw_bedrag", "totaal_verbruik_kwh",
+    "segment", "postcode",
     "scraped_at",
 ]
+
+_COMPONENT_CSV_COLUMNS = [
+    "vreg_id", "groep_naam", "component_id", "component_naam",
+    "calculation_type", "totaal_excl_btw", "totaal_incl_btw", "btw_bedrag",
+    "btw_percentage", "formule", "segment", "postcode",
+]
+
+
+def _combo_stem(segment: str, energy: str, postcode: str) -> str:
+    return f"{segment}_{energy}_{postcode}"
 
 
 @dataclass(frozen=True)
 class VTestRefinePipelineResult:
     version_id: str
     directory: Path
+    segment: str
+    energy: str
+    postcode: str
     products_csv: Path
+    components_csv: Path
     dump_html: Path
     products_found: int
     scraped_at: datetime
 
 
 class VTestRefinePipeline:
-    """Scrapes vtest.be en verrijkt de staging-data met contractmetadata."""
+    """Scrapes vtest.be voor één (segment, energie, postcode)-combinatie en
+    verrijkt de staging-data met contractmetadata + volledige kostenopbouw."""
 
     def process(
         self,
         staging_dir: Path,
         version_id: str,
         postcode: str = "9000",
+        segment: str = "woning",
+        energy: str = "elektriciteit",
+        kwh_elektriciteit: int = 15000,
+        kwh_gas: int = 10000,
         headless: bool = True,
         browser: str = "chrome",
         timeout: int = 60,
@@ -58,8 +82,9 @@ class VTestRefinePipeline:
         vtest_dir = staging_dir / "vtest"
         vtest_dir.mkdir(parents=True, exist_ok=True)
 
-        dump_html = vtest_dir / "vtest_dump.html"
-        dump_meta = vtest_dir / "vtest_dump_meta.json"
+        stem = _combo_stem(segment, energy, postcode)
+        dump_html = vtest_dir / f"vtest_dump_{stem}.html"
+        dump_meta = vtest_dir / f"vtest_dump_meta_{stem}.json"
 
         if skip_download:
             if not dump_html.is_file():
@@ -75,9 +100,16 @@ class VTestRefinePipeline:
             html = dump_html.read_text(encoding="utf-8")
         else:
             scraped_at = datetime.now(tz=LOCAL_TZ)
-            LOG.info("Start HTML-download van vtest.be ...")
+            LOG.info(
+                "Start HTML-download van vtest.be (segment=%s, energie=%s, postcode=%s) ...",
+                segment, energy, postcode,
+            )
             html = VTestHtmlDownloader().download(
                 postcode=postcode,
+                segment=segment,
+                kwh_elektriciteit=kwh_elektriciteit,
+                kwh_gas=kwh_gas,
+                energy=energy,
                 headless=headless,
                 browser=browser,
                 timeout=timeout,
@@ -86,6 +118,8 @@ class VTestRefinePipeline:
             dump_meta.write_text(
                 json.dumps({
                     "postcode": postcode,
+                    "segment": segment,
+                    "energy": energy,
                     "scraped_at": scraped_at.isoformat(),
                     "browser": browser,
                     "headless": headless,
@@ -98,13 +132,19 @@ class VTestRefinePipeline:
         raw_products = VTestProductParser().parse(html)
         LOG.info("%d producten gevonden.", len(raw_products))
 
-        normalized = VTestProductNormalizer().normalize(raw_products, scraped_at)
+        normalizer = VTestProductNormalizer()
+        normalized = normalizer.normalize(raw_products, scraped_at)
+        components = normalizer.normalize_components(raw_products)
 
-        products_csv = vtest_dir / "vtest_products.csv"
-        self._write_csv(normalized, products_csv)
-        LOG.info("CSV geschreven: %s (%d rijen)", products_csv, len(normalized))
+        products_csv = vtest_dir / f"vtest_products_{stem}.csv"
+        components_csv = vtest_dir / f"vtest_product_components_{stem}.csv"
+        self._write_products_csv(normalized, segment, postcode, products_csv)
+        self._write_components_csv(components, segment, postcode, components_csv)
+        LOG.info(
+            "CSV's geschreven: %s (%d rijen), %s (%d rijen)",
+            products_csv, len(normalized), components_csv, len(components),
+        )
 
-        # Voeg products_found toe aan meta zodat de DB-import het kan lezen
         if dump_meta.is_file():
             try:
                 meta = json.loads(dump_meta.read_text(encoding="utf-8"))
@@ -119,14 +159,20 @@ class VTestRefinePipeline:
         return VTestRefinePipelineResult(
             version_id=version_id,
             directory=vtest_dir,
+            segment=segment,
+            energy=energy,
+            postcode=postcode,
             products_csv=products_csv,
+            components_csv=components_csv,
             dump_html=dump_html,
             products_found=len(normalized),
             scraped_at=scraped_at,
         )
 
     @staticmethod
-    def _write_csv(products: list[NormalizedVTestProduct], path: Path) -> None:
+    def _write_products_csv(
+        products: list[NormalizedVTestProduct], segment: str, postcode: str, path: Path,
+    ) -> None:
         rows = []
         for p in products:
             rows.append({
@@ -151,7 +197,44 @@ class VTestRefinePipeline:
                 "link_tariefkaart": p.link_tariefkaart,
                 "link_voorwaarden": p.link_voorwaarden,
                 "link_supplier": p.link_supplier,
+                "contracttype": p.contracttype,
+                "supplier_id": p.supplier_id,
+                "product_id": p.product_id,
+                "green_type": p.green_type,
+                "stars": "" if p.stars is None else p.stars,
+                "complex_product": p.complex_product,
+                "grayedout": p.grayedout,
+                "discount_eur": "" if p.discount_eur is None else str(p.discount_eur),
+                "total_excl_btw": "" if p.total_excl_btw is None else str(p.total_excl_btw),
+                "total_incl_btw": "" if p.total_incl_btw is None else str(p.total_incl_btw),
+                "btw_bedrag": "" if p.btw_bedrag is None else str(p.btw_bedrag),
+                "totaal_verbruik_kwh": "" if p.totaal_verbruik_kwh is None else str(p.totaal_verbruik_kwh),
+                "segment": segment,
+                "postcode": postcode,
                 "scraped_at": p.scraped_at.isoformat(),
             })
-        df = pd.DataFrame(rows, columns=_CSV_COLUMNS)
+        df = pd.DataFrame(rows, columns=_PRODUCT_CSV_COLUMNS)
+        df.to_csv(path, sep=";", index=False, encoding="utf-8-sig")
+
+    @staticmethod
+    def _write_components_csv(
+        components: list[NormalizedVTestComponent], segment: str, postcode: str, path: Path,
+    ) -> None:
+        rows = []
+        for c in components:
+            rows.append({
+                "vreg_id": c.vreg_id,
+                "groep_naam": c.groep_naam,
+                "component_id": c.component_id,
+                "component_naam": c.component_naam,
+                "calculation_type": c.calculation_type,
+                "totaal_excl_btw": "" if c.totaal_excl_btw is None else str(c.totaal_excl_btw),
+                "totaal_incl_btw": "" if c.totaal_incl_btw is None else str(c.totaal_incl_btw),
+                "btw_bedrag": "" if c.btw_bedrag is None else str(c.btw_bedrag),
+                "btw_percentage": "" if c.btw_percentage is None else str(c.btw_percentage),
+                "formule": c.formule,
+                "segment": segment,
+                "postcode": postcode,
+            })
+        df = pd.DataFrame(rows, columns=_COMPONENT_CSV_COLUMNS)
         df.to_csv(path, sep=";", index=False, encoding="utf-8-sig")

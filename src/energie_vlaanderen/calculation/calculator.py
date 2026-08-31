@@ -5,11 +5,12 @@ import pandas as pd
 from energie_vlaanderen.utility.constants import D
 from energie_vlaanderen.domain.models import Cost, Product, Profile
 from energie_vlaanderen.data.repository import DataRepository
+from energie_vlaanderen.heffingen.repository import HeffingenRepository
 from typing import Any, Literal
 
 class Calculator:
-    def __init__(self, repo: DataRepository, vat=D("0.06"), levies_eur_kwh=D("0"), energy_fund_eur_year=D("0")):
-        self.repo=repo; self.vat=vat; self.levies_rate=levies_eur_kwh; self.energy_fund=energy_fund_eur_year
+    def __init__(self, repo: DataRepository, vat=D("0.06"), heffingen: Optional[HeffingenRepository] = None):
+        self.repo=repo; self.vat=vat; self.heffingen=heffingen
 
     def grid_cost(self,p:Profile)->Decimal:
         _,code=self.repo.dnb_for(p.postcode,p.gemeente)
@@ -90,9 +91,35 @@ class Calculator:
             return energy+fixed+extras,warnings
         raise ValueError(f"Onbekend tarieftype: {product.kind}")
 
+    def _levies(self,p:Profile,jaar:int)->Decimal:
+        # Manifest §12: "Ontbrekend verplicht tarief: berekening stoppen" —
+        # geen stille 0 meer zoals in de oude, altijd-op-nul-staande
+        # levies_eur_kwh/energy_fund_eur_year-constructorparameters.
+        if self.heffingen is None:
+            raise ValueError(
+                "Calculator.calculate() vereist een HeffingenRepository "
+                "(zie energie_vlaanderen.heffingen.HeffingenRepository.load) "
+                "— heffingen worden niet stilzwijgend op 0 gezet."
+            )
+        # Enkel laagspanning is vandaag aan de Calculator gekoppeld (Fase 2-
+        # scope); MS/HS-heffingendata bestaat wel al in config/heffingen/.
+        if p.segment=="Woning":
+            accijns_categorie,fonds_categorie="niet_zakelijk","residentieel"
+        else:
+            accijns_categorie,fonds_categorie="zakelijk_laagspanning","niet_residentieel"
+        bijzondere_accijns,energiebijdrage=self.heffingen.bereken_accijns_en_energiebijdrage(
+            "elektriciteit",accijns_categorie,p.afname_kwh)
+        energiefonds=self.heffingen.energiefonds_per_jaar("laag",fonds_categorie,jaar)
+        return bijzondere_accijns+energiebijdrage+energiefonds
+
     def calculate(self,product:Product,p:Profile,market=None,intervals=None,inject_product:Optional[Product]=None)->Cost:
+        if product.energy.lower() not in ("elektriciteit","electricity"):
+            raise ValueError(
+                f"Heffingen voor energievorm '{product.energy}' zijn nog niet "
+                "beschikbaar (enkel elektriciteit is gedekt in config/heffingen/)."
+            )
         supplier,warnings=self.supplier_cost(product,p,market,intervals)
-        grid=self.grid_cost(p); levies=self.levies_rate*p.afname_kwh+self.energy_fund
+        grid=self.grid_cost(p); levies=self._levies(p,product.year)
         credit=D("0")
         if p.injectie_kwh>0:
             if inject_product is None: warnings.append("Injectie niet verrekend: geen terugleveringsproduct gekoppeld.")
