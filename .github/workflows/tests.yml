@@ -22,8 +22,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      # Mét de db-extra. De databanktests draaien op SQLite in het geheugen en
+      # hebben geen server nodig, maar ze importeren wel SQLAlchemy. Zonder de
+      # extra liepen ze stuk bij het inlezen — en het zijn net de tests die de
+      # weggegooide prijsrijen en de SCD2-sleutel bewaken.
       - name: Installeer package
-        run: pip install -e ".[test]"
+        run: pip install -e ".[test,db]"
 
       # De integratietests vereisen een lokale dataset onder data/, en die
       # staat niet in git. Ze worden hier dus expliciet overgeslagen in
