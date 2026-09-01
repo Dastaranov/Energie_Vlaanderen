@@ -52,6 +52,8 @@ class VTestHtmlDownloader:
         browser: str = "chrome",
         timeout: int = 60,
         force_eigen_verbruik: bool = False,
+        contractdetails: dict[str, dict[str, str]] | None = None,
+        reeds_gekend: set[str] | None = None,
     ) -> str:
         """Navigeer naar vtest.be, vul het formulier in en retourneer de volledige HTML.
 
@@ -66,6 +68,15 @@ class VTestHtmlDownloader:
         met Gert: 15.000 kWh elektriciteit / 10.000 kWh gas als vast
         representatief KMO-profiel — de exacte waarde is hier niet kritiek,
         enkel bepalend voor welke prijs vtest.be per contract berekent.
+
+        `contractdetails`: geef een dict mee om de tariefkaart- en
+        voorwaardenlinks te laten verzamelen. Die staan niet op de
+        resultatenpagina — vtest.be laadt ze pas bij een klik op "Meer
+        details" — dus ze zijn niet uit een HTML-dump te halen. De dict wordt
+        gevuld met contract-id -> {tariefkaart, voorwaarden, leverancier}.
+        `reeds_gekend` slaat contracten over die al opgehaald zijn; over een
+        volledige matrix scheelt dat honderden kliks, want dezelfde contracten
+        komen bij elke postcode terug.
 
         `force_eigen_verbruik`: forceer tab2 ("Ik ken mijn verbruik") ook voor
         segment "woning". Nodig voor de kalibratieruns
@@ -322,12 +333,19 @@ class VTestHtmlDownloader:
                     "Controleer of vtest.be bereikbaar is."
                 ) from exc
 
-            # Alle resultaten in beeld scrollen
+            # Alle resultaten in beeld scrollen.
+            #
+            # De lijst laadt lui bij. Met drie ronden geduld van één seconde
+            # stopte het scrollen soms al na de eerste 20 resultaten: bij de
+            # matrixrun van 2026-09-01 leverden zeven van de acht
+            # onderneming/elektriciteit-combinaties er precies 20 op, tegenover
+            # 97 bij de combinatie die los gedraaid was. Het aantal
+            # combinaties dat "geslaagd" heette bleef 32.
             last_count = 0
             stable_rounds = 0
-            for _ in range(50):
+            for _ in range(60):
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(1)
+                time.sleep(1.5)
                 for sel in ("button.load-more", "button.more", "button[aria-label*='meer']"):
                     try:
                         for load_btn in driver.find_elements(By.CSS_SELECTOR, sel):
@@ -343,14 +361,125 @@ class VTestHtmlDownloader:
                     stable_rounds = 0
                 else:
                     stable_rounds += 1
-                    if stable_rounds >= 3:
+                    if stable_rounds >= 5:
                         break
 
             LOG.info("HTML-dump klaar (%d resultaten).", last_count)
+
+            if contractdetails is not None:
+                self._verzamel_contractdetails(
+                    driver, contractdetails, reeds_gekend or set()
+                )
+
             return driver.page_source
 
         finally:
             driver.quit()
+
+    @staticmethod
+    def _verzamel_contractdetails(
+        driver: object,
+        verzameling: dict[str, dict[str, str]],
+        reeds_gekend: set[str],
+    ) -> None:
+        """Open per contract het detailpaneel en lees de links eruit.
+
+        De tariefkaart en de algemene voorwaarden staan niet op de
+        resultatenpagina; die bevat alleen `href="#"` en `javascript:void(0)`.
+        vtest.be haalt het detailpaneel per contract op via een POST naar
+        /VTest/GetContractDetails, en dat endpoint heeft de zoekopdracht in de
+        sessie nodig — losstaand aanroepen geeft een 500. De klik in de
+        lopende sessie is daarmee de enige weg.
+
+        Contracten die al verzameld zijn worden overgeslagen: de details zijn
+        producteigenschappen en verschillen niet per postcode.
+        """
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        knoppen = driver.find_elements(By.CSS_SELECTOR, "button.toContractDetails")
+        te_doen = [
+            k for k in knoppen
+            if (k.get_attribute("data-contractid") or "")
+            and k.get_attribute("data-contractid") not in reeds_gekend
+            and k.get_attribute("data-contractid") not in verzameling
+        ]
+        LOG.info(
+            "Contractdetails: %d van %d contracten nog op te halen.",
+            len(te_doen), len(knoppen),
+        )
+
+        for index, knop in enumerate(te_doen, start=1):
+            contract_id = knop.get_attribute("data-contractid")
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", knop
+                )
+                driver.execute_script("arguments[0].click();", knop)
+                WebDriverWait(driver, 30).until(
+                    lambda d: d.find_element(
+                        By.ID, "contractDetailsModal"
+                    ).text.strip() != ""
+                )
+                modal = driver.find_element(By.ID, "contractDetailsModal")
+                verzameling[contract_id] = VTestHtmlDownloader._links_uit_modal(modal)
+            except Exception as exc:
+                # Eén onbereikbaar detailpaneel mag de hele run niet kosten;
+                # het ontbrekende contract blijft zichtbaar doordat het niet
+                # in de verzameling staat.
+                LOG.warning(
+                    "Contractdetails voor %s niet opgehaald: %s", contract_id, exc
+                )
+            finally:
+                VTestHtmlDownloader._sluit_modal(driver)
+
+            if index % 25 == 0:
+                LOG.info("Contractdetails: %d/%d ...", index, len(te_doen))
+
+    @staticmethod
+    def _links_uit_modal(modal: object) -> dict[str, str]:
+        from selenium.webdriver.common.by import By
+
+        links: dict[str, str] = {}
+        for anker in modal.find_elements(By.TAG_NAME, "a"):
+            href = anker.get_attribute("href") or ""
+            if not href or href.endswith("#") or "javascript" in href:
+                continue
+            tekst = (anker.text or "").strip().lower()
+            if "tariefkaart" in tekst:
+                links.setdefault("tariefkaart", href)
+            elif "voorwaarden" in tekst:
+                links.setdefault("voorwaarden", href)
+            elif "contract afsluiten" in tekst:
+                links.setdefault("afsluiten", href)
+            elif "leverancier" not in links and "/nl/" in href:
+                links.setdefault("leverancier", href)
+        return links
+
+    @staticmethod
+    def _sluit_modal(driver: object) -> None:
+        from selenium.webdriver.common.by import By
+
+        for sel in (
+            "#contractDetailsModal .btn-close",
+            "#contractDetailsModal [data-bs-dismiss='modal']",
+        ):
+            try:
+                for knop in driver.find_elements(By.CSS_SELECTOR, sel):
+                    if knop.is_displayed():
+                        driver.execute_script("arguments[0].click();", knop)
+                        return
+            except Exception:
+                pass
+        # Terugval: het paneel leegmaken zodat de volgende wacht op nieuwe inhoud.
+        try:
+            driver.execute_script(
+                "var m=document.getElementById('contractDetailsModal');"
+                "if(m){m.innerHTML='';}"
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _setup_driver(browser: str, headless: bool) -> object:

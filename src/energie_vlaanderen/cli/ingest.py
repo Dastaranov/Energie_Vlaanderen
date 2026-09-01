@@ -461,6 +461,7 @@ def run_refine_vtest(args: argparse.Namespace, settings: Settings) -> int:
             browser=args.browser,
             skip_download=args.no_download,
             timeout=args.timeout,
+            contractdetails={} if args.met_contractdetails else None,
         )
     except VTestDownloadError as exc:
         return fail("Download mislukt: %s", exc)
@@ -588,6 +589,7 @@ def _run_refine_matrix(args: argparse.Namespace, settings: Settings, staging_dir
         headless=not args.show,
         browser=args.browser,
         timeout=args.timeout,
+        met_contractdetails=args.met_contractdetails,
     )
 
     vtest_dir = staging_dir / "vtest"

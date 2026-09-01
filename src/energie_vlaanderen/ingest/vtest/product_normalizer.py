@@ -153,7 +153,10 @@ class VTestProductNormalizer:
             prijs_indicatie_eur=parse_comma_price(product.price_raw) or parse_price(product.prijs_indicatie),
             link_tariefkaart=product.links.get("tariefkaart", ""),
             link_voorwaarden=product.links.get("voorwaarden", ""),
-            link_supplier=product.links.get("link", ""),
+            # "leverancier" komt uit het detailpaneel, "link" uit de
+            # resultatenpagina; die laatste is er in de praktijk nooit.
+            link_supplier=product.links.get("leverancier")
+            or product.links.get("link", ""),
             scraped_at=scraped_at,
             contracttype=product.contracttype,
             supplier_id=product.supplier_id,

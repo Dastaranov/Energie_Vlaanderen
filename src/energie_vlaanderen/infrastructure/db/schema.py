@@ -93,6 +93,11 @@ energie_product = sa.Table(
     sa.Column("tariefkaart_url", sa.Text, nullable=True),
     sa.Column("bijzondere_voorwaarden_url", sa.Text, nullable=True),
     sa.Column("groene_stroom", sa.Boolean, nullable=True),
+    # vtest.be onderscheidt GREEN van GREENLOCAL (lokaal opgewekt). Dat
+    # verschil telt voor een vergelijker; een boolean alleen zou het
+    # gelijkschakelen. Komt uit de live scrape, dus enkel gevuld voor
+    # producten die via vreg_id gekoppeld zijn.
+    sa.Column("groene_stroom_type", sa.Text, nullable=True),
     sa.Column("aangemaakt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
     sa.UniqueConstraint("leverancier_id", "product_naam", "energie_type", "segment", name="uq_energie_product_identiteit"),
 )

@@ -162,6 +162,13 @@ def import_version_into_db(
             )
         )
 
+        LOG.info("Aanvullen van producteigenschappen uit de scrape ...")
+        results.append(
+            imp.import_energie_product_kenmerken(
+                conn, vtest_dir / "vtest_products.csv"
+            )
+        )
+
         LOG.info("Importeren van vtest-scrape-metadata en contract-prijzen ...")
         meta_json = vtest_dir / "vtest_dump_meta.json"
         vtest_csv = vtest_dir / "vtest_products.csv"

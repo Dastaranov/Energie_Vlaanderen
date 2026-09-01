@@ -666,6 +666,60 @@ def link_energie_product_vreg_ids(
     return ImportResult(domain="energie_product_vreg", rows_inserted=linked_count)
 
 
+# Classificatie van vtest.be. GREENLOCAL is lokaal opgewekte groene stroom;
+# dat onderscheid met GREEN telt voor een vergelijker en wordt daarom naast de
+# boolean bewaard. Aardgas krijgt altijd NONE.
+GROENE_STROOM_TYPES = {"GREEN", "GREENLOCAL"}
+
+
+def import_energie_product_kenmerken(
+    conn: sa.Connection, vtest_csv: Path
+) -> ImportResult:
+    """Vul de producteigenschappen die alleen de live scrape kent.
+
+    De bulk-export levert de prijzen maar niet of een product groene stroom
+    is; dat staat als `data-greentype` op de resultatenpagina van vtest.be.
+    Die kolom bleef daardoor leeg, terwijl de gegevens wel gescrapet waren.
+
+    Koppelt via vreg_id, dus enkel producten die `link_energie_product_vreg_ids`
+    heeft kunnen matchen krijgen deze velden. Producten die alleen in de
+    bulk-export voorkomen — bijvoorbeeld omdat ze niet meer aangeboden worden —
+    houden NULL, wat het verschil zichtbaar houdt met "niet groen".
+    """
+    if not vtest_csv.is_file():
+        LOG.warning("Bestand niet gevonden, overgeslagen: %s", vtest_csv)
+        return ImportResult(domain="energie_product_kenmerken", rows_inserted=0)
+
+    df = pd.read_csv(vtest_csv, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
+
+    # Eén rij per product: hetzelfde contract komt per postcode terug, maar de
+    # producteigenschappen verschillen daar niet.
+    per_vreg: dict[str, str] = {}
+    for rij in df.to_dict("records"):
+        vreg_id = _str(rij.get("vreg_id"))
+        soort = (_str(rij.get("green_type")) or "").upper()
+        if vreg_id and soort:
+            per_vreg.setdefault(vreg_id, soort)
+
+    bijgewerkt = 0
+    for vreg_id, soort in per_vreg.items():
+        resultaat = conn.execute(
+            sa.update(energie_product)
+            .where(energie_product.c.vreg_id == vreg_id)
+            .values(
+                groene_stroom=soort in GROENE_STROOM_TYPES,
+                groene_stroom_type=soort,
+            )
+        )
+        bijgewerkt += resultaat.rowcount or 0
+
+    LOG.info(
+        "energie_product_kenmerken: %d producten bijgewerkt (%d unieke vreg_ids)",
+        bijgewerkt, len(per_vreg),
+    )
+    return ImportResult(domain="energie_product_kenmerken", rows_inserted=bijgewerkt)
+
+
 # ---------------------------------------------------------------------------
 # vtest_scrape_run
 # ---------------------------------------------------------------------------

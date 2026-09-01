@@ -146,6 +146,16 @@ def _add_staging_group(subparsers: argparse._SubParsersAction) -> None:
         help="Open browser zichtbaar (niet headless).",
     )
     refine_parser.add_argument(
+        "--met-contractdetails",
+        action="store_true",
+        help=(
+            "Haal per contract ook de tariefkaart- en voorwaardenlinks op. "
+            "Die staan niet op de resultatenpagina maar in het detailpaneel, "
+            "dat pas bij een klik geladen wordt — het kost dus een extra klik "
+            "per uniek contract (~305 over de hele matrix)."
+        ),
+    )
+    refine_parser.add_argument(
         "--timeout",
         type=int,
         default=60,

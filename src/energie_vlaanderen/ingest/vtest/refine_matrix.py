@@ -47,6 +47,7 @@ class VTestRefineMatrixResult:
     products_csv: Path
     components_csv: Path
     totaal_producten: int
+    verdachte_combinaties: tuple[str, ...] = ()
 
 
 def representatieve_postcodes(dnb_csv_path: Path) -> dict[str, str]:
@@ -81,6 +82,7 @@ class VTestRefineMatrix:
         browser: str = "chrome",
         timeout: int = 60,
         pause_seconds: float = DEFAULT_PAUZE_SECONDEN,
+        met_contractdetails: bool = False,
     ) -> VTestRefineMatrixResult:
         postcodes = postcodes or representatieve_postcodes(dnb_csv_path)
 
@@ -96,6 +98,14 @@ class VTestRefineMatrix:
         geslaagd: list[VTestRefinePipelineResult] = []
         fouten: list[VTestMatrixFout] = []
         overgeslagen = 0
+
+        # Eén verzameling over de hele matrix heen: de tariefkaart- en
+        # voorwaardenlinks zijn producteigenschappen en verschillen niet per
+        # postcode. Dezelfde contracten komen bij elke postcode terug, dus
+        # delen scheelt honderden kliks.
+        contractdetails: dict[str, dict[str, str]] | None = (
+            {} if met_contractdetails else None
+        )
 
         for i, (segment, energy, dnb_code, postcode) in enumerate(combinaties):
             stem = f"{segment}_{energy}_{postcode}"
@@ -153,6 +163,7 @@ class VTestRefineMatrix:
                     headless=headless,
                     browser=browser,
                     timeout=timeout,
+                    contractdetails=contractdetails,
                 )
                 geslaagd.append(result)
             except Exception as exc:  # noqa: BLE001 — één mislukte combinatie mag de rest niet blokkeren
@@ -164,6 +175,10 @@ class VTestRefineMatrix:
 
             if i < len(combinaties) - 1:
                 time.sleep(pause_seconds)
+
+        verdacht = self._verdachte_combinaties(geslaagd)
+        for melding in verdacht:
+            LOG.warning("Mogelijk onvolledig: %s", melding)
 
         vtest_dir = staging_dir / "vtest"
         products_csv, components_csv, totaal = self._merge(vtest_dir, geslaagd)
@@ -177,7 +192,55 @@ class VTestRefineMatrix:
             products_csv=products_csv,
             components_csv=components_csv,
             totaal_producten=totaal,
+            verdachte_combinaties=tuple(verdacht),
         )
+
+    @staticmethod
+    def _verdachte_combinaties(
+        resultaten: list[VTestRefinePipelineResult],
+    ) -> list[str]:
+        """Meld combinaties die veel minder producten opleverden dan hun buren.
+
+        vtest.be laadt de resultatenlijst lui bij. Stopt het scrollen te vroeg,
+        dan levert de combinatie een afgekapte lijst op — zonder dat er iets
+        misgaat: de run "slaagt" en de matrix meldt 32/32. Bij de run van
+        2026-09-01 gaven zeven van de acht onderneming/elektriciteit-postcodes
+        precies 20 producten tegenover 97 bij de achtste.
+
+        Het aanbod verschilt nauwelijks per netbeheerder — gemeten over de
+        volledige matrix waren 120 van de 123 woningcontracten in alle acht
+        postcodes aanwezig — dus een combinatie die er veel minder oplevert dan
+        de mediaan van haar groep is verdacht, niet regionaal.
+        """
+        per_groep: dict[tuple[str, str], list[VTestRefinePipelineResult]] = {}
+        for resultaat in resultaten:
+            per_groep.setdefault((resultaat.segment, resultaat.energy), []).append(
+                resultaat
+            )
+
+        meldingen: list[str] = []
+        for (segment, energy), groep in sorted(per_groep.items()):
+            if len(groep) < 3:
+                continue
+            # Afzetten tegen het hoogste aantal, niet tegen de mediaan. Bij de
+            # run van 2026-09-01 waren zeven van de acht combinaties afgekapt;
+            # de mediaan volgde dan de fout en verklaarde de énige volledige
+            # run tot uitschieter. Omdat het aanbod nauwelijks per netbeheerder
+            # verschilt, is het hoogste aantal de beste schatting van wat er
+            # werkelijk te halen viel.
+            hoogste = max(r.products_found for r in groep)
+            if hoogste == 0:
+                continue
+            for resultaat in groep:
+                if resultaat.products_found < hoogste * 0.75:
+                    meldingen.append(
+                        f"{segment}/{energy}/{resultaat.postcode}: "
+                        f"{resultaat.products_found} producten tegenover "
+                        f"{hoogste} bij de best geladen postcode in deze groep "
+                        "— de resultatenlijst is vermoedelijk niet volledig "
+                        "ingeladen."
+                    )
+        return meldingen
 
     @staticmethod
     def _merge(
