@@ -521,4 +521,4 @@ openems.io
 Seite 2 – the 100 % Energy Revolution needs a free and open source Energy Management System - OpenEMS
 
 ---
-terug naar [[MOC]]
+terug naar [MOC](../MOC.md)
