@@ -49,15 +49,22 @@ veiliger.
 
 In volgorde van opbrengst:
 
-**a. Batch de SCD2-upserts.** Nu drie queries per tariefsnapshot: een SELECT
-op de open rij, een UPDATE om ze af te sluiten, een INSERT. Voor 25.937
-snapshots is dat ruim 75.000 queries. Alternatief: alle open rijen voor de
-betrokken producten in één query ophalen, in Python beslissen wat afgesloten
-en wat ingevoegd moet worden, en dan één `executemany` per bewerking. Dat
-brengt drie queries per snapshot terug tot een handvol per batch.
+**a. Batch de SCD2-upserts.** — *uitgevoerd op 2026-09-01.* Van 8,8 naar 0,5
+queries per productgroep: 5.252 in plaats van ruim 90.000, en 64 seconden in
+plaats van ongeveer 900. De uitkomst is identiek (16.642 rijen, 1.578 open).
+De transactiegrens blijft ongemoeid, dus een mislukte import laat de databank
+nog steeds staan zoals ze stond.
 
-Verwachte winst: het grootste deel van de 44% databanktijd, plus de
-bijbehorende Python-overhead per query.
+Wat het was: twee tot vier queries per tariefsnapshot — een SELECT op de
+bestaande periode, een SELECT op de open rij, een UPDATE om die af te sluiten,
+een INSERT. Wat het is: alle bestaande rijen voor de betrokken producten in
+één query, de beslissing in Python (welke periodes bestaan al, welke komen
+erbij, waar loopt de ene over in de andere), en het verschil in twee
+bulkbewerkingen.
+
+`_scd2_upsert` bestaat nog als schil om `_scd2_bulk_upsert`, zodat er één
+implementatie van de semantiek is en de twee paden niet uiteen kunnen lopen.
+Vijf tests bewaken dat rij-voor-rij en ineens dezelfde historiek opleveren.
 
 **b. Vervang de resterende `iterrows()`.** De grootste zat al in de
 productlus en is weg (`to_dict("records")` in plaats van vijf keer per groep
@@ -65,8 +72,10 @@ itereren, 32 → 24 ms per groep). In `import_gemeente`,
 `import_vtest_contract_en_prijzen` en `import_netbeheerder_tarieven` staan er
 nog.
 
-**c. Pas dan threads.** Met SQLAlchemy kan dat via een connection pool en
-werkers per domein. Maar: de import draait nu in één transactie, wat precies
+**c. Pas dan threads.** — na (a) vervallen: de import duurt nu ruim een
+minuut in plaats van een kwartier, en dat is de moeite van de risico's niet
+waard. Met SQLAlchemy zou het kunnen via een connection pool en werkers per
+domein. Maar: de import draait nu in één transactie, wat precies
 de eigenschap is die maakt dat een mislukte import de databank ongemoeid
 laat. Dat opgeven voor snelheid is een slechte ruil. Parallelliseren binnen
 één transactie kan niet; parallelliseren over meerdere transacties betekent
@@ -109,11 +118,15 @@ wegen dan snelheid:
 
 ## Voorgestelde volgorde
 
-1. Batch de SCD2-upserts (2a) — grootste winst, raakt de transactiegrens niet.
-2. Meet opnieuw. Waarschijnlijk is de import dan snel genoeg en vervalt 2c.
-3. `--parallel` op de matrix-scrape, standaard uit, maximaal 4.
+1. ~~Batch de SCD2-upserts (2a)~~ — gedaan; 14x sneller, 17x minder queries.
+2. ~~Meet opnieuw~~ — gedaan; 2c vervalt.
+3. `--parallel` op de matrix-scrape, standaard uit, maximaal 4. Let op: op
+   2026-09-01 leverde vtest.be na een dag intensief scrapen zelf afgekapte
+   resultaten. Parallelliseren maakt dat erger, niet beter. Gefaseerd draaien —
+   vier combinaties per nacht in plaats van 32 ineens — is hier waarschijnlijk
+   de betere richting dan meer gelijktijdigheid.
 4. Vectoriseer de normalizer; multiprocessing alleen als dat onvoldoende is.
 
-Stap 1 en 3 zijn afgebakend werk. Stap 4 is een herschrijving van de
-normalizer en hoort samen te gaan met de herschrijving van DataRepository en
-Calculator die toch al op de planning staat.
+Stap 4 is een herschrijving van de normalizer en hoort samen te gaan met de
+herschrijving van DataRepository en Calculator die toch al op de planning
+staat.

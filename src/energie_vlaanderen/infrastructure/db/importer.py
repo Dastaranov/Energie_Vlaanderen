@@ -298,6 +298,8 @@ def import_leverancier_en_product(
     total_tarieven = 0
     unmapped_components: set[str] = set()
     onbekende_annotaties: set[str] = set()
+    afname_rijen: list[dict[str, Any]] = []
+    injectie_rijen: list[dict[str, Any]] = []
     product_cache: dict[tuple, int] = {}
 
     # Leveranciers in het geheugen bijhouden: er zijn ruim tienduizend
@@ -486,15 +488,23 @@ def import_leverancier_en_product(
                     if prijs is not None:
                         tarief_row[field] = prijs
 
-                # SCD2-upsert
-                if richting_str == "afname" or richting_str not in ("injectie",):
-                    _scd2_upsert(conn, tarief_afname, tarief_row)
-                    total_tarieven += 1
+                # Verzamelen in plaats van meteen schrijven: de SCD2-beslissing
+                # is rekenwerk, en per rij naar de databank gaan kostte twee
+                # tot vier rondreizen. Zie _scd2_bulk_upsert.
                 if richting_str == "injectie":
-                    _scd2_upsert(conn, tarief_injectie, tarief_row)
-                    total_tarieven += 1
+                    injectie_rijen.append(tarief_row)
+                else:
+                    afname_rijen.append(tarief_row)
+                total_tarieven += 1
 
-        LOG.info("leverancier_en_product [%s]: klaar", csv_path.name)
+        LOG.info("leverancier_en_product [%s]: gelezen", csv_path.name)
+
+    LOG.info(
+        "Tariefhistoriek bijwerken: %d afname- en %d injectierijen ...",
+        len(afname_rijen), len(injectie_rijen),
+    )
+    _scd2_bulk_upsert(conn, tarief_afname, afname_rijen)
+    _scd2_bulk_upsert(conn, tarief_injectie, injectie_rijen)
 
     if unmapped_components:
         LOG.warning("Onbekende component-codes: %s", sorted(unmapped_components))
@@ -518,97 +528,166 @@ def import_leverancier_en_product(
 # SCD2 Upsert helper
 # ---------------------------------------------------------------------------
 
+def _scd2_bulk_upsert(
+    conn: sa.Connection,
+    tariff_table: sa.Table,
+    rijen: list[dict[str, Any]],
+) -> None:
+    """Werk de SCD2-historiek bij voor een hele lading tariefrijen tegelijk.
+
+    De rij-voor-rij variant deed twee tot vier queries per momentopname. Bij
+    25.937 momentopnames is dat ruim 75.000 rondreizen naar de databank, en op
+    een server aan de andere kant van een VPN weegt elke rondreis. De
+    beslissing zelf is puur rekenwerk: welke periodes bestaan er al, welke
+    komen erbij, en waar loopt de ene over in de andere.
+
+    Werkwijze: haal de bestaande rijen voor de betrokken producten in één
+    query op, bepaal per reeks (product, metertype, prijstype) de gewenste
+    eindtoestand uit de vereniging van bestaande en nieuwe periodes, en schrijf
+    het verschil weg met twee bulkbewerkingen.
+
+    De semantiek is dezelfde als voorheen, inclusief de twee regels die eerder
+    zijn ingevoerd: een periode die al bestaat wordt bijgewerkt in plaats van
+    gedupliceerd, en een periode die ouder is dan wat er al staat zonder er te
+    zijn wordt overgeslagen met een waarschuwing in plaats van de historiek
+    achterstevoren te herschrijven.
+    """
+    bruikbaar = [
+        rij for rij in rijen
+        if rij.get("product_id") and rij.get("geldig_van")
+    ]
+    if not bruikbaar:
+        return
+
+    def sleutel(rij: dict[str, Any]) -> tuple:
+        return (
+            rij["product_id"],
+            rij.get("meter_type", "single"),
+            rij.get("prijs_type"),
+        )
+
+    product_ids = {rij["product_id"] for rij in bruikbaar}
+    bestaand: dict[tuple, dict[date, int]] = {}
+    for row in conn.execute(
+        sa.select(
+            tariff_table.c.id,
+            tariff_table.c.product_id,
+            tariff_table.c.meter_type,
+            tariff_table.c.prijs_type,
+            tariff_table.c.geldig_van,
+        ).where(tariff_table.c.product_id.in_(product_ids))
+    ):
+        bestaand.setdefault(
+            (row.product_id, row.meter_type, row.prijs_type), {}
+        )[row.geldig_van] = row.id
+
+    # Laatste rij per (reeks, periode) wint, net als bij de rij-voor-rij
+    # variant waar een latere aanroep de eerdere overschreef.
+    gewenst: dict[tuple, dict[date, dict[str, Any]]] = {}
+    for rij in bruikbaar:
+        gewenst.setdefault(sleutel(rij), {})[rij["geldig_van"]] = rij
+
+    bij_te_werken: list[dict[str, Any]] = []
+    in_te_voegen: list[dict[str, Any]] = []
+    overgeslagen: list[tuple] = []
+
+    for reeks, periodes in gewenst.items():
+        al_aanwezig = bestaand.get(reeks, {})
+        # De einddatum volgt uit de vereniging: een nieuwe maand sluit de
+        # vorige af, ook als die al in de databank stond.
+        alle_periodes = sorted(set(al_aanwezig) | set(periodes))
+        opvolger = {
+            periode: alle_periodes[i + 1] if i + 1 < len(alle_periodes) else None
+            for i, periode in enumerate(alle_periodes)
+        }
+        oudste_bestaande = min(al_aanwezig) if al_aanwezig else None
+
+        for periode, rij in sorted(periodes.items()):
+            volgende = opvolger[periode]
+            geldig_tot = (
+                date.fromordinal(volgende.toordinal() - 1) if volgende else None
+            )
+            bestaande_id = al_aanwezig.get(periode)
+
+            if bestaande_id is not None:
+                bij_te_werken.append(
+                    {
+                        "b_id": bestaande_id,
+                        **{k: v for k, v in rij.items() if k != "geldig_van"},
+                        "geldig_tot": geldig_tot,
+                    }
+                )
+                continue
+
+            if oudste_bestaande is not None and periode < oudste_bestaande:
+                # Ouder dan alles wat er staat: invoegen zou de reeks
+                # achterstevoren herschrijven.
+                overgeslagen.append((reeks, periode, oudste_bestaande))
+                continue
+
+            in_te_voegen.append({**rij, "geldig_tot": geldig_tot})
+
+        # Een bestaande periode die door een nieuwere wordt opgevolgd moet
+        # afgesloten worden, ook als ze zelf niet opnieuw aangeleverd is.
+        for periode, bestaande_id in al_aanwezig.items():
+            if periode in periodes:
+                continue
+            volgende = opvolger[periode]
+            if volgende is None:
+                continue
+            bij_te_werken.append(
+                {
+                    "b_id": bestaande_id,
+                    "geldig_tot": date.fromordinal(volgende.toordinal() - 1),
+                }
+            )
+
+    for reeks, periode, oudste in overgeslagen[:5]:
+        LOG.warning(
+            "Overgeslagen: %s voor product %s/%s begint op %s terwijl de "
+            "oudste bestaande rij op %s begint.",
+            tariff_table.name, reeks[0], reeks[1], periode, oudste,
+        )
+    if len(overgeslagen) > 5:
+        LOG.warning(
+            "... en %d andere terugwerkende rijen voor %s.",
+            len(overgeslagen) - 5, tariff_table.name,
+        )
+
+    # Bulkbewerkingen. De updates worden per kolomsamenstelling gegroepeerd:
+    # executemany vereist dat elke rij dezelfde parameters draagt.
+    per_vorm: dict[tuple, list[dict[str, Any]]] = {}
+    for rij in bij_te_werken:
+        per_vorm.setdefault(tuple(sorted(rij)), []).append(rij)
+
+    for kolommen, groep in per_vorm.items():
+        waarden = {k: sa.bindparam(k) for k in kolommen if k != "b_id"}
+        conn.execute(
+            sa.update(tariff_table)
+            .where(tariff_table.c.id == sa.bindparam("b_id"))
+            .values(**waarden),
+            groep,
+        )
+
+    if in_te_voegen:
+        per_vorm_insert: dict[tuple, list[dict[str, Any]]] = {}
+        for rij in in_te_voegen:
+            per_vorm_insert.setdefault(tuple(sorted(rij)), []).append(rij)
+        for _, groep in per_vorm_insert.items():
+            conn.execute(sa.insert(tariff_table), groep)
+
+
 def _scd2_upsert(
     conn: sa.Connection,
     tariff_table: sa.Table,
     row_data: dict[str, Any],
 ) -> None:
-    """SCD Type 2 upsert voor tarief-tabellen."""
-    product_id = row_data.get("product_id")
-    meter_type = row_data.get("meter_type", "single")
-    prijs_type = row_data.get("prijs_type")
-    geldig_van = row_data.get("geldig_van")
+    """SCD Type 2 upsert voor één tariefrij.
 
-    if not product_id or not geldig_van:
-        return
-
-    sleutel = (
-        (tariff_table.c.product_id == product_id)
-        & (tariff_table.c.meter_type == meter_type)
-        & (tariff_table.c.prijs_type == prijs_type)
-    )
-
-    # Bestaat deze periode al? Dan is dit een herimport van bekende gegevens:
-    # bijwerken en klaar. Zonder deze stap kwam elke herimport van dezelfde
-    # versie als terugwerkend binnen — de historiek loopt tot de laatste
-    # maand, dus alles daarvóór is ouder dan de open rij. Dat leverde 21.459
-    # waarschuwingen op over 580 producten, terwijl er niets aan de hand was.
-    bestaande = conn.execute(
-        sa.select(tariff_table.c.id).where(
-            sleutel & (tariff_table.c.geldig_van == geldig_van)
-        )
-    ).fetchone()
-    if bestaande:
-        conn.execute(
-            sa.update(tariff_table)
-            .where(tariff_table.c.id == bestaande[0])
-            .values(**{k: v for k, v in row_data.items() if k != "geldig_van"})
-        )
-        return
-
-    # Query open rij.
-    #
-    # prijs_type hoort hier mee in: hetzelfde product wordt soms zowel
-    # variabel als dynamisch aangeboden ("Bolt Variabel" is allebei), met een
-    # eigen indexatieformule per type. Zonder dat onderscheid bouwt het ene
-    # type de historiek op tot de laatste maand en wordt het andere vanaf de
-    # eerste maand als terugwerkend afgewezen — 62 van de 765
-    # productidentiteiten raakten dat.
-    open_row = conn.execute(
-        sa.select(tariff_table.c.id, tariff_table.c.geldig_van).where(
-            sleutel & (tariff_table.c.geldig_tot.is_(None))
-        )
-    ).fetchone()
-
-    if open_row:
-        open_id, open_geldig_van = open_row
-
-        # Zelfde periode: dit is dezelfde momentopname, geen nieuwe versie.
-        # Blind afsluiten en opnieuw invoegen maakte van elke herimport een
-        # nieuwe historiekrij met een negatieve geldigheidsduur — de oude rij
-        # kreeg geldig_tot = geldig_van - 1 dag terwijl de nieuwe op dezelfde
-        # dag begon. Op netbeheerder_tarief liep dat vast op de unieke
-        # sleutel; op tarief_afname, dat er geen heeft, groeide de tabel stil
-        # aan met onzinnige rijen.
-        if open_geldig_van == geldig_van:
-            conn.execute(
-                sa.update(tariff_table)
-                .where(tariff_table.c.id == open_id)
-                .values(**{k: v for k, v in row_data.items() if k != "geldig_van"})
-            )
-            return
-
-        # Terugwerkende import: de open rij is jonger dan wat we invoegen.
-        # Die zou afsluiten met een geldig_tot vóór zijn eigen geldig_van.
-        if open_geldig_van > geldig_van:
-            LOG.warning(
-                "Overgeslagen: %s voor product %s/%s begint op %s terwijl de "
-                "open rij al op %s begint.",
-                tariff_table.name, product_id, meter_type, geldig_van, open_geldig_van,
-            )
-            return
-
-        # Sluit oude rij
-        vorige_dag = date.fromordinal(geldig_van.toordinal() - 1)
-        conn.execute(
-            sa.update(tariff_table)
-            .where(tariff_table.c.id == open_id)
-            .values(geldig_tot=vorige_dag)
-        )
-
-    # Insert nieuwe open rij
-    row_to_insert = {**row_data, "geldig_tot": None}
-    conn.execute(sa.insert(tariff_table).values(**row_to_insert))
+    Dunne schil om `_scd2_bulk_upsert`, zodat er één implementatie van de
+    semantiek bestaat en de twee paden niet uiteen kunnen lopen.
+    """
+    _scd2_bulk_upsert(conn, tariff_table, [row_data])
 
 
 # ---------------------------------------------------------------------------

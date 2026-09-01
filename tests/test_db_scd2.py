@@ -250,3 +250,105 @@ def test_herimport_met_gewijzigde_prijs_werkt_de_juiste_periode_bij(conn):
         (date(2026, 1, 1), date(2026, 1, 31), Decimal("0.21")),
         (date(2026, 2, 1), None, Decimal("0.22")),
     ]
+
+
+class TestBulkGelijkAanRijVoorRij:
+    """De bulkweg en de rij-voor-rij weg moeten dezelfde historiek opleveren.
+
+    Er is één implementatie (`_scd2_bulk_upsert`); `_scd2_upsert` is er een
+    schil omheen. Deze tests bewaken dat die schil geen ander gedrag geeft,
+    want een verschil tussen "één rij tegelijk" en "alles ineens" zou pas bij
+    een productie-import zichtbaar worden.
+    """
+
+    def _historiek(self, conn):
+        return [
+            (r.geldig_van, r.geldig_tot, r.energieprijs_kwh, r.prijs_type)
+            for r in conn.execute(
+                sa.select(
+                    tarief_afname.c.geldig_van,
+                    tarief_afname.c.geldig_tot,
+                    tarief_afname.c.energieprijs_kwh,
+                    tarief_afname.c.prijs_type,
+                ).order_by(tarief_afname.c.prijs_type, tarief_afname.c.geldig_van)
+            )
+        ]
+
+    def test_een_reeks_maanden_ineens(self, conn):
+        from energie_vlaanderen.infrastructure.db.importer import _scd2_bulk_upsert
+
+        rijen = [_rij(date(2026, m, 1), f"0.{19 + m}") for m in (1, 2, 3)]
+        _scd2_bulk_upsert(conn, tarief_afname, rijen)
+
+        assert self._historiek(conn) == [
+            (date(2026, 1, 1), date(2026, 1, 31), Decimal("0.20"), "vast"),
+            (date(2026, 2, 1), date(2026, 2, 28), Decimal("0.21"), "vast"),
+            (date(2026, 3, 1), None, Decimal("0.22"), "vast"),
+        ]
+
+    def test_ineens_geeft_hetzelfde_als_een_voor_een(self, conn):
+        from energie_vlaanderen.infrastructure.db.importer import _scd2_bulk_upsert
+
+        rijen = [_rij(date(2026, m, 1), f"0.{19 + m}") for m in (1, 2, 3)]
+        for rij in rijen:
+            _scd2_upsert(conn, tarief_afname, rij)
+        een_voor_een = self._historiek(conn)
+
+        conn.execute(sa.delete(tarief_afname))
+        _scd2_bulk_upsert(conn, tarief_afname, rijen)
+
+        assert self._historiek(conn) == een_voor_een
+
+    def test_ongeordende_invoer_geeft_een_geordende_historiek(self, conn):
+        """De bulkweg krijgt de rijen in de volgorde van de CSV binnen."""
+        from energie_vlaanderen.infrastructure.db.importer import _scd2_bulk_upsert
+
+        rijen = [_rij(date(2026, m, 1), f"0.{19 + m}") for m in (3, 1, 2)]
+        _scd2_bulk_upsert(conn, tarief_afname, rijen)
+
+        periodes = [(v, t) for v, t, _, _ in self._historiek(conn)]
+        assert periodes == [
+            (date(2026, 1, 1), date(2026, 1, 31)),
+            (date(2026, 2, 1), date(2026, 2, 28)),
+            (date(2026, 3, 1), None),
+        ]
+
+    def test_een_nieuwe_maand_sluit_de_bestaande_open_rij(self, conn):
+        """Het geval bij een maandelijkse update in productie."""
+        from energie_vlaanderen.infrastructure.db.importer import _scd2_bulk_upsert
+
+        _scd2_bulk_upsert(
+            conn, tarief_afname, [_rij(date(2026, m, 1), "0.20") for m in (1, 2)]
+        )
+        _scd2_bulk_upsert(conn, tarief_afname, [_rij(date(2026, 3, 1), "0.25")])
+
+        assert [(v, t) for v, t, _, _ in self._historiek(conn)] == [
+            (date(2026, 1, 1), date(2026, 1, 31)),
+            (date(2026, 2, 1), date(2026, 2, 28)),
+            (date(2026, 3, 1), None),
+        ]
+
+    def test_prijstypes_krijgen_elk_hun_eigen_reeks(self, conn):
+        from energie_vlaanderen.infrastructure.db.importer import _scd2_bulk_upsert
+
+        rijen = [
+            {**_rij(date(2026, m, 1), "0.20"), "prijs_type": soort}
+            for soort in ("variabel", "dynamisch")
+            for m in (1, 2)
+        ]
+        _scd2_bulk_upsert(conn, tarief_afname, rijen)
+
+        per_type: dict[str, list] = {}
+        for v, t, _, soort in self._historiek(conn):
+            per_type.setdefault(soort, []).append((v, t))
+
+        assert per_type == {
+            "variabel": [
+                (date(2026, 1, 1), date(2026, 1, 31)),
+                (date(2026, 2, 1), None),
+            ],
+            "dynamisch": [
+                (date(2026, 1, 1), date(2026, 1, 31)),
+                (date(2026, 2, 1), None),
+            ],
+        }
