@@ -355,7 +355,14 @@ gebruiker = sa.Table(
     sa.Column("afname_nacht_kwh", sa.Numeric(10, 2), server_default="0"),
     sa.Column("injectie_dag_kwh", sa.Numeric(10, 2), server_default="0"),
     sa.Column("injectie_nacht_kwh", sa.Numeric(10, 2), server_default="0"),
-    sa.Column("geschatte_maandpiek_kw", sa.Numeric(6, 2), server_default="2.5"),
+    # Numeric(7, 3), niet (6, 2): de vtest-standaardpiek is 4,218 kW en zou op
+    # twee decimalen stil 4,22 worden. Drie decimalen is ook wat een digitale
+    # meter zelf rapporteert.
+    sa.Column("geschatte_maandpiek_kw", sa.Numeric(7, 3), server_default="4.218"),
+    # De wettelijke ondergrens van het capaciteitstarief, apart van de
+    # schatting hierboven. Zolang ze één kolom deelden, rekende elk profiel
+    # zonder eigen meetdata op de bodem.
+    sa.Column("minimum_maandpiek_kw", sa.Numeric(7, 3), server_default="2.5"),
     sa.Column("huidig_leverancier", sa.Text, nullable=True),
     sa.Column("huidig_product", sa.Text, nullable=True),
     sa.Column("contract_startdatum", sa.Date, nullable=True),

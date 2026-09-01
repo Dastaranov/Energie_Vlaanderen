@@ -24,6 +24,15 @@ archief en code-referenties buiten de vault staan apart onderaan.
 - [[roadmap|ROADMAP: Energie_Vlaanderen]] — de strategische fasering (0.2-concept), incl. een
   status-paragraaf over de recente CLI-herstructurering.
 
+## Onderhoud & planning
+
+- [[jaarwissel 2026-2027|Jaarwissel 2026 → 2027]] — wat er in december nagekeken en aangevuld moet
+  worden, en hoe. Bijna alle masterdata heeft een tijdsas; die schuift op 1 januari niet vanzelf mee.
+- [[plan transporttarieven fluxys|Plan: transporttarieven aardgas (Fluxys)]] — uitgevoerd, met de
+  herziene bronkeuze (vtest.be leidend boven de CREG-nota).
+- [[plan parallellisatie|Plan: de core parallelliseren]] — gemeten in plaats van vermoed; de
+  databankimport is intussen gebatcht, de scrape bewust nog niet parallel.
+
 ## Research
 
 - [[Energie API en MPC Servers|Energie-API's en MPC-platformen]] — Fluvius/Elia/ENTSO-E-API's en

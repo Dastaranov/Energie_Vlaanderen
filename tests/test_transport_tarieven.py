@@ -29,22 +29,45 @@ def repo() -> TransportTariefRepository:
 
 
 class TestMasterdata:
-    def test_het_officiele_tarief_van_2026(self, repo):
-        """CREG-nota (Z)3230 van 11/06/2026: 1,56 EUR/MWh excl. btw, uniform
-        voor heel België sinds 01/01/2026.
+    def test_het_woningtarief_volgt_vtest_en_niet_de_creg_nota(self, repo):
+        """1,5565 EUR/MWh — wat vtest.be werkelijk toepast, niet wat CREG publiceert.
 
-        Onafhankelijk bevestigd op vtest.be, segment onderneming: vijf
-        verbruikspunten, alle vijf exact gereproduceerd door 0,00156 EUR/kWh.
+        CREG-nota (Z)3230 van 11/06/2026 legt 1,56 EUR/MWh excl. btw vast,
+        uniform voor heel België sinds 01/01/2026. Maar op woningproducten
+        rekent vtest.be consistent 0,22% lager: 1,5565, over vijf
+        verbruikspunten van 4.000 tot 35.000 kWh (kalibratie 2026-08-31). De
+        oorzaak is onderzocht en niet gevonden.
+
+        Keuze van 2026-09-01: vtest.be is hier de leidende bron, omdat deze
+        toepassing vergelijkt met wat die tool een klant toont. Wijzigt dit
+        cijfer bij een volgende kalibratie, dan is de eerste vraag of vtest.be
+        zijn berekening veranderd heeft — niet of deze assertie mag verschuiven.
         """
-        assert repo.eur_per_kwh("aardgas", "niet_zakelijk", PEILDATUM) == D("0.00156")
+        assert repo.eur_per_kwh("aardgas", "niet_zakelijk", PEILDATUM) == D("0.0015565")
 
-    def test_beide_klantcategorieen_delen_het_tarief(self, repo):
-        """Het tarief is uniform; de scheiding bestaat om dezelfde
-        categorienamen te kunnen gebruiken als config/heffingen/."""
+    def test_onderneming_draagt_wel_het_creg_tarief(self, repo):
+        """Het segment onderneming reproduceert 1,56 exact.
+
+        Vijf verbruikspunten uit de kalibratie van 2026-08-31, alle vijf exact
+        gereproduceerd door 0,00156 EUR/kWh. De afwijking zit dus uitsluitend
+        op woningproducten.
+        """
+        assert repo.eur_per_kwh(
+            "aardgas", "zakelijk_laagspanning", PEILDATUM
+        ) == D("0.00156")
+
+    def test_de_twee_categorieen_verschillen_maar_nauwelijks(self, repo):
+        """Het verschil is 0,22% en hoort dat te blijven.
+
+        Deze test bestaat om een tikfout te vangen: zou één van beide cijfers
+        ooit een decimaal verschuiven, dan lopen ze veel verder uiteen dan de
+        onverklaarde afwijking rechtvaardigt.
+        """
         woning = repo.eur_per_kwh("aardgas", "niet_zakelijk", PEILDATUM)
         onderneming = repo.eur_per_kwh("aardgas", "zakelijk_laagspanning", PEILDATUM)
 
-        assert woning == onderneming
+        assert woning < onderneming
+        assert abs(woning - onderneming) / onderneming < D("0.01")
 
     def test_het_tarief_is_geverifieerd(self, repo):
         assert repo.tarief("aardgas", "niet_zakelijk", PEILDATUM).geverifieerd
@@ -63,14 +86,19 @@ class TestBerekening:
     def test_standaardprofiel_komt_overeen_met_vtest(self, repo):
         """vtest.be rekent voor zijn standaardwoning met 16.262 kWh aardgas.
 
-        Het sociaal tarief daar toont 25,37 EUR vervoerstarief — precies
-        16,262 x 1,56.
+        Op een gewoon woningproduct toont vtest.be daar 25,31 EUR
+        vervoerstarief: 16,262 x 1,5565.
+
+        Het sociaal tarief op diezelfde pagina toont 25,37 EUR — dat rekent met
+        1,56 exact. Sociale tarieven vallen nu onder dezelfde categorie
+        `niet_zakelijk` en krijgen dus 6 cent per jaar te weinig; zodra ze
+        apart doorgerekend worden, hoort daar een eigen categorie bij.
         """
         kost = repo.kost_per_jaar(
             "aardgas", "niet_zakelijk", D("16262"), PEILDATUM
         )
 
-        assert kost.quantize(D("0.01")) == D("25.37")
+        assert kost.quantize(D("0.01")) == D("25.31")
 
     @pytest.mark.parametrize(
         ("kwh", "verwacht"),

@@ -4,6 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+Python 3.11 of nieuwer. De masterdata wordt met `tomllib` ingelezen en dat zit pas
+vanaf 3.11 in de standaardbibliotheek; op 3.10 loopt de import stuk. CI test 3.11
+en 3.12 — de ondergrens en de gebruikte versie.
+
+Installeer altijd mét de `db`-extra, ook als je niet naar de databank schrijft:
+vier testmodules importeren SQLAlchemy en falen anders bij het inlezen. Ze draaien
+op SQLite in het geheugen en hebben geen server nodig.
+
 ```bash
 # Install (editable, with all dependencies)
 pip install -e ".[test,db,scrape]"
@@ -83,6 +91,14 @@ afwijking.
 communicatie noemt bedragen doorgaans inclusief 6%. Een verschil van precies
 factor 1,06 is een eenheidsverwarring, geen afwijking.
 
+**De tijdsas schuift op 1 januari niet vanzelf mee.** De accijnzen en het
+vervoerstarief rekenen ná hun laatste ingangsdatum gewoon door met het laatst
+bekende regime: wijzigt er iets per 01/01 en vult niemand het aan, dan blijft
+de berekening stil het oude tarief gebruiken. Geen fout, alleen een verkeerd
+bedrag. Het energiefonds gedraagt zich anders en faalt wél hard.
+`docs/jaarwissel 2026-2027.md` zet per bestand op een rij wat er in december
+nagekeken moet worden, met bron, commando en eindtoets.
+
 ## Architecture
 
 The package lives in `src/energie_vlaanderen/`. `energievergelijker.py` at the root is the entry point; it delegates to `src/energie_vlaanderen/cli/` (a package, not a single module).
@@ -156,9 +172,19 @@ heffingen/
                  # op de tarieven die op een peildatum gelden; raises HeffingenError instead of
                  # silently defaulting to 0 for missing data
   validation.py  # Structurele controle (gaten/overlappingen/ontbrekende jaren) — `audit heffingen`
+nettarieven/
+  transport.py   # TransportTariefRepository: het vervoerstarief dat de netbeheerder doorrekent
+                 # maar niet vaststelt (Fluxys voor aardgas). Zelfde vorm als heffingen/repository.py:
+                 # tijdsas, geverifieerd-vlag, harde fout in plaats van een stille 0. Elektriciteit
+                 # heeft dit gat niet — het Elia-transport zit al in de ODV-post van het werkboek.
 infrastructure/
   csv.py         # Low-level CSV helpers
   db/            # SQLAlchemy Core schema.py + importer.py; Alembic migrations in db/migrations/versions/
+                 # importer.py schrijft de SCD2-historiek gebatcht: de beslissing (welke periodes
+                 # bestaan al, welke komen erbij) gebeurt in Python, het verschil gaat er in twee
+                 # bulkbewerkingen in. 5.252 queries in plaats van ~90.000; 64 s in plaats van ~900.
+                 # `_scd2_upsert` is een schil om `_scd2_bulk_upsert` zodat er één implementatie
+                 # van de semantiek bestaat. Alles blijft in één transactie.
 utility/
   constants.py   # D() (Decimal factory), LOCAL_TZ, DNB_CODES
   normalizer.py  # money(), dec() helpers
@@ -185,10 +211,15 @@ alleen de distributie) en ontbrak daardoor volledig, wat elke gasfactuur ongevee
 jaar te laag maakte. Geladen via `TransportTariefRepository.load(config_dir)`, met dezelfde
 tijdsas en verificatievlag als de accijnzen.
 
-**Let op**: vtest.be past op gewone woningproducten 1,5565 EUR/MWh toe waar CREG 1,56
-vastlegt — 0,22% lager, oorzaak niet vastgesteld. De masterdata draagt het officiële cijfer;
-`scripts/check_tarieven.py` pint de afwijking vast zodat ze bekend blijft en opvalt als ze
-verandert.
+**vtest.be is hier de leidende bron.** Op gewone woningproducten past vtest.be 1,5565
+EUR/MWh toe waar CREG 1,56 vastlegt — 0,22% lager, oorzaak onderzocht en niet gevonden.
+De masterdata draagt sinds 2026-09-01 de vtest-waarde: deze toepassing vergelijkt met de
+officiële vergelijkingstool van VREG, en dan weegt overeenkomen met wat die tool een klant
+toont zwaarder dan overeenkomen met de nota waarop ze zich baseert. Onderneming draagt
+1,56, want daar past vtest.be dat cijfer wél exact toe.
+
+Het sociaal tarief valt onder dezelfde categorie `niet_zakelijk` maar rekent met 1,56;
+zodra sociale tarieven apart doorgerekend worden, hoort daar een eigen categorie bij.
 
 `config/bronregister.toml` — welke bronbestanden de pipeline verwerkt heeft, als vaste
 referentie voor de bronbewaking (`data/` staat niet in git).
@@ -269,6 +300,18 @@ Each ingest domain (vtest, tariffs, curves) follows the same three-stage pattern
 
 `Calculator` takes a `Profile` (usage figures, postcode, meter type), a `Product` from `DataRepository`, and a `HeffingenRepository`, then computes a `Cost` (supplier, grid, levies, injection credit, VAT). Grid costs use distribution network tariff data from the repository; levies come from `config/heffingen/` via progressive schijven — `calculate()` raises without a `HeffingenRepository` rather than silently defaulting levies to 0, and for gas (not yet covered by the heffingen data). Only laagspanning is wired up so far; MS/HS tariff and levy data exists but the calculator won't use it until that segment is formally validated (see Manifest §7.2/§12). Financial math uses `Decimal` throughout; no floats in cost calculations.
 
+**Twee maandpieken, en dat is met opzet.** `Profile` draagt
+`geschatte_maandpiek_kw` (4,218 kW) én `minimum_maandpiek_kw` (2,5 kW). Ze waren
+één veld met de waarde 2,5 — maar 2,5 is de wettelijke ondergrens van het
+capaciteitstarief, niet de piek van een gemiddeld gezin. Als standaardwaarde
+betekende dat: wie geen eigen maandpieken aanlevert, rekent per definitie op de
+bodem, ongeveer 86 EUR/jaar te laag. 4,218 kW is teruggerekend uit vtest.be
+(capaciteitstarieven van alle acht netbeheerders, 2026-08-31) en is de piek
+waarmee die tool zijn standaardwoning doorrekent. De ondergrens komt uit het
+profiel en niet uit een constante, zodat een berekening kan zeggen wélke
+ondergrens ze toegepast heeft. Databankkolommen zijn `Numeric(7, 3)`: op twee
+decimalen zou 4,218 stil 4,22 worden.
+
 ### Key design rules (from Manifest 3.0)
 
 - `Decimal` only for financial values — never `float`.
@@ -280,7 +323,7 @@ Each ingest domain (vtest, tariffs, curves) follows the same three-stage pattern
 
 ### Tests: herkomst boven aantal
 
-De testsuite telt ongeveer 300 tests en draait in 8 seconden. Het aantal is
+De testsuite telt ongeveer 395 tests en draait in 6 seconden. Het aantal is
 geen probleem en snoeien erin is geen doel — de kosten zitten niet in de
 runtime.
 
