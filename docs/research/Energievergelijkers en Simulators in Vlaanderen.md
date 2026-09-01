@@ -272,4 +272,4 @@ DSMR - monthly 15 minute peak values for Belgium - Home Assistant Community
 Opent in een nieuw venster
 
 ---
-terug naar [[MOC]]
+terug naar [MOC](../MOC.md)

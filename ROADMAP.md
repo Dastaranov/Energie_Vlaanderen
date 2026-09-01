@@ -17,7 +17,7 @@ herwerkt tot een package (`src/energie_vlaanderen/cli/`) met gegroepeerde
 commando's (`source`, `raw`, `staging`, `market`, `audit`, `version`, `db`,
 `paths`) én een interactieve shell (`energievergelijker` zonder argumenten).
 Dit ondersteunt onder meer al een deel van Fase 2/3 (bronontdekking, download,
-staging-pipelines, marktsync) operationeel — zie `CLAUDE.md` en [[MOC]] voor
+staging-pipelines, marktsync) operationeel — zie `CLAUDE.md` en [de documentatie-overzicht](docs/MOC.md) voor
 details. De onderliggende canonical domain model- en rekenengine-fasen
 hieronder blijven ongewijzigd van toepassing.
 
@@ -338,4 +338,4 @@ Het platform is succesvol wanneer het voor ieder resultaat toont:
 - welke privacytoestemming de verwerking van meterdata rechtvaardigt.
 
 ---
-terug naar [[MOC]]
+terug naar [de documentatie](docs/MOC.md)

@@ -73,4 +73,4 @@ De bijhorende CLI-commando's zitten in `src/energie_vlaanderen/cli/audit.py` (bu
 geregistreerd in `src/energie_vlaanderen/cli/groups.py` (de `audit`-commandogroep).
 
 ---
-terug naar [[MOC]]
+terug naar [MOC](../MOC.md)

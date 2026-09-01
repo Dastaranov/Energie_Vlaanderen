@@ -704,4 +704,4 @@ worden gevalideerd voordat de resultaten als factuurnauwkeurig worden beschouwd:
 - de selectie van een representatief standaardlastprofiel.
 
 ---
-terug naar [[MOC]]
+terug naar [MOC](MOC.md)

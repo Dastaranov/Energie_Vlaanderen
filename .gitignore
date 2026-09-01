@@ -252,6 +252,10 @@ gebruiker.toml
 # Coding history
 docs/history/
 
+# Interne werkplannen (uitgevoerde/lopende changeplans). Persoonlijk
+# werkmateriaal, geen documentatie voor een lezer van dit repo.
+logs/
+
 # Claude Code — de agent en skill horen wél in het repo (die beschrijven hoe
 # er gewerkt wordt), de lokale sessiestand niet.
 .claude/settings.local.json

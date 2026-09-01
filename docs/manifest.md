@@ -340,4 +340,4 @@ Voor productiegebruik moeten nog officieel worden bevestigd:
   weigert vandaag expliciet elke berekening voor aardgas.
 
 ---
-terug naar [[MOC]]
+terug naar [MOC](MOC.md)
