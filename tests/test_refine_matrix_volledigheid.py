@@ -103,3 +103,72 @@ def test_te_weinig_combinaties_om_te_vergelijken():
     ]
 
     assert VTestRefineMatrix._verdachte_combinaties(resultaten) == []
+
+
+class TestAbsoluteOndergrens:
+    """De onderlinge vergelijking van postcodes ziet niets als een hele groep
+    afgekapt is. Bij de run van 2026-09-01 gaven álle acht
+    onderneming/gas-combinaties 10 producten terwijl de bulk-export er 66
+    actief telt — uniform, dus onzichtbaar voor de onderlinge toets.
+
+    De bulk-export is een onafhankelijke bron voor dezelfde markt en geeft
+    daarmee wél een absolute maatstaf.
+    """
+
+    VERWACHT = {
+        ("woning", "elektriciteit"): 127,
+        ("woning", "gas"): 75,
+        ("onderneming", "elektriciteit"): 104,
+        ("onderneming", "gas"): 66,
+    }
+
+    def test_uniform_afgekapte_groep_wordt_gevonden(self):
+        resultaten = [
+            _resultaat("onderneming", "gas", pc, 10)
+            for pc in ("1540", "1910", "2150", "2290", "3511", "8000", "8432", "9120")
+        ]
+
+        (melding,) = VTestRefineMatrix._verdachte_combinaties(
+            resultaten, self.VERWACHT
+        )
+
+        assert "onderneming/gas" in melding
+        assert "hoogstens 10" in melding
+        assert "66 actief" in melding
+
+    def test_gezonde_groep_geeft_geen_melding(self):
+        """De twee bronnen tellen niet identiek: 120 gescrapet tegenover 127
+        in de export is normaal, geen afkapping."""
+        resultaten = [
+            _resultaat("woning", "elektriciteit", pc, 120)
+            for pc in ("1540", "1910", "2150", "2290", "3511", "8000", "8432")
+        ] + [_resultaat("woning", "elektriciteit", "9120", 123)]
+
+        assert (
+            VTestRefineMatrix._verdachte_combinaties(resultaten, self.VERWACHT) == []
+        )
+
+    def test_zonder_referentie_valt_de_toets_stil(self):
+        """Ontbreken de master-CSV's, dan mag de matrix niet stuklopen."""
+        resultaten = [
+            _resultaat("onderneming", "gas", pc, 10)
+            for pc in ("1540", "1910", "2150")
+        ]
+
+        assert VTestRefineMatrix._verdachte_combinaties(resultaten, {}) == []
+
+    def test_beide_toetsen_melden_samen(self):
+        """Een groep kan tegelijk te klein zijn én een achterblijver hebben."""
+        resultaten = [
+            _resultaat("onderneming", "elektriciteit", pc, 20)
+            for pc in ("1540", "1910", "2150", "2290", "3511", "8000", "8432")
+        ] + [_resultaat("onderneming", "elektriciteit", "9120", 97)]
+
+        meldingen = VTestRefineMatrix._verdachte_combinaties(
+            resultaten, self.VERWACHT
+        )
+
+        # De groep haalt 97 van 104 (93%), dus de absolute toets zwijgt; de
+        # zeven achterblijvers worden wel door de onderlinge toets gevonden.
+        assert len(meldingen) == 7
+        assert all("tegenover 97" in m for m in meldingen)

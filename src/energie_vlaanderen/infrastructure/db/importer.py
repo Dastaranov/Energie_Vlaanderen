@@ -532,6 +532,30 @@ def _scd2_upsert(
     if not product_id or not geldig_van:
         return
 
+    sleutel = (
+        (tariff_table.c.product_id == product_id)
+        & (tariff_table.c.meter_type == meter_type)
+        & (tariff_table.c.prijs_type == prijs_type)
+    )
+
+    # Bestaat deze periode al? Dan is dit een herimport van bekende gegevens:
+    # bijwerken en klaar. Zonder deze stap kwam elke herimport van dezelfde
+    # versie als terugwerkend binnen — de historiek loopt tot de laatste
+    # maand, dus alles daarvóór is ouder dan de open rij. Dat leverde 21.459
+    # waarschuwingen op over 580 producten, terwijl er niets aan de hand was.
+    bestaande = conn.execute(
+        sa.select(tariff_table.c.id).where(
+            sleutel & (tariff_table.c.geldig_van == geldig_van)
+        )
+    ).fetchone()
+    if bestaande:
+        conn.execute(
+            sa.update(tariff_table)
+            .where(tariff_table.c.id == bestaande[0])
+            .values(**{k: v for k, v in row_data.items() if k != "geldig_van"})
+        )
+        return
+
     # Query open rij.
     #
     # prijs_type hoort hier mee in: hetzelfde product wordt soms zowel
@@ -542,10 +566,7 @@ def _scd2_upsert(
     # productidentiteiten raakten dat.
     open_row = conn.execute(
         sa.select(tariff_table.c.id, tariff_table.c.geldig_van).where(
-            (tariff_table.c.product_id == product_id)
-            & (tariff_table.c.meter_type == meter_type)
-            & (tariff_table.c.prijs_type == prijs_type)
-            & (tariff_table.c.geldig_tot.is_(None))
+            sleutel & (tariff_table.c.geldig_tot.is_(None))
         )
     ).fetchone()
 

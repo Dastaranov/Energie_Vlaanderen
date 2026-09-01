@@ -216,3 +216,37 @@ def test_variabel_en_dynamisch_verdringen_elkaars_historiek_niet(conn):
             (date(2026, 1, 1), date(2026, 1, 31)),
             (date(2026, 2, 1), None),
         ], prijs_type
+
+
+def test_herimport_van_een_oudere_bekende_periode_is_stil(conn):
+    """Een herimport loopt de maanden opnieuw af, van oud naar nieuw.
+
+    De historiek staat dan al tot de laatste maand, dus elke maand daarvóór is
+    ouder dan de open rij. Zonder een controle op "bestaat deze periode al"
+    kwamen die allemaal binnen als terugwerkende wijziging: 21.459
+    waarschuwingen over 580 producten, terwijl er niets aan de hand was.
+    """
+    for maand in (1, 2, 3):
+        _scd2_upsert(conn, tarief_afname, _rij(date(2026, maand, 1), "0.20"))
+
+    voor = _rijen(conn)
+
+    # Precies dezelfde import nog een keer.
+    for maand in (1, 2, 3):
+        _scd2_upsert(conn, tarief_afname, _rij(date(2026, maand, 1), "0.20"))
+
+    assert _rijen(conn) == voor
+
+
+def test_herimport_met_gewijzigde_prijs_werkt_de_juiste_periode_bij(conn):
+    """Een correctie op een afgesloten maand hoort die maand te raken, niet
+    een nieuwe rij te maken of de open rij te overschrijven."""
+    for maand, prijs in ((1, "0.20"), (2, "0.22")):
+        _scd2_upsert(conn, tarief_afname, _rij(date(2026, maand, 1), prijs))
+
+    _scd2_upsert(conn, tarief_afname, _rij(date(2026, 1, 1), "0.21"))
+
+    assert _rijen(conn) == [
+        (date(2026, 1, 1), date(2026, 1, 31), Decimal("0.21")),
+        (date(2026, 2, 1), None, Decimal("0.22")),
+    ]

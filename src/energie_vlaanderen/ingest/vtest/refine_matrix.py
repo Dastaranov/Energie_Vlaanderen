@@ -176,7 +176,9 @@ class VTestRefineMatrix:
             if i < len(combinaties) - 1:
                 time.sleep(pause_seconds)
 
-        verdacht = self._verdachte_combinaties(geslaagd)
+        verdacht = self._verdachte_combinaties(
+            geslaagd, self.verwachte_aantallen(staging_dir / "vtest")
+        )
         for melding in verdacht:
             LOG.warning("Mogelijk onvolledig: %s", melding)
 
@@ -196,8 +198,58 @@ class VTestRefineMatrix:
         )
 
     @staticmethod
+    def verwachte_aantallen(vtest_dir: Path) -> dict[tuple[str, str], int]:
+        """Hoeveel producten de bulk-export voor de laatste maand kent.
+
+        De scrape en de export zijn twee onafhankelijke bronnen voor dezelfde
+        markt, dus de export geeft een absolute ondergrens waar de onderlinge
+        vergelijking van postcodes er geen heeft. Dat verschil telt: bij de run
+        van 2026-09-01 waren álle acht onderneming/gas-combinaties afgekapt tot
+        10 producten terwijl de export er 66 actief telt — uniform, dus
+        onderling vergelijken zag niets.
+
+        Geeft een lege dict als de master-CSV's er nog niet zijn; de
+        matrixrun mag daar niet op stuklopen.
+        """
+        rijen: list[dict[str, str]] = []
+        for naam in ("master_vast.csv", "master_var_dyn.csv"):
+            pad = vtest_dir / naam
+            if not pad.is_file():
+                continue
+            try:
+                frame = pd.read_csv(pad, sep=";", dtype=str, encoding="utf-8-sig")
+            except (OSError, ValueError, pd.errors.ParserError) as exc:
+                LOG.warning("Kon %s niet lezen voor de volledigheidscontrole: %s", naam, exc)
+                continue
+            rijen.extend(frame.fillna("").to_dict("records"))
+
+        if not rijen:
+            return {}
+
+        def periode(rij: dict[str, str]) -> tuple[int, int]:
+            try:
+                return int(rij.get("year") or 0), int(rij.get("month") or 0)
+            except ValueError:
+                return 0, 0
+
+        laatste = max(periode(r) for r in rijen)
+        per_groep: dict[tuple[str, str], set] = {}
+        for rij in rijen:
+            if periode(rij) != laatste or rij.get("direction") != "Afname":
+                continue
+            sleutel = (
+                (rij.get("segment") or "").lower(),
+                (rij.get("energy") or "").lower(),
+            )
+            per_groep.setdefault(sleutel, set()).add(
+                (rij.get("supplier"), rij.get("product"), rij.get("product_type"))
+            )
+        return {k: len(v) for k, v in per_groep.items()}
+
+    @staticmethod
     def _verdachte_combinaties(
         resultaten: list[VTestRefinePipelineResult],
+        verwacht: dict[tuple[str, str], int] | None = None,
     ) -> list[str]:
         """Meld combinaties die veel minder producten opleverden dan hun buren.
 
@@ -218,7 +270,28 @@ class VTestRefineMatrix:
                 resultaat
             )
 
+        verwacht = verwacht or {}
         meldingen: list[str] = []
+
+        # Eerst de absolute toets: de bulk-export weet onafhankelijk van de
+        # scrape hoeveel producten er zijn. Zonder die maatstaf blijft een
+        # groep die in haar geheel afgekapt is onzichtbaar.
+        for (segment, energy), groep in sorted(per_groep.items()):
+            drempel = verwacht.get((segment, energy))
+            if not drempel:
+                continue
+            hoogste = max(r.products_found for r in groep)
+            # 60% van de export: de twee bronnen tellen niet identiek — bij de
+            # gezonde combinaties lag de scrape op 93 tot 100% — maar een
+            # afgekapte lijst zit er ver onder (15 tot 19%).
+            if hoogste < drempel * 0.6:
+                meldingen.append(
+                    f"{segment}/{energy}: hoogstens {hoogste} producten "
+                    f"gescrapet terwijl de bulk-export er {drempel} actief "
+                    "telt — de resultatenlijst is vermoedelijk in álle "
+                    "postcodes afgekapt."
+                )
+
         for (segment, energy), groep in sorted(per_groep.items()):
             if len(groep) < 3:
                 continue
