@@ -1,5 +1,12 @@
 # EnergieVergelijker
 
+[![Tests](https://github.com/Dastaranov/Energie_Vlaanderen/actions/workflows/tests.yml/badge.svg)](https://github.com/Dastaranov/Energie_Vlaanderen/actions/workflows/tests.yml)
+[![Bronbewaking](https://github.com/Dastaranov/Energie_Vlaanderen/actions/workflows/bronbewaking.yml/badge.svg)](https://github.com/Dastaranov/Energie_Vlaanderen/actions/workflows/bronbewaking.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![PostgreSQL](https://img.shields.io/badge/databank-PostgreSQL-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Decimal](https://img.shields.io/badge/financi%C3%ABle%20rekenkunde-Decimal-2ea44f)](#)
+[![Licentie: Apache 2.0](https://img.shields.io/badge/licentie-Apache%202.0-lightgrey)](LICENSE)
+
 Modulaire energievergelijker voor Vlaanderen: haalt de officiële V-test- en
 distributienettarieven op, verwerkt ze via versiegebonden pipelines, en zet ze
 in een PostgreSQL-databank die als enige waarheid geldt.
