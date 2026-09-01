@@ -83,10 +83,16 @@ def test_pipeline_refuses_invalid_data(tmp_path: Path):
 
 
 def test_pipeline_refuses_existing_target(tmp_path: Path):
+    """Bestaande parse-output wordt niet stilzwijgend overschreven.
+
+    De vtest-map zelf mag wél al bestaan: `staging refine` zet zijn
+    scrape-resultaten daar neer en die moeten een herparse overleven.
+    """
     workbook = tmp_path / "vtest.xlsx"
     write_workbook(workbook)
     destination = tmp_path / "staging"
     (destination / "vtest").mkdir(parents=True)
+    (destination / "vtest" / "master_vast.csv").write_text("", encoding="utf-8")
 
     with pytest.raises(VTestPipelineError, match="bestaat al"):
         VTestPipeline().process(
@@ -173,3 +179,25 @@ def test_pipeline_wraps_workbook_error_as_pipeline_error(tmp_path: Path):
             destination=tmp_path / "staging",
             version_id="20260820T120000Z-1234abcd",
         )
+
+
+def test_pipeline_schrijft_in_een_map_met_scrape_resultaten(tmp_path: Path):
+    """Een herparse mag de refine-output naast zich laten staan.
+
+    Voorheen weigerde de pipeline zodra de vtest-map bestond, terwijl de
+    aanroeper de parse-output er al uit verwijderd had — met als gevolg dat
+    master_vast.csv en master_var_dyn.csv verdwenen zonder vervanging.
+    """
+    workbook = tmp_path / "vtest.xlsx"
+    write_workbook(workbook)
+    destination = tmp_path / "staging"
+    vtest_dir = destination / "vtest"
+    vtest_dir.mkdir(parents=True)
+    scrape_output = vtest_dir / "vtest_products_woning_elektriciteit_9120.csv"
+    scrape_output.write_text("vreg_id;segment\n1;woning\n", encoding="utf-8")
+
+    result = VTestPipeline().process(workbook, destination, "v1")
+
+    assert result.fixed_csv.is_file()
+    assert result.variable_dynamic_csv.is_file()
+    assert scrape_output.read_text(encoding="utf-8").startswith("vreg_id")

@@ -17,6 +17,13 @@ class Profile:
     injectie_nacht_kwh: Decimal = D("0")
     omvormer_kva: Decimal = D("0")
     maandpieken_kw: tuple[Decimal, ...] = ()
+    # LET OP: 2,5 kW is de wettelijke ondergrens van het capaciteitstarief,
+    # niet een representatieve schatting. Wie geen eigen maandpieken aanlevert,
+    # rekent hiermee dus per definitie op de bodem. vtest.be hanteert voor zijn
+    # standaardwoning 4,218 kW (teruggerekend uit de gescrapete
+    # capaciteitstarieven van alle acht netbeheerders, 2026-08-31) — ongeveer
+    # 86 EUR/jaar meer nettarief. Bewust nog niet gewijzigd: dit is een
+    # financiële standaardwaarde en die hoort een expliciete keuze te zijn.
     geschatte_maandpiek_kw: Decimal = D("2.5")
     kwartier_csv: Optional[Path] = None
     @property

@@ -1,0 +1,111 @@
+# Bijzondere accijns en energiebijdrage op aardgas (GN-codes 2711 11 00 en
+# 2711 21 00).
+#
+# Eenheid: EUR per MWh jaarverbruik, EXCLUSIEF btw.
+#
+# WAAROM DIT BESTAND NIEUW IS
+# ---------------------------
+# Tot augustus 2026 bestond er geen aardgas-masterdata: `config/heffingen/`
+# dekte enkel elektriciteit, en `Calculator.calculate()` weigerde daarom elke
+# gasberekening. Dat was correct gedrag bij ontbrekende data, maar het maakte
+# een gasfactuur onberekenbaar — terwijl de heffingen op gas juist stijgen.
+#
+# HOE DE CIJFERS GECONTROLEERD ZIJN
+# ---------------------------------
+# Teruggerekend uit vtest.be met `energievergelijker staging calibrate`: vijf
+# verbruikspunten (4.000 / 11.900 / 12.100 / 20.000 / 35.000 kWh), waarvan
+# twee de vermoede schijfgrens insluiten. De kostenfunctie knikt precies
+# daartussen, en de tarieven 10,31 en 11,16 EUR/MWh met de grens op 12 MWh
+# reproduceren alle vijf gemeten bedragen tot op de eurocent:
+#
+#     4.000 kWh -> 41,24 EUR      20.000 kWh -> 213,00 EUR
+#    11.900 kWh -> 122,69 EUR     35.000 kWh -> 380,40 EUR
+#    12.100 kWh -> 124,84 EUR
+#
+# De grens van 12 MWh is het "basisverbruik" voor aardgas uit de programmawet
+# van 2026. De persberichten noemen 10,93 en 11,83 EUR/MWh; dat zijn dezelfde
+# bedragen inclusief 6% btw (10,31 x 1,06 = 10,93).
+#
+# NOG NIET GEDEKT
+# ---------------
+# - Periodes vóór 01/08/2026. De hervorming verhoogde de gasaccijns fors
+#   (van 8,23 EUR/MWh sinds 01/07/2023); dat oudere regime staat hieronder
+#   maar is enkel uit een secundaire bron overgenomen.
+# - De verdere stijging tot 2029 (12,07 / 13,22 / 14,42 EUR/MWh incl. btw voor
+#   de eerste schijf volgens secundaire bronnen). Bewust nog niet opgenomen —
+#   ingangsdata niet geverifieerd.
+# - Voor ondernemingen is enkel het huidige regime gekalibreerd; hoe lang
+#   die tarieven al gelden is niet vastgesteld (zie de opmerking bij de
+#   zakelijke tabel onderaan).
+
+energievorm = "aardgas"
+bron = "vtest.be (kalibratie 2026-08-31) + programmawet 2026"
+
+# --- Niet-zakelijk gebruik (residentieel) ---
+
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "0"
+tot_mwh = ""
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "8.2300"
+energiebijdrage_eur_mwh = "0"
+geldig_vanaf = "2023-07-01"
+geverifieerd = false
+bron = "Mega tariefoverzicht hervorming 2023 (secundaire bron); geen schijfonderscheid in dat regime"
+
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "0"
+tot_mwh = "12"
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "10.3100"
+energiebijdrage_eur_mwh = "0"
+geldig_vanaf = "2026-08-01"
+geverifieerd = true
+bron = "vtest.be kalibratie 2026-08-31, postcode 9120, 5 verbruikspunten, alle bedragen exact gereproduceerd"
+
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "12"
+tot_mwh = ""
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "11.1600"
+energiebijdrage_eur_mwh = "0"
+geldig_vanaf = "2026-08-01"
+geverifieerd = true
+bron = "vtest.be kalibratie 2026-08-31, postcode 9120, 5 verbruikspunten, alle bedragen exact gereproduceerd"
+
+# --- Zakelijk gebruik, aansluiting <= 1 kV (laagspanning) ---
+#
+# De accijnshervorming raakte ondernemingen niet: waar een gezin 10,31 tot
+# 11,16 EUR/MWh betaalt, blijft het zakelijke tarief op 0,66 EUR/MWh staan —
+# een factor vijftien verschil. Een cijfer van het ene segment naar het andere
+# overzetten is hier dus geen afrondingskwestie maar een grove fout.
+#
+# Gekalibreerd op vtest.be, segment "onderneming", postcode 9120, vijf
+# verbruikspunten. Geen knik: één vlak tarief over het hele bereik, in
+# tegenstelling tot de residentiële tabel die op 12 MWh wél knikt.
+#
+#     4.000 kWh ->  2,64 EUR     20.000 kWh -> 13,20 EUR
+#    11.900 kWh ->  7,85 EUR     35.000 kWh -> 23,10 EUR
+#    12.100 kWh ->  7,99 EUR
+#
+# De energiebijdrage van 0,9978 EUR/MWh reproduceert dezelfde vijf punten
+# exact en geldt hier nog wél — ze is enkel voor gezinnen verdwenen.
+#
+# `geldig_vanaf` staat op 2022-01-01 omdat dat de ingangsdatum is van het
+# regime waaronder deze tarieven vallen. Gemeten is enkel dat ze vandaag
+# gelden; dat ze al sinds 2022 ongewijzigd zijn, is aangenomen en niet
+# vastgesteld.
+
+[[schijf]]
+klantcategorie = "zakelijk_laagspanning"
+van_mwh = "0"
+tot_mwh = ""
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "0.66"
+energiebijdrage_eur_mwh = "0.9978"
+geldig_vanaf = "2022-01-01"
+geverifieerd = true
+bron = "vtest.be kalibratie 2026-08-31, segment onderneming, postcode 9120, 5 verbruikspunten, alle bedragen exact gereproduceerd"

@@ -78,10 +78,31 @@ def match_products(
     max_voorbeelden: int = 20,
 ) -> tuple[list[ProductMatch], MatchReport]:
     """`vtest_df` kolommen: vreg_id, supplier_raw, product_raw, segment, energy.
-    `bulk_df` kolommen (master_vast.csv/master_var_dyn.csv): Handelsnaam,
-    Productnaam, Segment, Energietype."""
+    `bulk_df` kolommen (master_vast.csv/master_var_dyn.csv):
+    - Genormaliseerde kolommen: supplier, product, segment, energy
+    - Of originele kolommen: Handelsnaam, Productnaam, Segment, Energietype
+    """
 
-    bulk_rows = bulk_df[["Handelsnaam", "Productnaam", "Segment", "Energietype"]].drop_duplicates()
+    # De genormaliseerde master-CSV's dragen lowercase kolomnamen; het
+    # werkboek zelf de Nederlandse. Beide voeden deze matcher, dus we
+    # aanvaarden ze allebei en werken intern met één naamgeving.
+    genormaliseerd = {
+        "supplier": "Handelsnaam",
+        "product": "Productnaam",
+        "segment": "Segment",
+        "energy": "Energietype",
+    }
+    if set(genormaliseerd).issubset(bulk_df.columns):
+        bulk_rows = bulk_df[list(genormaliseerd)].rename(columns=genormaliseerd)
+    elif set(genormaliseerd.values()).issubset(bulk_df.columns):
+        bulk_rows = bulk_df[list(genormaliseerd.values())]
+    else:
+        raise KeyError(
+            "bulk_df mist de productkolommen: verwacht "
+            f"{sorted(genormaliseerd)} of {sorted(genormaliseerd.values())}, "
+            f"kreeg {sorted(bulk_df.columns)}."
+        )
+    bulk_rows = bulk_rows.drop_duplicates()
 
     exact_lookup: dict[tuple[str, str, str, str], tuple[str, str]] = {}
     normalized_lookup: dict[tuple[str, str, str, str], tuple[str, str]] = {}

@@ -86,9 +86,19 @@ class TariffDataNormalizer:
 
         out = []
         current_hoofdgroep = ""
+        # Naam van de vorige tariefregel, om "of"-vervolgregels aan te hangen.
+        vorige_desc = ""
+        vorig_sheet = ""
 
         for _, row in frame.iterrows():
             source_sheet = clean_text(row.get("source_sheet", ""))
+            # Context hoort niet over werkbladgrenzen heen te lekken: elk blad
+            # is een eigen netbeheerder met een eigen tarievenlijst.
+            if source_sheet != vorig_sheet:
+                current_hoofdgroep = ""
+                vorige_desc = ""
+                vorig_sheet = source_sheet
+
             dnb_code = source_sheet.split(" ")[0] if source_sheet else ""
             dnb_mapped = dnb_code if dnb_code in VALID_DNB_ABBREVIATIONS else None
 
@@ -118,6 +128,26 @@ class TariffDataNormalizer:
             # in de Excel-bron — geen echte tariefregels.
             if desc.startswith("- ") or desc.startswith("*"):
                 continue
+
+            # "of" is geen tariefnaam maar een vervolgregel: het werkboek geeft
+            # daarmee hetzelfde tarief in een andere eenheid.
+            #
+            #     Maandpiek                              EUR/kW/maand
+            #     of                                     EUR/kW/jaar
+            #     Tarief voor overschrijding toegang..   EUR/kW/maand
+            #     of                                     EUR/kW/jaar
+            #
+            # Letterlijk overnemen maakte van elke "of" een aparte tariefnaam,
+            # waardoor verschillende tarieven dezelfde omschrijving kregen: in
+            # het hoogspanningsblad botsten daardoor 40 van de 488 sleutels.
+            # We nemen de naam van de regel erboven over; de eenheid
+            # (Tariefnotering) houdt de twee varianten uit elkaar.
+            if desc.casefold() == "of":
+                if not vorige_desc:
+                    continue
+                desc = vorige_desc
+            else:
+                vorige_desc = desc
 
             base_data = {
                 "Netbeheerder": dnb_mapped,

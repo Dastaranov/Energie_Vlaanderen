@@ -92,10 +92,51 @@ class VTestRefineMatrix:
         ]
         LOG.info("Matrix: %d combinaties (segment x energie x DNB).", len(combinaties))
 
+        # Detecteer bestaande per-combinatie bestanden om resume mogelijk te maken
         geslaagd: list[VTestRefinePipelineResult] = []
         fouten: list[VTestMatrixFout] = []
+        overgeslagen = 0
 
         for i, (segment, energy, dnb_code, postcode) in enumerate(combinaties):
+            stem = f"{segment}_{energy}_{postcode}"
+            vtest_dir = staging_dir / "vtest"
+            products_csv = vtest_dir / f"vtest_products_{stem}.csv"
+
+            # Skip als al eerder succesvol gedaan
+            if products_csv.is_file():
+                LOG.info(
+                    "[%d/%d] segment=%s energie=%s dnb=%s postcode=%s (al gedaan, overgeslagen)",
+                    i + 1, len(combinaties), segment, energy, dnb_code, postcode,
+                )
+                # Reconstructeer VTestRefinePipelineResult van bestaande bestanden
+                components_csv = vtest_dir / f"vtest_product_components_{stem}.csv"
+                try:
+                    bestaand = pd.read_csv(products_csv, sep=";", encoding="utf-8-sig")
+                except (OSError, ValueError, pd.errors.ParserError) as exc:
+                    # Onleesbaar bestand: opnieuw scrapen is beter dan de
+                    # combinatie stil te laten wegvallen uit de matrix.
+                    LOG.warning(
+                        "Bestaande %s niet leesbaar (%s) — combinatie wordt opnieuw gescrapet.",
+                        products_csv.name, exc,
+                    )
+                else:
+                    geslaagd.append(
+                        VTestRefinePipelineResult(
+                            version_id=version_id,
+                            directory=vtest_dir,
+                            segment=segment,
+                            energy=energy,
+                            postcode=postcode,
+                            products_csv=products_csv,
+                            components_csv=components_csv,
+                            dump_html=vtest_dir / f"vtest_dump_{stem}.html",
+                            products_found=len(bestaand),
+                            scraped_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    overgeslagen += 1
+                    continue
+
             LOG.info(
                 "[%d/%d] segment=%s energie=%s dnb=%s postcode=%s ...",
                 i + 1, len(combinaties), segment, energy, dnb_code, postcode,
