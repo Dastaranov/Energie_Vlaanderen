@@ -69,7 +69,16 @@ leverancier = sa.Table(
     sa.Column("klantendienst_telefoon", sa.Text, nullable=True),
     sa.Column("klantendienst_email", sa.Text, nullable=True),
     sa.Column("vreg_service_score", sa.Numeric(3, 1), nullable=True),
+    # "ENGIE (handelsnaam van Electrabel)" wordt naam="ENGIE",
+    # juridische_entiteit="Electrabel". Het merk is de identiteit, de entiteit
+    # een eigenschap: merken die dezelfde entiteit delen maar los verkocht
+    # worden (de zeven merken van Energy Together) blijven aparte rijen.
+    sa.Column("juridische_entiteit", sa.Text, nullable=True),
     sa.Column("bijgewerkt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
+    # De VREG-export spelt dezelfde leverancier niet altijd gelijk ("Dots
+    # Energy" naast "Dots energy"). Zonder deze index krijgt één leverancier
+    # twee rijen en raken zijn producten over allebei verdeeld.
+    sa.Index("uq_leverancier_naam_lower", sa.text("lower(naam)"), unique=True),
 )
 
 energie_product = sa.Table(
@@ -84,6 +93,11 @@ energie_product = sa.Table(
     sa.Column("tariefkaart_url", sa.Text, nullable=True),
     sa.Column("bijzondere_voorwaarden_url", sa.Text, nullable=True),
     sa.Column("groene_stroom", sa.Boolean, nullable=True),
+    # vtest.be onderscheidt GREEN van GREENLOCAL (lokaal opgewekt). Dat
+    # verschil telt voor een vergelijker; een boolean alleen zou het
+    # gelijkschakelen. Komt uit de live scrape, dus enkel gevuld voor
+    # producten die via vreg_id gekoppeld zijn.
+    sa.Column("groene_stroom_type", sa.Text, nullable=True),
     sa.Column("aangemaakt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
     sa.UniqueConstraint("leverancier_id", "product_naam", "energie_type", "segment", name="uq_energie_product_identiteit"),
 )
@@ -124,8 +138,11 @@ tarief_afname = sa.Table(
     metadata,
     *_tarief_columns(),
     sa.ForeignKeyConstraint(["product_id"], ["energie_product.id"], ondelete="CASCADE"),
-    sa.Index("ix_tarief_afname_open", "product_id", "meter_type", unique=True,
-             postgresql_where=sa.text("geldig_tot IS NULL")),
+    # prijs_type hoort in de sleutel: hetzelfde product wordt soms zowel
+    # variabel als dynamisch aangeboden, met een eigen formule per type.
+    # Zonder dat onderscheid verdringen die elkaars historiek.
+    sa.Index("ix_tarief_afname_open", "product_id", "meter_type", "prijs_type",
+             unique=True, postgresql_where=sa.text("geldig_tot IS NULL")),
     sa.Index("ix_tarief_afname_lookup", "product_id", "geldig_van", "geldig_tot"),
 )
 
@@ -134,8 +151,11 @@ tarief_injectie = sa.Table(
     metadata,
     *_tarief_columns(),
     sa.ForeignKeyConstraint(["product_id"], ["energie_product.id"], ondelete="CASCADE"),
-    sa.Index("ix_tarief_injectie_open", "product_id", "meter_type", unique=True,
-             postgresql_where=sa.text("geldig_tot IS NULL")),
+    # prijs_type hoort in de sleutel: hetzelfde product wordt soms zowel
+    # variabel als dynamisch aangeboden, met een eigen formule per type.
+    # Zonder dat onderscheid verdringen die elkaars historiek.
+    sa.Index("ix_tarief_injectie_open", "product_id", "meter_type", "prijs_type",
+             unique=True, postgresql_where=sa.text("geldig_tot IS NULL")),
 )
 
 # ---------------------------------------------------------------------------
@@ -208,7 +228,12 @@ netbeheerder_tarief = sa.Table(
     sa.Column("klanttype", sa.Text, nullable=False),
     sa.Column("tarieftype", sa.Text, nullable=True),
     sa.Column("tariefdetail", sa.Text, nullable=True),
-    sa.Column("tariefnotering", sa.Text, nullable=True),
+    # Dezelfde tariefnaam komt voor met verschillende eenheden — bij FA staat
+    # het prosumententarief zowel als 51,54 EUR/kW/jaar als 1,8984501 zonder
+    # eenheid. Zonder de notering in de sleutel gelden die als duplicaat.
+    # Leeg wordt "" en niet NULL: PostgreSQL ziet NULLs in een unieke sleutel
+    # als onderling verschillend, waardoor een echt dubbel er alsnog in mag.
+    sa.Column("tariefnotering", sa.Text, nullable=False, server_default=""),
     sa.Column("prijs", sa.Numeric(14, 6), nullable=True),
     sa.Column("geldig_van", sa.Date, nullable=False),
     sa.Column("geldig_tot", sa.Date, nullable=True),
@@ -216,10 +241,10 @@ netbeheerder_tarief = sa.Table(
     sa.Column("source_row", sa.Integer, nullable=True),
     sa.UniqueConstraint(
         "netbeheerder_code", "energie_type", "contract_richting",
-        "klanttype", "tarieftype", "tariefdetail", "geldig_van",
+        "klanttype", "tarieftype", "tariefdetail", "tariefnotering", "geldig_van",
         name="uq_netbeheerder_tarief",
     ),
-    sa.Index("ix_netbeheerder_tarief_open", "netbeheerder_code", "energie_type", "klanttype", "tarieftype", "tariefdetail",
+    sa.Index("ix_netbeheerder_tarief_open", "netbeheerder_code", "energie_type", "klanttype", "tarieftype", "tariefdetail", "tariefnotering",
              unique=True, postgresql_where=sa.text("geldig_tot IS NULL")),
 )
 
@@ -234,7 +259,19 @@ overheidsheffing_accijns_schijf = sa.Table(
     sa.Column("accijns_eur_mwh", sa.Numeric(10, 4), nullable=False),
     sa.Column("bijzondere_accijns_eur_mwh", sa.Numeric(10, 4), nullable=False),
     sa.Column("energiebijdrage_eur_mwh", sa.Numeric(10, 4), nullable=False),
+    # De accijns is een reeks regimes met een ingangsdatum, geen vast bedrag:
+    # gezinnen gingen op 01/08/2026 van 47,4811 naar 46,00 EUR/MWh, terwijl
+    # ondernemingen sinds 2022 op 14,21 staan. Zonder deze kolom slaat de
+    # tabel die regimes plat tot één antwoord voor alle jaren.
+    sa.Column("geldig_vanaf", sa.Date, nullable=False),
+    # False = uit een secundaire bron overgenomen en nog niet tegen vtest.be
+    # of een officiële publicatie gelegd.
+    sa.Column("geverifieerd", sa.Boolean, nullable=False, server_default="false"),
     sa.Column("bron", sa.Text, nullable=False),
+    sa.UniqueConstraint(
+        "energievorm", "klantcategorie", "van_mwh", "geldig_vanaf",
+        name="uq_overheidsheffing_accijns_schijf",
+    ),
 )
 
 overheidsheffing_energiefonds = sa.Table(
@@ -247,6 +284,26 @@ overheidsheffing_energiefonds = sa.Table(
     sa.Column("eur_per_maand", sa.Numeric(10, 2), nullable=False),
     sa.Column("bron", sa.Text, nullable=False),
     sa.UniqueConstraint("jaar", "spanningsniveau", "klantcategorie", name="uq_overheidsheffing_energiefonds"),
+)
+
+# Vervoerstarief van Fluxys: de doorrekening van het vervoersnet op een
+# distributienetaansluiting. Staat in geen VREG-werkboek — die dekken alleen
+# de distributie — en ontbrak daardoor volledig, wat elke gasfactuur ongeveer
+# 25 EUR per jaar te laag maakte.
+nettarief_transport = sa.Table(
+    "nettarief_transport",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("energievorm", sa.Text, nullable=False),
+    sa.Column("klantcategorie", sa.Text, nullable=False),
+    sa.Column("eur_per_kwh", sa.Numeric(12, 8), nullable=False),
+    sa.Column("geldig_vanaf", sa.Date, nullable=False),
+    sa.Column("geverifieerd", sa.Boolean, nullable=False, server_default="false"),
+    sa.Column("bron", sa.Text, nullable=False),
+    sa.UniqueConstraint(
+        "energievorm", "klantcategorie", "geldig_vanaf",
+        name="uq_nettarief_transport",
+    ),
 )
 
 overheidsheffing_btw = sa.Table(

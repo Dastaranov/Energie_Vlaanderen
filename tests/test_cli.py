@@ -212,9 +212,14 @@ def test_run_publish_flow(tmp_path: Path, capsys):
     (staging_vtest / "master_vast.csv").write_text("year;month;segment;energy;direction;supplier;product;product_type;component;price\n2026;8;Woning;electricity;consumption;Supp;Prod;vast;single;30.5\n", encoding="utf-8")
     (staging_vtest / "master_var_dyn.csv").write_text("year;month;segment;energy;direction;supplier;product;product_type;component;price;a;b;c;d;z;index_name_A;index_value_A\n", encoding="utf-8")
 
+    # Publiceren vereist een goedgekeurde versie; `--force` is de bewuste
+    # uitzondering en houdt deze test los van de audit-lifecycle.
     args = argparse.Namespace(
         version=version_id,
         keep_staging=False,
+        force=True,
+        skip_db=True,
+        db_overwrite=False,
         json=True,
     )
 
@@ -228,4 +233,71 @@ def test_run_publish_flow(tmp_path: Path, capsys):
     assert output["staging_removed"] is True
 
     # Controleer dat de actieve versie nu ingesteld is
+    assert paths.current_version() == version_id
+
+
+def test_publish_weigert_een_niet_goedgekeurde_versie(tmp_path: Path):
+    """`audit approve` schreef een status die niets afdwong.
+
+    Publish raadpleegde ApprovalManager niet, waardoor een versie in
+    quarantaine gewoon actief kon worden.
+    """
+    version_id = "20260820T120000Z-1234abcd"
+    settings = Settings(project_root=tmp_path, data_root=tmp_path / "data")
+    paths = DataPaths.from_settings(settings)
+    paths.ensure()
+    staging_vtest = paths.staging_dir(version_id) / "vtest"
+    staging_vtest.mkdir(parents=True)
+    (staging_vtest / "master_vast.csv").write_text(
+        "year;month;segment;energy;direction;supplier;product;product_type;component;price\n"
+        "2026;8;Woning;electricity;consumption;Supp;Prod;vast;single;30.5\n",
+        encoding="utf-8",
+    )
+
+    args = argparse.Namespace(
+        version=version_id,
+        keep_staging=False,
+        force=False,
+        skip_db=True,
+        db_overwrite=False,
+        json=False,
+    )
+
+    assert run_publish(args, settings) == 2
+    # Niets geactiveerd, niets gekopieerd.
+    assert paths.current_version() is None
+    assert not paths.version_dir(version_id).exists()
+
+
+def test_publish_werkt_na_goedkeuring(tmp_path: Path):
+    from energie_vlaanderen.audit.manager import ApprovalManager
+
+    version_id = "20260820T120000Z-1234abcd"
+    settings = Settings(project_root=tmp_path, data_root=tmp_path / "data")
+    paths = DataPaths.from_settings(settings)
+    paths.ensure()
+    staging_vtest = paths.staging_dir(version_id) / "vtest"
+    staging_vtest.mkdir(parents=True)
+    (staging_vtest / "master_vast.csv").write_text(
+        "year;month;segment;energy;direction;supplier;product;product_type;component;price\n"
+        "2026;8;Woning;electricity;consumption;Supp;Prod;vast;single;30.5\n",
+        encoding="utf-8",
+    )
+    (staging_vtest / "master_var_dyn.csv").write_text(
+        "year;month;segment;energy;direction;supplier;product;product_type;"
+        "component;price;a;b;c;d;z;index_name_A;index_value_A\n",
+        encoding="utf-8",
+    )
+    ApprovalManager(paths).approve(version_id, notes="test")
+
+    args = argparse.Namespace(
+        version=version_id,
+        keep_staging=False,
+        force=False,
+        skip_db=True,
+        db_overwrite=False,
+        json=False,
+    )
+
+    assert run_publish(args, settings) == 0
     assert paths.current_version() == version_id

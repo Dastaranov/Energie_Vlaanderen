@@ -68,8 +68,6 @@ class VTestPipeline:
         )
 
         if normalized.errors:
-            # Tijdelijk verwijderen
-            '''
             examples = "\n".join(
                 (
                     f"- {issue.source_sheet}:"
@@ -78,10 +76,10 @@ class VTestPipeline:
                 )
                 for issue in normalized.errors[:20]
             )
-            '''
             raise VTestPipelineError(
                 "Normalisatie bevat "
-                f"{len(normalized.errors)} fouten."
+                f"{len(normalized.errors)} fouten. "
+                f"Eerste 20 voorbeelden:\n{examples}"
             )
         
         validation = self.validator.validate(
@@ -123,13 +121,23 @@ class VTestPipeline:
         version_id: str,
     ) -> VTestPipelineResult:
         target = destination / "vtest"
-        if target.exists():
-            raise VTestPipelineError(f"V-test stagingmap bestaat al: {target}")
-
-        target.mkdir(parents=True, exist_ok=False)
         fixed_csv = target / "master_vast.csv"
         variable_csv = target / "master_var_dyn.csv"
         report_json = target / "pipeline_report.json"
+
+        # De map zelf mag al bestaan: `staging refine` schrijft zijn
+        # scrape-resultaten in dezelfde vtest-map, en die mogen niet verloren
+        # gaan bij een herparse. Wat níet overschreven mag worden zonder dat
+        # de caller er expliciet om vroeg, zijn de parse-outputs zelf — de
+        # caller ruimt die op voor hij ons aanroept.
+        bestaand = [pad for pad in (fixed_csv, variable_csv, report_json) if pad.exists()]
+        if bestaand:
+            namen = ", ".join(pad.name for pad in bestaand)
+            raise VTestPipelineError(
+                f"V-test parse-output bestaat al in {target}: {namen}."
+            )
+
+        target.mkdir(parents=True, exist_ok=True)
 
         try:
             self._write_frame(normalized.fixed, fixed_csv)

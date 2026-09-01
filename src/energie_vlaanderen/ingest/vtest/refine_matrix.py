@@ -47,6 +47,7 @@ class VTestRefineMatrixResult:
     products_csv: Path
     components_csv: Path
     totaal_producten: int
+    verdachte_combinaties: tuple[str, ...] = ()
 
 
 def representatieve_postcodes(dnb_csv_path: Path) -> dict[str, str]:
@@ -81,6 +82,7 @@ class VTestRefineMatrix:
         browser: str = "chrome",
         timeout: int = 60,
         pause_seconds: float = DEFAULT_PAUZE_SECONDEN,
+        met_contractdetails: bool = False,
     ) -> VTestRefineMatrixResult:
         postcodes = postcodes or representatieve_postcodes(dnb_csv_path)
 
@@ -92,10 +94,59 @@ class VTestRefineMatrix:
         ]
         LOG.info("Matrix: %d combinaties (segment x energie x DNB).", len(combinaties))
 
+        # Detecteer bestaande per-combinatie bestanden om resume mogelijk te maken
         geslaagd: list[VTestRefinePipelineResult] = []
         fouten: list[VTestMatrixFout] = []
+        overgeslagen = 0
+
+        # Eén verzameling over de hele matrix heen: de tariefkaart- en
+        # voorwaardenlinks zijn producteigenschappen en verschillen niet per
+        # postcode. Dezelfde contracten komen bij elke postcode terug, dus
+        # delen scheelt honderden kliks.
+        contractdetails: dict[str, dict[str, str]] | None = (
+            {} if met_contractdetails else None
+        )
 
         for i, (segment, energy, dnb_code, postcode) in enumerate(combinaties):
+            stem = f"{segment}_{energy}_{postcode}"
+            vtest_dir = staging_dir / "vtest"
+            products_csv = vtest_dir / f"vtest_products_{stem}.csv"
+
+            # Skip als al eerder succesvol gedaan
+            if products_csv.is_file():
+                LOG.info(
+                    "[%d/%d] segment=%s energie=%s dnb=%s postcode=%s (al gedaan, overgeslagen)",
+                    i + 1, len(combinaties), segment, energy, dnb_code, postcode,
+                )
+                # Reconstructeer VTestRefinePipelineResult van bestaande bestanden
+                components_csv = vtest_dir / f"vtest_product_components_{stem}.csv"
+                try:
+                    bestaand = pd.read_csv(products_csv, sep=";", encoding="utf-8-sig")
+                except (OSError, ValueError, pd.errors.ParserError) as exc:
+                    # Onleesbaar bestand: opnieuw scrapen is beter dan de
+                    # combinatie stil te laten wegvallen uit de matrix.
+                    LOG.warning(
+                        "Bestaande %s niet leesbaar (%s) — combinatie wordt opnieuw gescrapet.",
+                        products_csv.name, exc,
+                    )
+                else:
+                    geslaagd.append(
+                        VTestRefinePipelineResult(
+                            version_id=version_id,
+                            directory=vtest_dir,
+                            segment=segment,
+                            energy=energy,
+                            postcode=postcode,
+                            products_csv=products_csv,
+                            components_csv=components_csv,
+                            dump_html=vtest_dir / f"vtest_dump_{stem}.html",
+                            products_found=len(bestaand),
+                            scraped_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    overgeslagen += 1
+                    continue
+
             LOG.info(
                 "[%d/%d] segment=%s energie=%s dnb=%s postcode=%s ...",
                 i + 1, len(combinaties), segment, energy, dnb_code, postcode,
@@ -112,6 +163,7 @@ class VTestRefineMatrix:
                     headless=headless,
                     browser=browser,
                     timeout=timeout,
+                    contractdetails=contractdetails,
                 )
                 geslaagd.append(result)
             except Exception as exc:  # noqa: BLE001 — één mislukte combinatie mag de rest niet blokkeren
@@ -123,6 +175,12 @@ class VTestRefineMatrix:
 
             if i < len(combinaties) - 1:
                 time.sleep(pause_seconds)
+
+        verdacht = self._verdachte_combinaties(
+            geslaagd, self.verwachte_aantallen(staging_dir / "vtest")
+        )
+        for melding in verdacht:
+            LOG.warning("Mogelijk onvolledig: %s", melding)
 
         vtest_dir = staging_dir / "vtest"
         products_csv, components_csv, totaal = self._merge(vtest_dir, geslaagd)
@@ -136,7 +194,126 @@ class VTestRefineMatrix:
             products_csv=products_csv,
             components_csv=components_csv,
             totaal_producten=totaal,
+            verdachte_combinaties=tuple(verdacht),
         )
+
+    @staticmethod
+    def verwachte_aantallen(vtest_dir: Path) -> dict[tuple[str, str], int]:
+        """Hoeveel producten de bulk-export voor de laatste maand kent.
+
+        De scrape en de export zijn twee onafhankelijke bronnen voor dezelfde
+        markt, dus de export geeft een absolute ondergrens waar de onderlinge
+        vergelijking van postcodes er geen heeft. Dat verschil telt: bij de run
+        van 2026-09-01 waren álle acht onderneming/gas-combinaties afgekapt tot
+        10 producten terwijl de export er 66 actief telt — uniform, dus
+        onderling vergelijken zag niets.
+
+        Geeft een lege dict als de master-CSV's er nog niet zijn; de
+        matrixrun mag daar niet op stuklopen.
+        """
+        rijen: list[dict[str, str]] = []
+        for naam in ("master_vast.csv", "master_var_dyn.csv"):
+            pad = vtest_dir / naam
+            if not pad.is_file():
+                continue
+            try:
+                frame = pd.read_csv(pad, sep=";", dtype=str, encoding="utf-8-sig")
+            except (OSError, ValueError, pd.errors.ParserError) as exc:
+                LOG.warning("Kon %s niet lezen voor de volledigheidscontrole: %s", naam, exc)
+                continue
+            rijen.extend(frame.fillna("").to_dict("records"))
+
+        if not rijen:
+            return {}
+
+        def periode(rij: dict[str, str]) -> tuple[int, int]:
+            try:
+                return int(rij.get("year") or 0), int(rij.get("month") or 0)
+            except ValueError:
+                return 0, 0
+
+        laatste = max(periode(r) for r in rijen)
+        per_groep: dict[tuple[str, str], set] = {}
+        for rij in rijen:
+            if periode(rij) != laatste or rij.get("direction") != "Afname":
+                continue
+            sleutel = (
+                (rij.get("segment") or "").lower(),
+                (rij.get("energy") or "").lower(),
+            )
+            per_groep.setdefault(sleutel, set()).add(
+                (rij.get("supplier"), rij.get("product"), rij.get("product_type"))
+            )
+        return {k: len(v) for k, v in per_groep.items()}
+
+    @staticmethod
+    def _verdachte_combinaties(
+        resultaten: list[VTestRefinePipelineResult],
+        verwacht: dict[tuple[str, str], int] | None = None,
+    ) -> list[str]:
+        """Meld combinaties die veel minder producten opleverden dan hun buren.
+
+        vtest.be laadt de resultatenlijst lui bij. Stopt het scrollen te vroeg,
+        dan levert de combinatie een afgekapte lijst op — zonder dat er iets
+        misgaat: de run "slaagt" en de matrix meldt 32/32. Bij de run van
+        2026-09-01 gaven zeven van de acht onderneming/elektriciteit-postcodes
+        precies 20 producten tegenover 97 bij de achtste.
+
+        Het aanbod verschilt nauwelijks per netbeheerder — gemeten over de
+        volledige matrix waren 120 van de 123 woningcontracten in alle acht
+        postcodes aanwezig — dus een combinatie die er veel minder oplevert dan
+        de mediaan van haar groep is verdacht, niet regionaal.
+        """
+        per_groep: dict[tuple[str, str], list[VTestRefinePipelineResult]] = {}
+        for resultaat in resultaten:
+            per_groep.setdefault((resultaat.segment, resultaat.energy), []).append(
+                resultaat
+            )
+
+        verwacht = verwacht or {}
+        meldingen: list[str] = []
+
+        # Eerst de absolute toets: de bulk-export weet onafhankelijk van de
+        # scrape hoeveel producten er zijn. Zonder die maatstaf blijft een
+        # groep die in haar geheel afgekapt is onzichtbaar.
+        for (segment, energy), groep in sorted(per_groep.items()):
+            drempel = verwacht.get((segment, energy))
+            if not drempel:
+                continue
+            hoogste = max(r.products_found for r in groep)
+            # 60% van de export: de twee bronnen tellen niet identiek — bij de
+            # gezonde combinaties lag de scrape op 93 tot 100% — maar een
+            # afgekapte lijst zit er ver onder (15 tot 19%).
+            if hoogste < drempel * 0.6:
+                meldingen.append(
+                    f"{segment}/{energy}: hoogstens {hoogste} producten "
+                    f"gescrapet terwijl de bulk-export er {drempel} actief "
+                    "telt — de resultatenlijst is vermoedelijk in álle "
+                    "postcodes afgekapt."
+                )
+
+        for (segment, energy), groep in sorted(per_groep.items()):
+            if len(groep) < 3:
+                continue
+            # Afzetten tegen het hoogste aantal, niet tegen de mediaan. Bij de
+            # run van 2026-09-01 waren zeven van de acht combinaties afgekapt;
+            # de mediaan volgde dan de fout en verklaarde de énige volledige
+            # run tot uitschieter. Omdat het aanbod nauwelijks per netbeheerder
+            # verschilt, is het hoogste aantal de beste schatting van wat er
+            # werkelijk te halen viel.
+            hoogste = max(r.products_found for r in groep)
+            if hoogste == 0:
+                continue
+            for resultaat in groep:
+                if resultaat.products_found < hoogste * 0.75:
+                    meldingen.append(
+                        f"{segment}/{energy}/{resultaat.postcode}: "
+                        f"{resultaat.products_found} producten tegenover "
+                        f"{hoogste} bij de best geladen postcode in deze groep "
+                        "— de resultatenlijst is vermoedelijk niet volledig "
+                        "ingeladen."
+                    )
+        return meldingen
 
     @staticmethod
     def _merge(

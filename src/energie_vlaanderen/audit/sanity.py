@@ -99,11 +99,28 @@ class SanityChecker:
                     ))
 
     def _check_tariffs(self, tariffs_dir: Path, violations: list[SanityViolation]) -> None:
-        for filename in ["tariffs_afname.csv", "tariffs_injectie.csv"]:
-            file_path = tariffs_dir / filename
-            if not file_path.exists():
-                continue
-                
+        # De pipeline schrijft per energievorm: tariffs_electricity_afname.csv,
+        # tariffs_gas_afname.csv, tariffs_electricity_hoogspanning.csv, ...
+        # Er werd hier gezocht naar "tariffs_afname.csv" en
+        # "tariffs_injectie.csv" — namen die de pipeline nooit gebruikt heeft.
+        # Gevolg: deze controle sloeg stil over en de sanity check meldde
+        # "geslaagd" zonder één tariefrij bekeken te hebben. Globben in plaats
+        # van een vaste lijst houdt dat ook vol als er een energievorm bijkomt.
+        bestanden = sorted(tariffs_dir.glob("tariffs_*.csv"))
+        if not bestanden:
+            violations.append(SanityViolation(
+                file=tariffs_dir.name,
+                rule="Tariefdata ontbreekt",
+                message=(
+                    "De tarieven-stagingmap bestaat maar bevat geen enkele "
+                    "tariffs_*.csv — er valt hier niets te controleren."
+                ),
+                row_index=None,
+            ))
+            return
+
+        for file_path in bestanden:
+            filename = file_path.name
             df = pd.read_csv(file_path, sep=";")
             if "Prijs_num" in df.columns:
                 # RECHTSREGEL 3: Netwerktarieven zijn in principe nooit negatief

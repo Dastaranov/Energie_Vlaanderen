@@ -1,77 +1,114 @@
 # Bijzondere accijns en energiebijdrage op elektriciteit (GN-code 2716).
 #
-# Bron: art. 39 van de programmawet van 25 december 2021 (wijzigt art. 419,
-# punt k), van de wet van 22 december 2009 houdende diverse bepalingen inzake
-# accijnzen), B.S. 31/12/2021.
-# https://www.ejustice.just.fgov.be/cgi/article_body.pl?language=nl&pub_date=2021-12-31&caller=summary&numac=2021043625
-# Lokale kopie van de wettekst: docs/tarief bijzonder accijns.md
+# Eenheid: EUR per MWh jaarverbruik, EXCLUSIEF btw, degressief per
+# verbruiksschijf. Let op bij het vergelijken met persberichten: die noemen
+# doorgaans het bedrag INCLUSIEF 6% btw (48,76 EUR/MWh voor 2026 = 46,00
+# exclusief).
 #
-# Eenheid: EUR per MWh jaarverbruik, degressief per verbruiksschijf.
+# WAAROM DEZE TABEL EEN TIJDSAS HEEFT
+# -----------------------------------
+# Tot augustus 2026 stond hier één tabel zonder ingangsdatum, met de
+# basiswaarden uit de programmawet van 25/12/2021 (13,60 EUR/MWh voor de
+# eerste residentiële schijf). Die waarden zijn voor gezinnen achterhaald
+# sinds de accijnshervorming van 01/04/2023, die de federale bijdrage in de
+# bijzondere accijns opnam en het tarief ruim verdrievoudigde. De oude tabel
+# onderschatte de heffingen op een gemiddeld gezinsverbruik (3.434 kWh) met
+# ongeveer 105 EUR per jaar.
 #
-# LET OP: dit zijn de wettelijke basiswaarden uit de programmawet van 2021.
-# Latere indexeringen of hervormingen (bv. ongeverifieerde berichtgeving
-# medio 2026 over een geleidelijke hervorming van de bijzondere accijns
-# tussen 2026 en 2029) zijn hier NIET geverifieerd verwerkt. Periodiek
-# herbevestigen tegen een actuele officiële bron — zie docs/manifest.md §14
-# "Openstaande validaties".
+# Die hervorming gold ENKEL voor residentiële afnemers. Voor ondernemingen
+# bleven de tarieven van 2021 gelden — daar was de oude tabel dus correct.
+# Beide categorieën hebben daarom hun eigen tijdlijn, en een cijfer uit de
+# ene categorie naar de andere overzetten is een fout.
 #
-# Aardgas wordt door deze bron niet gedekt (art. 39 regelt enkel GN-code
-# 2716 = elektriciteit) — aardgas-heffingen zijn nog een open backlog-item.
+# HOE DE HUIDIGE CIJFERS GECONTROLEERD ZIJN
+# -----------------------------------------
+# Het regime vanaf 01/08/2026 is niet overgeschreven maar teruggerekend uit
+# vtest.be zelf, met `energievergelijker staging calibrate`: hetzelfde
+# profiel bij zeven verschillende jaarverbruiken opvragen en de bedragen uit
+# VREG's eigen kostenopbouw (`data-productinvoicestring`) tegen het verbruik
+# uitzetten. De kostenfunctie bleek perfect lineair van 1.000 tot 25.000 kWh
+# met helling 46,000000 EUR/MWh, residu 0,00 EUR. Er is in dat bereik dus
+# geen schijfovergang voor residentiële afnemers, ondanks de wettelijke
+# grenzen op 3 en 20 MWh — de tarieven van die schijven vallen samen.
+#
+# Bevestigd door twee onafhankelijke secundaire bronnen die 48,76 EUR/MWh
+# incl. btw voor 2026 noemen (Infor GazElec, Selectra), wat exact 46,00
+# exclusief is.
+#
+# NOG NIET GEDEKT
+# ---------------
+# - Periodes vóór 01/07/2023. De repository weigert die datums met een
+#   HeffingenError in plaats van een verkeerd cijfer terug te geven.
+# - De verdere daling die de programmawet van 2026 vastlegt (45,58 EUR/MWh
+#   incl. btw in 2027, 42,40 in 2028, 40,28 in 2029). Bewust nog niet
+#   opgenomen: die bedragen komen uit secundaire bronnen en de exacte
+#   ingangsdata en schijfindeling zijn niet geverifieerd. Zodra vtest.be het
+#   nieuwe regime toont, haalt `staging calibrate` ze op.
+# - Voor "zakelijk_laagspanning" zijn de eerste twee schijven en hun grens
+#   bevestigd. De schijven boven 50 MWh liggen buiten wat op vtest.be te
+#   meten valt (het formulier aanvaardt zulke verbruiken wel, maar de
+#   resultatenlijst wordt dan leeg).
+# - De categorie "zakelijk_hoogspanning" is hier weggevallen. Ze stond er met
+#   de 2021-basiswaarden en er is geen bron om ze mee te bevestigen. De
+#   Calculator gebruikt enkel laagspanning (manifest §7.2/§12), dus een
+#   berekening die deze categorie nodig heeft, hoort te stoppen — niet stil
+#   verder te rekenen.
 
 energievorm = "elektriciteit"
-bron = "Programmawet 25 december 2021, art. 39 (B.S. 31/12/2021)"
+bron = "vtest.be (kalibratie 2026-08-31) + programmawet 19/03/2023 en 2026"
 
-# --- Niet-zakelijk gebruik (art. 419 k) 2.) — enkel laagspanning ---
+# --- Niet-zakelijk gebruik (residentieel), laagspanning ---
+#
+# Regime sinds de hervorming van 01/07/2023: schijf 1 (0-3 MWh) en schijf 2
+# (3-20 MWh) kregen toen hetzelfde tarief, waardoor de heffing in het hele
+# huishoudelijke bereik vlak is.
 
 [[schijf]]
 klantcategorie = "niet_zakelijk"
 van_mwh = "0"
-tot_mwh = "20"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "13.60"
-energiebijdrage_eur_mwh = "1.9261"
-
-[[schijf]]
-klantcategorie = "niet_zakelijk"
-van_mwh = "20"
-tot_mwh = "50"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "11.58"
-energiebijdrage_eur_mwh = "1.9261"
-
-[[schijf]]
-klantcategorie = "niet_zakelijk"
-van_mwh = "50"
-tot_mwh = "1000"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "10.90"
-energiebijdrage_eur_mwh = "1.9261"
-
-[[schijf]]
-klantcategorie = "niet_zakelijk"
-van_mwh = "1000"
-tot_mwh = "25000"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "10.23"
-energiebijdrage_eur_mwh = "1.9261"
-
-[[schijf]]
-klantcategorie = "niet_zakelijk"
-van_mwh = "25000"
-tot_mwh = "100000"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "2.40"
-energiebijdrage_eur_mwh = "1.9261"
-
-[[schijf]]
-klantcategorie = "niet_zakelijk"
-van_mwh = "100000"
 tot_mwh = ""
 accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "1.00"
-energiebijdrage_eur_mwh = "1.9261"
+bijzondere_accijns_eur_mwh = "47.4811"
+energiebijdrage_eur_mwh = "0"
+geldig_vanaf = "2023-07-01"
+geverifieerd = false
+bron = "Mega/Luminus tariefoverzichten hervorming 2023 (secundaire bron)"
 
-# --- Zakelijk gebruik, aansluiting ≤1kV = laagspanning (art. 419 k) 1.b) ---
+[[schijf]]
+klantcategorie = "niet_zakelijk"
+van_mwh = "0"
+tot_mwh = ""
+accijns_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "46.0000"
+energiebijdrage_eur_mwh = "0"
+geldig_vanaf = "2026-08-01"
+geverifieerd = true
+bron = "vtest.be kalibratie 2026-08-31, postcode 9120, 7 verbruikspunten, residu 0,00 EUR"
+
+# --- Zakelijk gebruik, aansluiting <= 1 kV (laagspanning) ---
+#
+# LET OP: de hervorming van 2023 gold ENKEL voor residentiële afnemers — de
+# leverancierspagina's heten letterlijk "Hervorming van de bijzondere accijns
+# voor residentiële klanten". Ondernemingen bleven op de tarieven uit de
+# programmawet van 25/12/2021 staan, en ook de energiebijdrage van
+# 1,9261 EUR/MWh blijft voor hen gelden.
+#
+# Gekalibreerd op vtest.be, segment "onderneming", postcode 9120, zeven
+# verbruikspunten. De eerste twee schijven en de grens ertussen zijn daarmee
+# exact vastgelegd — alle zeven gemeten bedragen worden tot op de eurocent
+# gereproduceerd door 14,21 EUR/MWh tot 20 MWh en 12,09 daarboven:
+#
+#     1.000 kWh ->  14,21 EUR      19.500 kWh -> 277,10 EUR
+#     2.900 kWh ->  41,21 EUR      20.500 kWh -> 290,24 EUR
+#     6.000 kWh ->  85,26 EUR      25.000 kWh -> 344,65 EUR
+#
+# De energiebijdrage van 1,9261 EUR/MWh loopt daar vlak doorheen (geen
+# schijven) en het Energiefonds bedroeg 120,84 EUR/jaar — exact 10,07 x 12
+# uit bijdrage_energiefonds.toml.
+#
+# Er is dus maar één regime voor deze categorie: dat van 2022. De grens van
+# 2023-07-01 die voor de residentiële tabel geldt, bestaat hier niet, en de
+# energiebijdrage is voor ondernemingen niet afgeschaft.
 
 [[schijf]]
 klantcategorie = "zakelijk_laagspanning"
@@ -80,6 +117,9 @@ tot_mwh = "20"
 accijns_eur_mwh = "0"
 bijzondere_accijns_eur_mwh = "14.21"
 energiebijdrage_eur_mwh = "1.9261"
+geldig_vanaf = "2022-01-01"
+geverifieerd = true
+bron = "Programmawet 25/12/2021 art. 39; vtest.be kalibratie 2026-08-31, 7 verbruikspunten, alle bedragen exact gereproduceerd"
 
 [[schijf]]
 klantcategorie = "zakelijk_laagspanning"
@@ -88,6 +128,9 @@ tot_mwh = "50"
 accijns_eur_mwh = "0"
 bijzondere_accijns_eur_mwh = "12.09"
 energiebijdrage_eur_mwh = "1.9261"
+geldig_vanaf = "2022-01-01"
+geverifieerd = true
+bron = "Programmawet 25/12/2021 art. 39; vtest.be kalibratie 2026-08-31 bevestigde zowel het tarief als de grens op 20 MWh"
 
 [[schijf]]
 klantcategorie = "zakelijk_laagspanning"
@@ -96,6 +139,9 @@ tot_mwh = "1000"
 accijns_eur_mwh = "0"
 bijzondere_accijns_eur_mwh = "11.39"
 energiebijdrage_eur_mwh = "1.9261"
+geldig_vanaf = "2022-01-01"
+geverifieerd = false
+bron = "Programmawet 25/12/2021 art. 39"
 
 [[schijf]]
 klantcategorie = "zakelijk_laagspanning"
@@ -104,6 +150,9 @@ tot_mwh = "25000"
 accijns_eur_mwh = "0"
 bijzondere_accijns_eur_mwh = "10.69"
 energiebijdrage_eur_mwh = "1.9261"
+geldig_vanaf = "2022-01-01"
+geverifieerd = false
+bron = "Programmawet 25/12/2021 art. 39"
 
 [[schijf]]
 klantcategorie = "zakelijk_laagspanning"
@@ -112,6 +161,9 @@ tot_mwh = "100000"
 accijns_eur_mwh = "0"
 bijzondere_accijns_eur_mwh = "2.73"
 energiebijdrage_eur_mwh = "1.9261"
+geldig_vanaf = "2022-01-01"
+geverifieerd = false
+bron = "Programmawet 25/12/2021 art. 39"
 
 [[schijf]]
 klantcategorie = "zakelijk_laagspanning"
@@ -120,55 +172,6 @@ tot_mwh = ""
 accijns_eur_mwh = "0"
 bijzondere_accijns_eur_mwh = "0.50"
 energiebijdrage_eur_mwh = "1.9261"
-
-# --- Zakelijk gebruik, aansluiting >1kV = midden-/hoogspanning
-# (art. 419 k) 1.a) — data-only, (nog) niet aan de Calculator gekoppeld,
-# zelfde voorbehoud als de hoogspanning-tariefdata uit Fase 1. ---
-
-[[schijf]]
-klantcategorie = "zakelijk_hoogspanning"
-van_mwh = "0"
-tot_mwh = "20"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "14.21"
-energiebijdrage_eur_mwh = "0"
-
-[[schijf]]
-klantcategorie = "zakelijk_hoogspanning"
-van_mwh = "20"
-tot_mwh = "50"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "12.09"
-energiebijdrage_eur_mwh = "0"
-
-[[schijf]]
-klantcategorie = "zakelijk_hoogspanning"
-van_mwh = "50"
-tot_mwh = "1000"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "11.39"
-energiebijdrage_eur_mwh = "0"
-
-[[schijf]]
-klantcategorie = "zakelijk_hoogspanning"
-van_mwh = "1000"
-tot_mwh = "25000"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "10.69"
-energiebijdrage_eur_mwh = "0"
-
-[[schijf]]
-klantcategorie = "zakelijk_hoogspanning"
-van_mwh = "25000"
-tot_mwh = "100000"
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "2.73"
-energiebijdrage_eur_mwh = "0"
-
-[[schijf]]
-klantcategorie = "zakelijk_hoogspanning"
-van_mwh = "100000"
-tot_mwh = ""
-accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "0.50"
-energiebijdrage_eur_mwh = "0"
+geldig_vanaf = "2022-01-01"
+geverifieerd = false
+bron = "Programmawet 25/12/2021 art. 39"

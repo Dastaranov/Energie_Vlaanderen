@@ -51,6 +51,9 @@ class VTestHtmlDownloader:
         headless: bool = True,
         browser: str = "chrome",
         timeout: int = 60,
+        force_eigen_verbruik: bool = False,
+        contractdetails: dict[str, dict[str, str]] | None = None,
+        reeds_gekend: set[str] | None = None,
     ) -> str:
         """Navigeer naar vtest.be, vul het formulier in en retourneer de volledige HTML.
 
@@ -65,6 +68,22 @@ class VTestHtmlDownloader:
         met Gert: 15.000 kWh elektriciteit / 10.000 kWh gas als vast
         representatief KMO-profiel — de exacte waarde is hier niet kritiek,
         enkel bepalend voor welke prijs vtest.be per contract berekent.
+
+        `contractdetails`: geef een dict mee om de tariefkaart- en
+        voorwaardenlinks te laten verzamelen. Die staan niet op de
+        resultatenpagina — vtest.be laadt ze pas bij een klik op "Meer
+        details" — dus ze zijn niet uit een HTML-dump te halen. De dict wordt
+        gevuld met contract-id -> {tariefkaart, voorwaarden, leverancier}.
+        `reeds_gekend` slaat contracten over die al opgehaald zijn; over een
+        volledige matrix scheelt dat honderden kliks, want dezelfde contracten
+        komen bij elke postcode terug.
+
+        `force_eigen_verbruik`: forceer tab2 ("Ik ken mijn verbruik") ook voor
+        segment "woning". Nodig voor de kalibratieruns
+        (`ingest.vtest.calibration`), die de heffingen- en nettariefformules
+        terugrekenen door hetzelfde postcode-profiel bij verschillende
+        verbruiken op te vragen. Bij normale refine-runs blijft dit False,
+        zodat vtest.be zijn eigen schattingsprofiel gebruikt.
         """
         try:
             from selenium import webdriver
@@ -177,40 +196,6 @@ class VTestHtmlDownloader:
             except Exception as exc:
                 LOG.warning("Klantsegment (%s) instellen mislukt: %s", segment_id, exc)
 
-            # Verplichte stap "Ken je je verbruik?" — zonder deze keuze
-            # blijft de submitknop onzichtbaar. "Ik ken mijn verbruik niet"
-            # (tab1) gebruikt VREG's eigen schattingsprofiel, maar is
-            # uitgeschakeld voor segment "onderneming" ("Voor een onderneming
-            # moet je het verbruik invullen.") — daar kiezen we tab2
-            # ("Ik ken mijn verbruik") en vullen we het representatieve
-            # jaarverbruik in.
-            try:
-                tab1 = driver.find_element(By.ID, "tab1")
-                if tab1.get_property("disabled"):
-                    LOG.info(
-                        "'Ik ken mijn verbruik niet' uitgeschakeld voor segment '%s' — "
-                        "vul representatief verbruik in (%s kWh elek, %s kWh gas).",
-                        segment, kwh_elektriciteit, kwh_gas,
-                    )
-                    tab2 = driver.find_element(By.ID, "tab2")
-                    driver.execute_script("arguments[0].click();", tab2)
-                    time.sleep(0.5)
-                    for veld_id, waarde in (
-                        ("UsageDay", kwh_elektriciteit),
-                        ("UsageGas", kwh_gas),
-                    ):
-                        try:
-                            veld = driver.find_element(By.ID, veld_id)
-                            veld.clear()
-                            veld.send_keys(str(waarde))
-                        except NoSuchElementException as exc:
-                            LOG.warning("Verbruikveld %s invullen mislukt: %s", veld_id, exc)
-                elif not tab1.is_selected():
-                    driver.execute_script("arguments[0].click();", tab1)
-            except NoSuchElementException as exc:
-                LOG.warning("Verbruik-stap mislukt: %s", exc)
-            time.sleep(0.5)
-
             # Energietype: beide checkboxes staan standaard aan; vink de
             # ongewenste uit.
             gewenst_id = "EnergyTypeElectricity" if energy == "elektriciteit" else "EnergyTypeGas"
@@ -224,6 +209,82 @@ class VTestHtmlDownloader:
                     driver.execute_script("arguments[0].click();", ongewenst)
             except Exception as exc:
                 LOG.warning("Energietype (%s) instellen mislukt: %s", energy, exc)
+
+            # Verplichte stap "Ken je je verbruik?" — zonder deze keuze
+            # blijft de submitknop onzichtbaar. "Ik ken mijn verbruik niet"
+            # (tab1) gebruikt VREG's eigen schattingsprofiel, maar is
+            # uitgeschakeld voor segment "onderneming" ("Voor een onderneming
+            # moet je het verbruik invullen.") — daar kiezen we tab2
+            # ("Ik ken mijn verbruik") en vullen we het representatieve
+            # jaarverbruik in.
+            try:
+                tab1 = driver.find_element(By.ID, "tab1")
+                if tab1.get_property("disabled") or force_eigen_verbruik:
+                    LOG.info(
+                        "Eigen verbruik invullen voor segment '%s' "
+                        "(%s kWh elek, %s kWh gas).",
+                        segment, kwh_elektriciteit, kwh_gas,
+                    )
+                    tab2 = driver.find_element(By.ID, "tab2")
+                    driver.execute_script("arguments[0].click();", tab2)
+                    time.sleep(0.5)
+                    # Enkelvoudige digitale meter, geen zonnepanelen, geen
+                    # gekend aansluitvermogen — zo hangt de factuur enkel van
+                    # UsageDay/UsageGas af. Dat is wat de kalibratie nodig
+                    # heeft om de heffingen- en nettariefformules te isoleren;
+                    # voor "onderneming" was dit al impliciet het geval.
+                    for radio_id in ("KnownMeterDigital", "KnownMeterCountSimple"):
+                        try:
+                            el = driver.find_element(By.ID, radio_id)
+                            if not el.is_selected():
+                                driver.execute_script("arguments[0].click();", el)
+                        except NoSuchElementException:
+                            pass
+                    for check_id in ("HasSolarPanels", "KnowsCapacityElectricity"):
+                        try:
+                            el = driver.find_element(By.ID, check_id)
+                            if el.is_selected():
+                                driver.execute_script("arguments[0].click();", el)
+                        except NoSuchElementException:
+                            pass
+                    time.sleep(0.3)
+                    # De verbruikvelden hangen aan een invoermasker dat de
+                    # duizendtalpunten zet ("1.000"). Dat masker slikt
+                    # send_keys-toetsaanslagen: het veld blijft leeg en
+                    # vtest.be weigert dan te submitten met "Dit is een
+                    # verplicht veld!". Waarde rechtstreeks zetten en de
+                    # input/change/blur-events zelf vuren werkt wel.
+                    for veld_id, waarde in (
+                        ("UsageDay", kwh_elektriciteit),
+                        ("UsageGas", kwh_gas),
+                    ):
+                        try:
+                            veld = driver.find_element(By.ID, veld_id)
+                        except NoSuchElementException as exc:
+                            LOG.warning("Verbruikveld %s niet gevonden: %s", veld_id, exc)
+                            continue
+                        if not veld.is_displayed():
+                            # Hoort bij het niet-gekozen energietype.
+                            continue
+                        driver.execute_script(
+                            "arguments[0].value = arguments[1];"
+                            "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));"
+                            "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));"
+                            "arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));",
+                            veld,
+                            str(waarde),
+                        )
+                        if not driver.find_element(By.ID, veld_id).get_attribute("value"):
+                            LOG.warning(
+                                "Verbruikveld %s bleef leeg na invullen (%s) — "
+                                "vtest.be zal de submit weigeren.",
+                                veld_id, waarde,
+                            )
+                elif not tab1.is_selected():
+                    driver.execute_script("arguments[0].click();", tab1)
+            except NoSuchElementException as exc:
+                LOG.warning("Verbruik-stap mislukt: %s", exc)
+            time.sleep(0.5)
 
             # Submit-knop zoeken en klikken
             btn = None
@@ -272,12 +333,19 @@ class VTestHtmlDownloader:
                     "Controleer of vtest.be bereikbaar is."
                 ) from exc
 
-            # Alle resultaten in beeld scrollen
+            # Alle resultaten in beeld scrollen.
+            #
+            # De lijst laadt lui bij. Met drie ronden geduld van één seconde
+            # stopte het scrollen soms al na de eerste 20 resultaten: bij de
+            # matrixrun van 2026-09-01 leverden zeven van de acht
+            # onderneming/elektriciteit-combinaties er precies 20 op, tegenover
+            # 97 bij de combinatie die los gedraaid was. Het aantal
+            # combinaties dat "geslaagd" heette bleef 32.
             last_count = 0
             stable_rounds = 0
-            for _ in range(50):
+            for _ in range(60):
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(1)
+                time.sleep(1.5)
                 for sel in ("button.load-more", "button.more", "button[aria-label*='meer']"):
                     try:
                         for load_btn in driver.find_elements(By.CSS_SELECTOR, sel):
@@ -293,24 +361,144 @@ class VTestHtmlDownloader:
                     stable_rounds = 0
                 else:
                     stable_rounds += 1
-                    if stable_rounds >= 3:
+                    if stable_rounds >= 5:
                         break
 
             LOG.info("HTML-dump klaar (%d resultaten).", last_count)
+
+            if contractdetails is not None:
+                self._verzamel_contractdetails(
+                    driver, contractdetails, reeds_gekend or set()
+                )
+
             return driver.page_source
 
         finally:
             driver.quit()
 
     @staticmethod
+    def _verzamel_contractdetails(
+        driver: object,
+        verzameling: dict[str, dict[str, str]],
+        reeds_gekend: set[str],
+    ) -> None:
+        """Open per contract het detailpaneel en lees de links eruit.
+
+        De tariefkaart en de algemene voorwaarden staan niet op de
+        resultatenpagina; die bevat alleen `href="#"` en `javascript:void(0)`.
+        vtest.be haalt het detailpaneel per contract op via een POST naar
+        /VTest/GetContractDetails, en dat endpoint heeft de zoekopdracht in de
+        sessie nodig — losstaand aanroepen geeft een 500. De klik in de
+        lopende sessie is daarmee de enige weg.
+
+        Contracten die al verzameld zijn worden overgeslagen: de details zijn
+        producteigenschappen en verschillen niet per postcode.
+        """
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        knoppen = driver.find_elements(By.CSS_SELECTOR, "button.toContractDetails")
+        te_doen = [
+            k for k in knoppen
+            if (k.get_attribute("data-contractid") or "")
+            and k.get_attribute("data-contractid") not in reeds_gekend
+            and k.get_attribute("data-contractid") not in verzameling
+        ]
+        LOG.info(
+            "Contractdetails: %d van %d contracten nog op te halen.",
+            len(te_doen), len(knoppen),
+        )
+
+        for index, knop in enumerate(te_doen, start=1):
+            contract_id = knop.get_attribute("data-contractid")
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", knop
+                )
+                driver.execute_script("arguments[0].click();", knop)
+                WebDriverWait(driver, 30).until(
+                    lambda d: d.find_element(
+                        By.ID, "contractDetailsModal"
+                    ).text.strip() != ""
+                )
+                modal = driver.find_element(By.ID, "contractDetailsModal")
+                verzameling[contract_id] = VTestHtmlDownloader._links_uit_modal(modal)
+            except Exception as exc:
+                # Eén onbereikbaar detailpaneel mag de hele run niet kosten;
+                # het ontbrekende contract blijft zichtbaar doordat het niet
+                # in de verzameling staat.
+                LOG.warning(
+                    "Contractdetails voor %s niet opgehaald: %s", contract_id, exc
+                )
+            finally:
+                VTestHtmlDownloader._sluit_modal(driver)
+
+            if index % 25 == 0:
+                LOG.info("Contractdetails: %d/%d ...", index, len(te_doen))
+
+    @staticmethod
+    def _links_uit_modal(modal: object) -> dict[str, str]:
+        from selenium.webdriver.common.by import By
+
+        links: dict[str, str] = {}
+        for anker in modal.find_elements(By.TAG_NAME, "a"):
+            href = anker.get_attribute("href") or ""
+            if not href or href.endswith("#") or "javascript" in href:
+                continue
+            tekst = (anker.text or "").strip().lower()
+            if "tariefkaart" in tekst:
+                links.setdefault("tariefkaart", href)
+            elif "voorwaarden" in tekst:
+                links.setdefault("voorwaarden", href)
+            elif "contract afsluiten" in tekst:
+                links.setdefault("afsluiten", href)
+            elif "leverancier" not in links and "/nl/" in href:
+                links.setdefault("leverancier", href)
+        return links
+
+    @staticmethod
+    def _sluit_modal(driver: object) -> None:
+        from selenium.webdriver.common.by import By
+
+        for sel in (
+            "#contractDetailsModal .btn-close",
+            "#contractDetailsModal [data-bs-dismiss='modal']",
+        ):
+            try:
+                for knop in driver.find_elements(By.CSS_SELECTOR, sel):
+                    if knop.is_displayed():
+                        driver.execute_script("arguments[0].click();", knop)
+                        return
+            except Exception:
+                pass
+        # Terugval: het paneel leegmaken zodat de volgende wacht op nieuwe inhoud.
+        try:
+            driver.execute_script(
+                "var m=document.getElementById('contractDetailsModal');"
+                "if(m){m.innerHTML='';}"
+            )
+        except Exception:
+            pass
+
+    @staticmethod
     def _setup_driver(browser: str, headless: bool) -> object:
         from selenium import webdriver
+
+        # Anti-bot: echte User-Agent gebruiken in plaats van standaard Selenium User-Agent
+        REAL_USER_AGENT = (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
 
         if browser == "firefox":
             from selenium.webdriver.firefox.options import Options
             opts = Options()
             if headless:
                 opts.add_argument("--headless")
+            opts.add_argument(f"user-agent={REAL_USER_AGENT}")
+            opts.set_preference("dom.webdriver.enabled", False)
+            opts.set_preference("useAutomationExtension", False)
             return webdriver.Firefox(options=opts)
 
         from selenium.webdriver.chrome.options import Options
@@ -321,4 +509,9 @@ class VTestHtmlDownloader:
         opts.add_argument("--lang=nl-BE")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
+        # Anti-bot protectie
+        opts.add_argument(f"user-agent={REAL_USER_AGENT}")
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+        opts.add_experimental_option("useAutomationExtension", False)
         return webdriver.Chrome(options=opts)

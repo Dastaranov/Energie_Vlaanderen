@@ -134,10 +134,42 @@ class CurvesWorkbookParser:
             })
         return out
 
-    @staticmethod
-    def _format_ts(val: Any) -> str:
+    # Excel telt dagen vanaf 1899-12-30 (de offset verrekent de 1900-schrikkel-
+    # jaarfout van Excel). Grenzen 1..100000 dekken 1900 tot 2173: ruim genoeg
+    # voor prijscurves en smal genoeg om een kental niet per ongeluk als datum
+    # te lezen.
+    EXCEL_EPOCH = pd.Timestamp("1899-12-30")
+    EXCEL_SERIAL_MIN = 1
+    EXCEL_SERIAL_MAX = 100_000
+
+    @classmethod
+    def _format_ts(cls, val: Any) -> str:
+        """Zet een celwaarde om naar een ISO-tijdstempel.
+
+        Niet elke tijdkolom komt als datum binnen: waar de cel in het werkboek
+        niet als datum opgemaakt is, levert pandas het ruwe Excel-serienummer
+        (een float). Dat werd hier eerder gewoon gestringificeerd, waardoor
+        40% van de curverijen een waarde als "46479.291666666664" kreeg in
+        plaats van een tijdstempel — onbruikbaar, en stil, want er werd niets
+        over gemeld.
+
+        De omzetting is geverifieerd tegen de rijen die wél goed gingen: in
+        `RLP2027_Elek per kwartier` eindigen die op 2027-04-02 06:45 en het
+        eerstvolgende serienummer valt op 2027-04-02 07:00 — exact de volgende
+        kwartierstap.
+        """
         if isinstance(val, pd.Timestamp):
             return val.isoformat()
+
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if pd.isna(val):
+                return ""
+            if cls.EXCEL_SERIAL_MIN <= float(val) <= cls.EXCEL_SERIAL_MAX:
+                tijdstip = cls.EXCEL_EPOCH + pd.Timedelta(days=float(val))
+                # Afronden op de seconde: een serienummer is een breuk van een
+                # dag, wat anders 06:59:59.999999 in plaats van 07:00 geeft.
+                return tijdstip.round("s").isoformat()
+
         return str(val).strip()
 
     @staticmethod

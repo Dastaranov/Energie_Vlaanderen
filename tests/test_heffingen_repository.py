@@ -2,6 +2,7 @@
 (kleine, stabiele masterdatabestanden, geen synthetische fixtures nodig)."""
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -18,83 +19,108 @@ def repo() -> HeffingenRepository:
 
 
 class TestAccijnsParsing:
-    def test_alle_achttien_schijven_geladen(self, repo: HeffingenRepository):
-        tabel = repo._accijns["elektriciteit"]
-        assert len(tabel.schijven) == 18
-        for categorie in ("niet_zakelijk", "zakelijk_laagspanning", "zakelijk_hoogspanning"):
-            assert sum(1 for s in tabel.schijven if s.klantcategorie == categorie) == 6
+    """De accijnstabellen dragen een tijdsas: de bijzondere accijns werd door
+    de hervorming van 2023 ruim verdrievoudigd en daalt sinds 01/08/2026
+    opnieuw. Een tabel zonder ingangsdatum gaf voor elk jaar hetzelfde,
+    doorgaans verkeerde antwoord."""
 
-    def test_bedragen_zijn_decimal(self, repo: HeffingenRepository):
-        tabel = repo._accijns["elektriciteit"]
-        eerste = next(
-            s for s in tabel.schijven
-            if s.klantcategorie == "niet_zakelijk" and s.van_mwh == D("0")
-        )
-        assert eerste.bijzondere_accijns_eur_mwh == D("13.60")
-        assert isinstance(eerste.bijzondere_accijns_eur_mwh, D)
-        assert eerste.tot_mwh == D("20")
+    def test_beide_energievormen_geladen(self, repo: HeffingenRepository):
+        assert set(repo.accijns_tabellen()) == {"elektriciteit", "aardgas"}
 
-    def test_hoogste_schijf_heeft_geen_bovengrens(self, repo: HeffingenRepository):
-        tabel = repo._accijns["elektriciteit"]
-        hoogste = next(
-            s for s in tabel.schijven
-            if s.klantcategorie == "niet_zakelijk" and s.van_mwh == D("100000")
+    def test_residentieel_elektriciteitstarief_is_het_gekalibreerde_tarief(
+        self, repo: HeffingenRepository
+    ):
+        # 46,00 EUR/MWh excl. btw is teruggerekend uit vtest.be zelf
+        # (7 verbruikspunten, residu 0,00 EUR) en komt overeen met de
+        # 48,76 EUR/MWh incl. btw die de officiële communicatie noemt.
+        (schijf,) = repo.accijns_schijven(
+            "elektriciteit", "niet_zakelijk", date(2026, 8, 31)
         )
-        assert hoogste.tot_mwh is None
+        assert schijf.bijzondere_accijns_eur_mwh == D("46.0000")
+        assert isinstance(schijf.bijzondere_accijns_eur_mwh, D)
+        assert schijf.geverifieerd
+
+    def test_residentiele_energiebijdrage_is_nul(self, repo: HeffingenRepository):
+        # De bijdrage op de energie is voor huishoudens 0 — bevestigd door
+        # vtest.be, dat deze post op 0,00 EUR zet.
+        (schijf,) = repo.accijns_schijven(
+            "elektriciteit", "niet_zakelijk", date(2026, 8, 31)
+        )
+        assert schijf.energiebijdrage_eur_mwh == D("0")
+
+    def test_ouder_regime_blijft_bereikbaar(self, repo: HeffingenRepository):
+        (schijf,) = repo.accijns_schijven(
+            "elektriciteit", "niet_zakelijk", date(2026, 7, 31)
+        )
+        assert schijf.bijzondere_accijns_eur_mwh == D("47.4811")
+
+    def test_regimes_worden_niet_vermengd(self, repo: HeffingenRepository):
+        """Alle teruggegeven schijven horen bij één ingangsdatum."""
+        schijven = repo.accijns_schijven(
+            "elektriciteit", "zakelijk_laagspanning", date(2026, 8, 31)
+        )
+        assert len({s.geldig_vanaf for s in schijven}) == 1
+
+    def test_datum_voor_de_masterdata_faalt_hard(self, repo: HeffingenRepository):
+        # Liever stoppen dan met een tarief rekenen dat toen niet gold.
+        with pytest.raises(HeffingenError, match="2023-07-01"):
+            repo.accijns_schijven("elektriciteit", "niet_zakelijk", date(2020, 1, 1))
 
 
 class TestProgressieveBerekening:
-    def test_verbruik_binnen_eerste_schijf(self, repo: HeffingenRepository):
-        bijzondere, energiebijdrage = repo.bereken_accijns_en_energiebijdrage(
-            "elektriciteit", "niet_zakelijk", jaarverbruik_kwh=D("5000")
-        )
-        # 5 MWh volledig in schijf 0-20 MWh: 5 * 13.60 / 5 * 1.9261
-        assert bijzondere == D("5") * D("13.60")
-        assert energiebijdrage == D("5") * D("1.9261")
+    def test_residentiele_elektriciteit_is_vlak(self, repo: HeffingenRepository):
+        """In het huishoudelijke bereik is er geen schijfovergang.
 
-    def test_verbruik_over_schijfgrens_heen(self, repo: HeffingenRepository):
-        # 25 MWh niet-zakelijk: 20 MWh in schijf 1 (0-20) + 5 MWh in schijf 2 (20-50).
-        bijzondere, energiebijdrage = repo.bereken_accijns_en_energiebijdrage(
-            "elektriciteit", "niet_zakelijk", jaarverbruik_kwh=D("25000")
-        )
-        verwacht_bijzondere = D("20") * D("13.60") + D("5") * D("11.58")
-        verwacht_energiebijdrage = D("25") * D("1.9261")
-        assert bijzondere == verwacht_bijzondere
-        assert energiebijdrage == verwacht_energiebijdrage
+        De kalibratie mat een perfect rechte kostenfunctie van 1.000 tot
+        25.000 kWh; de wettelijke grenzen op 3 en 20 MWh vallen samen qua
+        tarief.
+        """
+        for kwh in (D("1000"), D("3434"), D("25000")):
+            bijzondere, energiebijdrage = repo.bereken_accijns_en_energiebijdrage(
+                "elektriciteit", "niet_zakelijk", kwh, date(2026, 8, 31)
+            )
+            assert bijzondere == kwh / D("1000") * D("46.0000")
+            assert energiebijdrage == D("0")
 
-    def test_verbruik_exact_op_schijfgrens_telt_in_eerste_schijf(self, repo: HeffingenRepository):
-        # 20 MWh exact: moet volledig tegen het 0-20-tarief berekend worden,
-        # niet (deels) tegen het 20-50-tarief.
-        bijzondere, energiebijdrage = repo.bereken_accijns_en_energiebijdrage(
-            "elektriciteit", "niet_zakelijk", jaarverbruik_kwh=D("20000")
-        )
-        assert bijzondere == D("20") * D("13.60")
-        assert energiebijdrage == D("20") * D("1.9261")
+    def test_gemiddeld_gezin_komt_overeen_met_vtest(self, repo: HeffingenRepository):
+        """Het profiel dat vtest.be zelf als standaard hanteert: 3.434 kWh.
 
-    def test_zakelijk_laagspanning_gebruikt_ander_tarief_dan_niet_zakelijk(
-        self, repo: HeffingenRepository
-    ):
+        vtest.be rapporteert daarvoor 157,96 EUR bijzondere accijns excl. btw.
+        """
         bijzondere, _ = repo.bereken_accijns_en_energiebijdrage(
-            "elektriciteit", "zakelijk_laagspanning", jaarverbruik_kwh=D("5000")
+            "elektriciteit", "niet_zakelijk", D("3434"), date(2026, 8, 31)
         )
-        assert bijzondere == D("5") * D("14.21")
+        assert bijzondere.quantize(D("0.01")) == D("157.96")
 
-    def test_zakelijk_hoogspanning_heeft_geen_energiebijdrage(self, repo: HeffingenRepository):
-        _, energiebijdrage = repo.bereken_accijns_en_energiebijdrage(
-            "elektriciteit", "zakelijk_hoogspanning", jaarverbruik_kwh=D("5000")
+    def test_aardgas_over_de_schijfgrens(self, repo: HeffingenRepository):
+        """Aardgas kent wél een knik, op 12 MWh."""
+        onder = repo.bereken_accijns_en_energiebijdrage(
+            "aardgas", "niet_zakelijk", D("12000"), date(2026, 8, 31)
+        )[0]
+        boven = repo.bereken_accijns_en_energiebijdrage(
+            "aardgas", "niet_zakelijk", D("13000"), date(2026, 8, 31)
+        )[0]
+        marginaal = (boven - onder) * D("1000") / D("1000")
+        basis = onder / D("12")
+        assert marginaal > basis
+
+    def test_gemiddeld_gasverbruik_komt_overeen_met_vtest(self, repo: HeffingenRepository):
+        """vtest.be rekent 171,28 EUR excl. btw voor zijn standaard 16.262 kWh."""
+        bijzondere, _ = repo.bereken_accijns_en_energiebijdrage(
+            "aardgas", "niet_zakelijk", D("16262"), date(2026, 8, 31)
         )
-        assert energiebijdrage == D("0")
+        assert abs(bijzondere - D("171.28")) <= D("0.05")
 
     def test_onbekende_klantcategorie_faalt_hard(self, repo: HeffingenRepository):
         with pytest.raises(HeffingenError, match="onbekende_categorie"):
             repo.bereken_accijns_en_energiebijdrage(
-                "elektriciteit", "onbekende_categorie", jaarverbruik_kwh=D("1000")
+                "elektriciteit", "onbekende_categorie", D("1000"), date(2026, 8, 31)
             )
 
     def test_onbekende_energievorm_faalt_hard(self, repo: HeffingenRepository):
-        with pytest.raises(HeffingenError, match="aardgas"):
+        with pytest.raises(HeffingenError, match="stookolie"):
             repo.bereken_accijns_en_energiebijdrage(
-                "aardgas", "niet_zakelijk", jaarverbruik_kwh=D("1000")
+                "stookolie", "niet_zakelijk", D("1000"), date(2026, 8, 31)
             )
 
 

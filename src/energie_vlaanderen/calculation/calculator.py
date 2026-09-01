@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 import pandas as pd
@@ -91,7 +92,7 @@ class Calculator:
             return energy+fixed+extras,warnings
         raise ValueError(f"Onbekend tarieftype: {product.kind}")
 
-    def _levies(self,p:Profile,jaar:int)->Decimal:
+    def _levies(self,p:Profile,jaar:int,maand:int)->Decimal:
         # Manifest §12: "Ontbrekend verplicht tarief: berekening stoppen" —
         # geen stille 0 meer zoals in de oude, altijd-op-nul-staande
         # levies_eur_kwh/energy_fund_eur_year-constructorparameters.
@@ -107,19 +108,29 @@ class Calculator:
             accijns_categorie,fonds_categorie="niet_zakelijk","residentieel"
         else:
             accijns_categorie,fonds_categorie="zakelijk_laagspanning","niet_residentieel"
+        # De bijzondere accijns wijzigde binnen 2026 (46,00 i.p.v. 47,4811
+        # EUR/MWh vanaf 01/08), dus het jaar alleen volstaat niet: we nemen de
+        # eerste dag van de productmaand als peildatum.
         bijzondere_accijns,energiebijdrage=self.heffingen.bereken_accijns_en_energiebijdrage(
-            "elektriciteit",accijns_categorie,p.afname_kwh)
+            "elektriciteit",accijns_categorie,p.afname_kwh,date(jaar,maand,1))
         energiefonds=self.heffingen.energiefonds_per_jaar("laag",fonds_categorie,jaar)
         return bijzondere_accijns+energiebijdrage+energiefonds
 
     def calculate(self,product:Product,p:Profile,market=None,intervals=None,inject_product:Optional[Product]=None)->Cost:
         if product.energy.lower() not in ("elektriciteit","electricity"):
+            # De heffingen op aardgas staan sinds de kalibratie van
+            # 2026-08-31 wél in config/heffingen/. Wat nog ontbreekt is de
+            # netzijde: grid_cost() rekent met elektriciteitstariefdetails
+            # (capaciteitstarief, ODV), terwijl aardgas een vaste term plus
+            # proportionele term per tariefgroep (GAS_T1..T6) kent, en die
+            # groep hangt af van het jaarverbruik.
             raise ValueError(
-                f"Heffingen voor energievorm '{product.energy}' zijn nog niet "
-                "beschikbaar (enkel elektriciteit is gedekt in config/heffingen/)."
+                f"Kostberekening voor energievorm '{product.energy}' is nog "
+                "niet ondersteund: de heffingen zijn beschikbaar, maar "
+                "grid_cost() dekt enkel elektriciteit-laagspanning."
             )
         supplier,warnings=self.supplier_cost(product,p,market,intervals)
-        grid=self.grid_cost(p); levies=self._levies(p,product.year)
+        grid=self.grid_cost(p); levies=self._levies(p,product.year,product.month)
         credit=D("0")
         if p.injectie_kwh>0:
             if inject_product is None: warnings.append("Injectie niet verrekend: geen terugleveringsproduct gekoppeld.")

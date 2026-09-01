@@ -35,14 +35,25 @@ class TestDnbCode:
             assert _dnb_code(naam) == code
 
     def test_dnb_code_falls_back_for_unknown_name_and_warns(self, caplog):
-        with caplog.at_level(logging.WARNING):
-            result = _dnb_code("Enexis Netbeheer")
+        """Een netbeheerder die we niet kennen gaat als volledige naam door.
 
-        assert result == "Enexis Netbeheer"
+        Het voorbeeld was hier "Enexis Netbeheer" — de gasnetbeheerder van
+        Baarle-Hertog. Die is inmiddels wél bekend (met code ENEXIS, zonder
+        tarieven), dus dit toetst nu een naam die echt nergens voorkomt.
+        """
+        with caplog.at_level(logging.WARNING):
+            result = _dnb_code("Netbeheerder Die Niet Bestaat")
+
+        assert result == "Netbeheerder Die Niet Bestaat"
         assert any(
-            "Enexis Netbeheer" in record.message
+            "Netbeheerder Die Niet Bestaat" in record.message
             for record in caplog.records
         )
+
+    def test_enexis_krijgt_zijn_eigen_code(self):
+        """Baarle-Hertog krijgt zijn aardgas van Enexis; die hoort herkend te
+        worden in plaats van als losse naam de databank in te gaan."""
+        assert _dnb_code("Enexis Netbeheer") == "ENEXIS"
 
 
 @pytest.fixture()
@@ -120,7 +131,9 @@ class TestImportGemeente:
             ).all()
         }
         assert nb_rows.get("FA") == "Fluvius Antwerpen"
-        assert nb_rows.get("Enexis Netbeheer") == "Enexis Netbeheer"
+        # Enexis levert het aardgas van Baarle-Hertog en heeft sinds kort een
+        # eigen code, zodat de naam niet als code de databank in gaat.
+        assert nb_rows.get("ENEXIS") == "Enexis Netbeheer"
 
         gem_rows = {
             row.postcode: (row.dnb_elektriciteit, row.dnb_gas)
@@ -133,7 +146,7 @@ class TestImportGemeente:
             ).all()
         }
         assert gem_rows["2000"] == ("FA", "FA")
-        assert gem_rows["3500"] == ("FL", "Enexis Netbeheer")
+        assert gem_rows["3500"] == ("FL", "ENEXIS")
 
 
 class TestMapComponentCodeToField:
@@ -200,9 +213,23 @@ class TestImportNetbeheerderTarieven:
 
         import_netbeheerder_tarieven(db_conn, tmp_path, jaar=2026)
 
+        # Filter op de eigen bronbladen: deze test deelt de tabel met de
+        # echte tariefdata, en die bevat honderden open rijen. Zonder filter
+        # slaagde de test alleen zolang de databank leeg was.
         rows = db_conn.execute(
             sa.select(netbeheerder_tarief.c.contract_richting, netbeheerder_tarief.c.klanttype)
-            .where(netbeheerder_tarief.c.geldig_tot.is_(None))
+            .where(
+                netbeheerder_tarief.c.geldig_tot.is_(None)
+                & netbeheerder_tarief.c.source_sheet.in_(
+                    ["FA ELEK Afname", "FA ELEK Injectie"]
+                )
+                & (netbeheerder_tarief.c.tarieftype == "Netgebruik")
+                | (
+                    netbeheerder_tarief.c.geldig_tot.is_(None)
+                    & (netbeheerder_tarief.c.tarieftype == "Tarief databeheer")
+                    & (netbeheerder_tarief.c.klanttype == "ELEK_HS1")
+                )
+            )
             .order_by(netbeheerder_tarief.c.contract_richting)
         ).all()
 
@@ -230,10 +257,14 @@ class TestImportNetbeheerderTarieven:
         import_netbeheerder_tarieven(db_conn, tmp_path, jaar=2026)
 
         # Controleer open rij
+        # Filter op het klanttype van deze test: ELEK_LV1 bestaat niet in de
+        # echte tariefdata, waarmee de test onafhankelijk wordt van wat er al
+        # in de gedeelde databank staat.
         row1 = db_conn.execute(
             sa.select(netbeheerder_tarief.c.id, netbeheerder_tarief.c.geldig_tot)
             .where(
                 (netbeheerder_tarief.c.netbeheerder_code == "FA")
+                & (netbeheerder_tarief.c.klanttype == "ELEK_LV1")
                 & (netbeheerder_tarief.c.geldig_tot.is_(None))
             )
         ).fetchone()

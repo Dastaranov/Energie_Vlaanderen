@@ -21,6 +21,37 @@ DEFAULT_ALLOWED_DOWNLOAD_HOSTS = (
     "assets.vlaamsenutsregulator.be",
 )
 
+
+def _read_dotenv(path: Path) -> dict[str, str]:
+    """Lees een `.env`-bestand: `SLEUTEL=waarde` per regel.
+
+    Bewust minimaal — geen `export`-prefixen, geen variabele-interpolatie,
+    geen meerregelige waarden. Dat dekt wat dit project in `.env` zet
+    (ENTSOE_API_KEY en databankcredentials) en houdt de afhankelijkheid op
+    nul. Een onleesbaar of ontbrekend bestand levert een lege dict: `.env`
+    is optioneel, alles kan ook als echte omgevingsvariabele gezet worden.
+    """
+    try:
+        inhoud = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+
+    waarden: dict[str, str] = {}
+    for regel in inhoud.splitlines():
+        regel = regel.strip()
+        if not regel or regel.startswith("#") or "=" not in regel:
+            continue
+        sleutel, _, waarde = regel.partition("=")
+        sleutel = sleutel.strip()
+        if not sleutel:
+            continue
+        waarde = waarde.strip()
+        if len(waarde) >= 2 and waarde[0] == waarde[-1] and waarde[0] in "\"'":
+            waarde = waarde[1:-1]
+        waarden[sleutel] = waarde
+    return waarden
+
+
 def discover_project_root(start: Path | None = None) -> Path:
     """
     Zoek vanaf `start` omhoog naar de map met pyproject.toml.
@@ -72,13 +103,28 @@ class Settings:
         project_root: Path | None = None,
         environ: Mapping[str, str] | None = None,
     ) -> "Settings":
-        env = os.environ if environ is None else environ
-
         root = (
             project_root.expanduser().resolve()
             if project_root is not None
             else discover_project_root()
         )
+
+        if environ is None:
+            # `.env` in de projectwortel is de gedocumenteerde plek voor
+            # ENTSOE_API_KEY en de databankcredentials (README/CLAUDE.md).
+            # Zonder deze stap staan die daar wel, maar ziet niets ze: er werd
+            # enkel os.environ gelezen, zodat `market sync` altijd afketste op
+            # "API-key ontbreekt" tenzij je de sleutel zelf exporteerde.
+            #
+            # We zetten ze in os.environ en niet enkel in een lokale dict,
+            # want de consumenten (market/entsoe.py, infrastructure/db) lezen
+            # os.getenv rechtstreeks. Reeds gezette variabelen blijven staan:
+            # een expliciete export hoort `.env` te overrulen.
+            for sleutel, waarde in _read_dotenv(root / ".env").items():
+                os.environ.setdefault(sleutel, waarde)
+            env = os.environ
+        else:
+            env = environ
 
         configured_data_root = env.get(
             "ENERGIEVERGELIJKER_DATA_DIR"

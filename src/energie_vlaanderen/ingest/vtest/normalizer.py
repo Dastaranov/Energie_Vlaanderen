@@ -43,8 +43,36 @@ COMPONENT_MAPPING = {
     "kosten wkk": "wkk",
     "wkk": "wkk",
     "dynamisch tarief": "dynamic",
+    # Tijdsblokken van ToU-contracten (o.a. ENGIE Empower met Flextime).
+    # Staan los van het dag/nacht-onderscheid van de meter: dat volgt uit de
+    # meteropstelling, dit uit het contract.
+    "superdaluren": "tou_super_offpeak",
+    "daluren": "tou_offpeak",
+    "piekuren": "tou_peak",
+    # Zelfverbruik van de eigen installatie (EnergyVision).
+    "energie uit zonnepanelen": "self_consumption",
     "uitsluitend nacht": "exclusive_night",
+    # Ebem bundelt dag- en exclusief-nachttarief in één regel.
+    "enkelvoudige meter dag- en (exclusief) nachttarief": "single_and_exclusive_night",
     "enkelvoudige meter dagtarief": "single",
+    # EnergyVision noteert het gewaarborgde deel van een variabel contract
+    # zonder het woord "meter": "(24u)" duidt de enkelvoudige meter aan, de
+    # variant zonder "(24u)" het dagtarief van een tweevoudige meter.
+    "dagtarief (24u) - vast": "single_vast",
+    "dagtarief - vast": "day_vast",
+}
+
+# Prijsonderdelen die in de VREG-export staan maar geen prijscomponent zijn.
+# Ze krijgen geen sleutel toegewezen — de ruwe tekst blijft staan — en worden
+# als 'info' gerapporteerd in plaats van als waarschuwing, zodat de
+# waarschuwingslijst leeg blijft en een écht nieuw, onbekend prijsonderdeel
+# meteen opvalt.
+BEKENDE_BRONAFWIJKINGEN = {
+    # Lekt uit VREG's eigen datamodel; verschijnt enkel bij ENGIE Easy.
+    "consumptiontotal",
+    # Heffingsregel die in de producttabel terechtkwam, enkel bij het
+    # sociaal tarief, met prijs 0.
+    "bijdrage op de energie",
 }
 
 FORMULA_COMPONENTS = {
@@ -282,11 +310,32 @@ class VTestDataNormalizer:
             component_label
         )
 
+        # Een label dat op geen enkele regel past, komt ongewijzigd (enkel
+        # lowercase) door. Dat is opzet — data weggooien is erger — maar het
+        # mag niet stil gebeuren: zo'n sleutel is voor de calculator
+        # onherkenbaar en de rij verdwijnt daar dan alsnog. Het rapport zet
+        # ze op een rij zodat COMPONENT_MAPPING kan bijgewerkt worden.
+        if component_key == component_label.casefold():
+            bekend = component_key in BEKENDE_BRONAFWIJKINGEN
+            add_issue(
+                "info" if bekend else "warning",
+                f"Prijsonderdeel '{component_label}' is niet gemapt op een "
+                "gekende componentsleutel; de ruwe tekst wordt gebruikt."
+                + (" Bekende afwijking in de VREG-export." if bekend else ""),
+            )
+
         price = dec(
             row.get("Prijs")
         )
 
-        coefficients = self._coefficients(row)
+        try:
+            coefficients = self._coefficients(row)
+        except VTestNormalizationError as exc:
+            add_issue(
+                "error",
+                f"{exc}",
+            )
+            return None
 
         index_names: dict[str, str] = {}
         index_values: dict[str, Decimal | None] = {}
@@ -688,26 +737,35 @@ class VTestDataNormalizer:
 
         Geeft False terug voor:
             a.A + b.B + c.C + d.D + z
+
+        Opmerking: Als werkboeken met beide schema's gecombineerd worden
+        (bv. "Producten var-dyn" + "Var-dyn (2026)"), bevat het dataframe
+        kolommen van beide schema's. We kijken alleen naar kolommen met
+        werkelijke waarden (niet-NaN) in deze rij.
         """
+        # Alleen kolommen met werkelijke (niet-NaN) waarden controleren
         columns = {
             clean_text(column).casefold()
-            for column in row.index
+            for column, value in row.items()
+            if not pd.isna(value)
         }
 
-        has_legacy_columns = any(
-            "indexatieparameter x" in column
-            for column in columns
-        )
+        legacy_columns = [
+            col for col in columns
+            if "indexatieparameter x" in col
+        ]
 
-        has_new_columns = any(
-            "indexatieparameter a" in column
-            for column in columns
-        )
+        new_columns = [
+            col for col in columns
+            if "indexatieparameter a" in col
+        ]
 
-        if has_legacy_columns and has_new_columns:
+        if legacy_columns and new_columns:
             raise VTestNormalizationError(
                 "Rij bevat zowel het oude als het nieuwe "
-                "indexatieschema."
+                "indexatieschema. "
+                f"Oude schema: {', '.join(sorted(legacy_columns))}. "
+                f"Nieuwe schema: {', '.join(sorted(new_columns))}."
             )
 
-        return has_legacy_columns
+        return bool(legacy_columns)

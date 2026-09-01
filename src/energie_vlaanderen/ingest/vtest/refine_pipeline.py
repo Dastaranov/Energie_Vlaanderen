@@ -78,6 +78,7 @@ class VTestRefinePipeline:
         browser: str = "chrome",
         timeout: int = 60,
         skip_download: bool = False,
+        contractdetails: dict[str, dict[str, str]] | None = None,
     ) -> VTestRefinePipelineResult:
         vtest_dir = staging_dir / "vtest"
         vtest_dir.mkdir(parents=True, exist_ok=True)
@@ -105,6 +106,8 @@ class VTestRefinePipeline:
                 segment, energy, postcode,
             )
             html = VTestHtmlDownloader().download(
+                contractdetails=contractdetails,
+                reeds_gekend=set(contractdetails) if contractdetails else None,
                 postcode=postcode,
                 segment=segment,
                 kwh_elektriciteit=kwh_elektriciteit,
@@ -131,6 +134,23 @@ class VTestRefinePipeline:
         LOG.info("HTML parsen ...")
         raw_products = VTestProductParser().parse(html)
         LOG.info("%d producten gevonden.", len(raw_products))
+
+        # De tariefkaart- en voorwaardenlinks staan niet op de
+        # resultatenpagina maar in het detailpaneel, dat pas bij een klik
+        # geladen wordt. Ze komen dus niet uit de HTML-dump maar uit de
+        # verzameling die de downloader tijdens de sessie opbouwt.
+        if contractdetails:
+            gekoppeld = 0
+            for product in raw_products:
+                details = contractdetails.get(product.vreg_id)
+                if not details:
+                    continue
+                product.links.update(details)
+                gekoppeld += 1
+            LOG.info(
+                "Contractdetails gekoppeld aan %d van %d producten.",
+                gekoppeld, len(raw_products),
+            )
 
         normalizer = VTestProductNormalizer()
         normalized = normalizer.normalize(raw_products, scraped_at)

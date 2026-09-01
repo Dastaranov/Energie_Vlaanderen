@@ -3,7 +3,9 @@
 # Bron: https://www.vlaanderen.be/belastingen-en-begroting/vlaamse-belastingen/energieheffingen/bijdrage-energiefonds-heffing-op-afnamepunten-van-elektriciteit/tarief-van-de-bijdrage-energiefonds
 # Lokale kopie van de brontabel: docs/tarief energiebijdrage.md
 # Onafhankelijk bevestigd via WebFetch op dezelfde pagina — cijfers komen
-# exact overeen.
+# exact overeen. Herbevestigd op 2026-08-31: alle 25 waarden (2022-2026 x
+# 5 categorieën) staan nog gelijk. 2027 is op dat moment nog niet
+# gepubliceerd; `audit heffingen` waarschuwt daarvoor.
 #
 # Eenheid: EUR per maand per afnamepunt. "Beschermde klanten" en
 # residentiële afnemers op laagspanning betalen sinds 2023 een tarief van

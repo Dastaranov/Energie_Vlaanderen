@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
 import pandas as pd
 
 from energie_vlaanderen.ingest.vtest.normalizer import (
@@ -371,3 +372,75 @@ def test_meter_specific_fixed_fees_are_not_duplicates():
     )
 
     assert not duplicates.any()
+@pytest.mark.parametrize(
+    ("label", "verwacht"),
+    [
+        # ToU-blokken van ENGIE Empower met Flextime. "Superdaluren" bevat
+        # "daluren" als deelstring en moet toch apart uitkomen.
+        ("Superdaluren", "tou_super_offpeak"),
+        ("Daluren", "tou_offpeak"),
+        ("Piekuren", "tou_peak"),
+        ("Energie uit zonnepanelen", "self_consumption"),
+        (
+            "Enkelvoudige meter dag- en (exclusief) nachttarief (c€/kWh)",
+            "single_and_exclusive_night",
+        ),
+        # EnergyVision laat "meter" weg; "(24u)" duidt de enkelvoudige meter aan.
+        ("Dagtarief (24u) - vast", "single_vast"),
+        ("Dagtarief - vast", "day_vast"),
+    ],
+)
+def test_maps_components_die_eerder_ongemapt_doorliepen(
+    label: str,
+    verwacht: str,
+) -> None:
+    assert VTestDataNormalizer._component_key(label) == verwacht
+
+
+def _rij_met_prijsonderdeel(label: str) -> pd.DataFrame:
+    return pd.DataFrame([{
+        "Jaar": 2026,
+        "Maand": 8,
+        "Segment": "Woning",
+        "Energietype": "Elektriciteit",
+        "Contracttype": "Afname",
+        "Handelsnaam": "X",
+        "Productnaam": "Y",
+        "Vast/variabel/dynamisch": "vast",
+        "Prijsonderdeel": label,
+        "Prijs": "20",
+        "source_sheet": "Vast (excl. btw) (2026)",
+        "source_row": 1,
+    }])
+
+
+def test_onbekend_prijsonderdeel_geeft_een_waarschuwing() -> None:
+    """Een niet-gemapt label komt ongewijzigd door; dat mag niet stil gebeuren.
+
+    Zo'n sleutel is voor de calculator onherkenbaar, dus de rij verdwijnt daar
+    alsnog — enkel zonder dat iemand het merkt.
+    """
+    leeg = pd.DataFrame(columns=list(_rij_met_prijsonderdeel("x").columns))
+
+    resultaat = VTestDataNormalizer().normalize(
+        _rij_met_prijsonderdeel("Een gloednieuw prijsonderdeel"), leeg
+    )
+
+    assert [i.severity for i in resultaat.warnings] == ["warning"]
+    assert "niet gemapt" in resultaat.warnings[0].message
+
+
+def test_bekende_bronafwijking_is_info_en_geen_waarschuwing() -> None:
+    """'consumptiontotal' lekt uit VREG's eigen datamodel.
+
+    Het blijft in het rapport staan, maar niet als waarschuwing — anders
+    vertroebelen deze vaste vijf rijen elk écht nieuw signaal.
+    """
+    leeg = pd.DataFrame(columns=list(_rij_met_prijsonderdeel("x").columns))
+
+    resultaat = VTestDataNormalizer().normalize(
+        _rij_met_prijsonderdeel("consumptiontotal"), leeg
+    )
+
+    assert resultaat.warnings == ()
+    assert any(i.severity == "info" for i in resultaat.issues)

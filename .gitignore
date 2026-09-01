@@ -251,3 +251,8 @@ gebruiker.toml
 
 # Coding history
 docs/history/
+
+# Claude Code — de agent en skill horen wél in het repo (die beschrijven hoe
+# er gewerkt wordt), de lokale sessiestand niet.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
