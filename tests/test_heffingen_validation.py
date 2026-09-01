@@ -20,6 +20,7 @@ from energie_vlaanderen.heffingen.validation import (
     controleer_accijns,
     controleer_dekking,
     controleer_energiefonds,
+    controleer_transport,
 )
 
 INGANG = date(2026, 8, 1)
@@ -210,3 +211,82 @@ def test_geverifieerd_met_bron_geeft_geen_bevinding():
     )
 
     assert controleer_accijns(_repo(met_bron)) == []
+
+
+class TestTransport:
+    """Het vervoerstarief van Fluxys volgt dezelfde regels als de heffingen.
+
+    Een ontbrekend vervoerstarief maakt elke gasfactuur ongeveer 25 EUR per
+    jaar te laag, dus dat is een fout en geen waarschuwing.
+    """
+
+    def _schrijf(self, tmp_path, inhoud: str):
+        (tmp_path / "transport_aardgas.toml").write_text(inhoud, encoding="utf-8")
+        return tmp_path
+
+    def test_geldige_masterdata_geeft_geen_bevindingen(self, tmp_path):
+        map_ = self._schrijf(tmp_path, '''
+energievorm = "aardgas"
+bron = "CREG"
+[[tarief]]
+klantcategorie = "niet_zakelijk"
+eur_per_kwh = "0.00156"
+geldig_vanaf = "2026-01-01"
+geverifieerd = true
+bron = "CREG-nota (Z)3230"
+''')
+
+        assert controleer_transport(map_, date(2026, 6, 1)) == []
+
+    def test_ontbrekend_bestand_is_een_fout(self, tmp_path):
+        (fout,) = _fouten(controleer_transport(tmp_path, date(2026, 6, 1)))
+
+        assert "Geen vervoerstarief" in fout.bericht
+
+    def test_negatief_tarief_is_een_fout(self, tmp_path):
+        map_ = self._schrijf(tmp_path, '''
+energievorm = "aardgas"
+bron = "test"
+[[tarief]]
+klantcategorie = "niet_zakelijk"
+eur_per_kwh = "-0.001"
+geldig_vanaf = "2026-01-01"
+geverifieerd = true
+bron = "test"
+''')
+
+        fouten = _fouten(controleer_transport(map_, date(2026, 6, 1)))
+
+        assert any("niet positief" in f.bericht for f in fouten)
+
+    def test_geverifieerd_zonder_bron_is_een_fout(self, tmp_path):
+        map_ = self._schrijf(tmp_path, '''
+energievorm = "aardgas"
+bron = ""
+[[tarief]]
+klantcategorie = "niet_zakelijk"
+eur_per_kwh = "0.00156"
+geldig_vanaf = "2026-01-01"
+geverifieerd = true
+bron = "  "
+''')
+
+        fouten = _fouten(controleer_transport(map_, date(2026, 6, 1)))
+
+        assert any("geen bron" in f.bericht for f in fouten)
+
+    def test_peildatum_buiten_de_masterdata_is_een_fout(self, tmp_path):
+        map_ = self._schrijf(tmp_path, '''
+energievorm = "aardgas"
+bron = "test"
+[[tarief]]
+klantcategorie = "niet_zakelijk"
+eur_per_kwh = "0.00156"
+geldig_vanaf = "2026-01-01"
+geverifieerd = true
+bron = "test"
+''')
+
+        fouten = _fouten(controleer_transport(map_, date(2025, 6, 1)))
+
+        assert any("begint pas op" in f.bericht for f in fouten)

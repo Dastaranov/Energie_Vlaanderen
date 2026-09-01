@@ -326,7 +326,11 @@ def run_audit_heffingen(args: argparse.Namespace, settings: Settings) -> int:
     except (HeffingenError, OSError, KeyError) as exc:
         return fail("Heffingen-masterdata kon niet geladen worden: %s", exc)
 
-    bevindingen = controleer_alles(repo, peildatum)
+    bevindingen = controleer_alles(
+        repo,
+        peildatum,
+        nettarieven_dir=settings.project_root / "config" / "nettarieven",
+    )
     fouten = [b for b in bevindingen if b.ernst == "fout"]
     waarschuwingen = [b for b in bevindingen if b.ernst == "waarschuwing"]
 
@@ -334,6 +338,7 @@ def run_audit_heffingen(args: argparse.Namespace, settings: Settings) -> int:
         print(f"Configmap : {config_dir}")
         print(f"Peildatum : {peildatum.isoformat()}")
         print(f"Tabellen  : {', '.join(sorted(repo.accijns_tabellen()))}")
+        print(f"Nettarieven: config/nettarieven/")
         for bevinding in bevindingen:
             merk = {"fout": "FOUT", "waarschuwing": "LET OP", "info": "info"}[
                 bevinding.ernst

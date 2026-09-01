@@ -175,6 +175,13 @@ def import_version_into_db(
         jaar = int(version_id[:4])
         results.append(imp.import_netbeheerder_tarieven(conn, bron_dir / "tariffs", jaar))
 
+        LOG.info("Importeren van vervoerstarieven ...")
+        results.append(
+            imp.import_nettarief_transport(
+                conn, settings.project_root / "config" / "nettarieven"
+            )
+        )
+
         LOG.info("Importeren van overheidsheffingen ...")
         results.append(
             # config/heffingen/, niet config/: HeffingenRepository.load zoekt

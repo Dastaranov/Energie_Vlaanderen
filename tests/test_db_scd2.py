@@ -133,3 +133,86 @@ def test_een_reeks_maanden_geeft_een_sluitende_historiek(conn):
     for vorige, volgende in zip(rijen, rijen[1:]):
         assert vorige.geldig_tot is not None
         assert vorige.geldig_tot.toordinal() + 1 == volgende.geldig_van.toordinal()
+
+
+def test_maanden_worden_chronologisch_verwerkt(tmp_path, conn, monkeypatch):
+    """De CSV wordt met dtype=str gelezen, dus groupby sorteert de maanden als
+    tekst: 1, 10, 11, 12, 2, 3, ...
+
+    De historiek werd daardoor in de verkeerde volgorde opgebouwd: na december
+    kwamen februari tot september nog langs, elk als een terugwerkende
+    wijziging. Deze test leest een CSV met precies die maanden en controleert
+    dat de historiek er chronologisch uitkomt.
+    """
+    from energie_vlaanderen.infrastructure.db.importer import (
+        import_leverancier_en_product,
+    )
+
+    kop = (
+        "year;month;segment;energy;direction;supplier;product;product_type;"
+        "component;price\n"
+    )
+    # Bewust in de volgorde waarin groupby ze zou opleveren.
+    maanden = [1, 10, 11, 12, 2, 3]
+    rijen = "".join(
+        f"2025;{m};Woning;Elektriciteit;Afname;Testlev;P;vast;single;{20 + m}\n"
+        for m in maanden
+    )
+    csv = tmp_path / "master_vast.csv"
+    csv.write_text(kop + rijen, encoding="utf-8-sig")
+
+    import_leverancier_en_product(
+        conn, vast_csv=csv, var_dyn_csv=tmp_path / "bestaat-niet.csv"
+    )
+
+    rijen_uit_db = _rijen(conn)
+    periodes = [(r.geldig_van, r.geldig_tot) for r in rijen_uit_db]
+
+    # Zes maanden, chronologisch, elk aansluitend op de volgende.
+    assert [p[0].month for p in periodes] == [1, 2, 3, 10, 11, 12]
+    for vorige, volgende in zip(periodes, periodes[1:]):
+        assert vorige[1] is not None, "een afgesloten periode hoort een einddatum te hebben"
+        assert vorige[1] < volgende[0]
+    assert periodes[-1][1] is None, "de laatste maand hoort de open rij te zijn"
+
+
+def test_variabel_en_dynamisch_verdringen_elkaars_historiek_niet(conn):
+    """Hetzelfde product wordt soms in twee prijstypes aangeboden.
+
+    Bij Bolt is "Bolt Variabel" zowel variabel als dynamisch, elk met een eigen
+    indexatieformule. In de databank delen ze één energie_product, want de
+    identiteit daarvan is (leverancier, naam, energievorm, segment). Zonder
+    prijs_type in de SCD2-sleutel bouwde het ene type de historiek op tot de
+    laatste maand en werd het andere vanaf de eerste maand als terugwerkend
+    afgewezen.
+    """
+    for maand in (1, 2):
+        _scd2_upsert(
+            conn,
+            tarief_afname,
+            {**_rij(date(2026, maand, 1), "0.20"), "prijs_type": "variabel"},
+        )
+    for maand in (1, 2):
+        _scd2_upsert(
+            conn,
+            tarief_afname,
+            {**_rij(date(2026, maand, 1), "0.30"), "prijs_type": "dynamisch"},
+        )
+
+    per_type = {}
+    for rij in conn.execute(
+        sa.select(
+            tarief_afname.c.prijs_type,
+            tarief_afname.c.geldig_van,
+            tarief_afname.c.geldig_tot,
+        ).order_by(tarief_afname.c.prijs_type, tarief_afname.c.geldig_van)
+    ):
+        per_type.setdefault(rij.prijs_type, []).append((rij.geldig_van, rij.geldig_tot))
+
+    # Beide prijstypes hebben hun eigen, volledige historiek van twee maanden.
+    assert set(per_type) == {"variabel", "dynamisch"}
+    for prijs_type, periodes in per_type.items():
+        assert periodes == [
+            (date(2026, 1, 1), date(2026, 1, 31)),
+            (date(2026, 2, 1), None),
+        ], prijs_type

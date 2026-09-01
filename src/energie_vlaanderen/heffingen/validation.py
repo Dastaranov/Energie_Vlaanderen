@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 from energie_vlaanderen.heffingen.models import AccijnsSchijf
 from energie_vlaanderen.heffingen.repository import HeffingenRepository
@@ -228,12 +229,76 @@ def controleer_dekking(
     return bevindingen
 
 
+def controleer_transport(config_dir: Path, op_datum: date) -> list[Bevinding]:
+    """Toets de vervoerstarieven uit `config/nettarieven/`.
+
+    Zelfde regels als bij de accijnzen: een geverifieerd cijfer moet zijn
+    bron noemen, en de peildatum moet gedekt zijn. Een ontbrekend
+    vervoerstarief maakt elke gasfactuur ongeveer 25 EUR per jaar te laag,
+    dus dat is een fout en geen waarschuwing.
+    """
+    from energie_vlaanderen.nettarieven.transport import (
+        TransportTariefError,
+        TransportTariefRepository,
+    )
+
+    bevindingen: list[Bevinding] = []
+    try:
+        repo = TransportTariefRepository.load(config_dir)
+    except TransportTariefError as exc:
+        return [Bevinding("fout", "transport", str(exc))]
+
+    for tarief in repo.tarieven():
+        onderwerp = f"transport/{tarief.energievorm}/{tarief.klantcategorie}"
+        if tarief.eur_per_kwh <= 0:
+            bevindingen.append(
+                Bevinding(
+                    "fout",
+                    onderwerp,
+                    f"Tarief van {tarief.eur_per_kwh} EUR/kWh is niet positief.",
+                )
+            )
+        if tarief.geverifieerd and not tarief.bron.strip():
+            bevindingen.append(
+                Bevinding(
+                    "fout",
+                    onderwerp,
+                    "Staat op geverifieerd = true maar vermeldt geen bron.",
+                )
+            )
+        elif not tarief.geverifieerd:
+            bevindingen.append(
+                Bevinding(
+                    "waarschuwing",
+                    onderwerp,
+                    "Nog niet tegen een bron gecontroleerd (geverifieerd = false).",
+                )
+            )
+
+    for energievorm, categorie in {
+        (t.energievorm, t.klantcategorie) for t in repo.tarieven()
+    }:
+        try:
+            repo.tarief(energievorm, categorie, op_datum)
+        except TransportTariefError as exc:
+            bevindingen.append(
+                Bevinding("fout", f"transport/{energievorm}/{categorie}", str(exc))
+            )
+
+    return bevindingen
+
+
 def controleer_alles(
-    repo: HeffingenRepository, op_datum: date | None = None
+    repo: HeffingenRepository,
+    op_datum: date | None = None,
+    nettarieven_dir: Path | None = None,
 ) -> list[Bevinding]:
     peildatum = op_datum or date.today()
-    return [
+    bevindingen = [
         *controleer_accijns(repo),
         *controleer_energiefonds(repo),
         *controleer_dekking(repo, peildatum),
     ]
+    if nettarieven_dir is not None:
+        bevindingen += controleer_transport(nettarieven_dir, peildatum)
+    return bevindingen

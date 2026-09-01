@@ -1,0 +1,78 @@
+# Vervoerstarief aardgas (Fluxys) — de doorrekening van het vervoersnet op een
+# distributienetaansluiting.
+#
+# Eenheid: EUR per kWh, EXCLUSIEF btw.
+#
+# WAAROM DIT BESTAND BESTAAT
+# --------------------------
+# vtest.be splitst de nettarieven voor aardgas in vier posten. Drie daarvan
+# komen uit de VREG-distributiewerkboeken en klopten al exact voor alle acht
+# netbeheerders (afwijking <= 3e-7 EUR/kWh). De vierde — "Afnametarief
+# transport (per kWh)" — staat in geen enkel werkboek: het is geen
+# distributietarief maar het vervoerstarief van Fluxys, dat de netbeheerder
+# doorrekent. Het ontbrak daardoor volledig in dit repo, en maakte elke
+# gasfactuur ongeveer 25 EUR per jaar te laag.
+#
+# Bij elektriciteit bestaat dit gat niet: het transporttarief van Elia blijkt
+# al verrekend in de ODV-post van het distributiewerkboek.
+#
+# HOE HET CIJFER GECONTROLEERD IS
+# -------------------------------
+# CREG-nota (Z)3230 van 11 juni 2026: 1,56 EUR/MWh exclusief btw voor 2026,
+# uniform voor heel België sinds 01/01/2026.
+#
+# Bevestigd met `energievergelijker staging calibrate --segment onderneming`:
+# vijf verbruikspunten, alle vijf exact gereproduceerd door 0,00156 EUR/kWh.
+# Een zoektocht over alle waarden met zeven decimalen laat precies één
+# kandidaat over.
+#
+#     4.000 kWh ->  6,24 EUR     20.000 kWh -> 31,20 EUR
+#    11.900 kWh -> 18,56 EUR     35.000 kWh -> 54,60 EUR
+#    12.100 kWh -> 18,88 EUR
+#
+# Ook het sociaal tarief in de woningscrape rekent met dit tarief: 25,37 EUR
+# op het standaardprofiel van 16.262 kWh, precies 16,262 x 1,56.
+#
+# EEN AFWIJKING DIE NIET VERKLAARD IS
+# -----------------------------------
+# vtest.be rekent voor gewone woningproducten met 1,5565 EUR/MWh in plaats van
+# 1,56 — consistent 0,22% lager, over vijf verbruikspunten van 4.000 tot
+# 35.000 kWh. Op het standaardprofiel is dat 25,31 in plaats van 25,37 EUR,
+# een verschil van 6 eurocent per jaar.
+#
+# Onderzocht en uitgesloten: afronding per maand, per kwartaal of per dag;
+# een vaste term naast het kWh-tarief; een verband met de gastariefgroep
+# (GAS_T1/T2). Het sociaal tarief en het segment onderneming gebruiken wél
+# 1,56 exact.
+#
+# Hier staat daarom het officiële tarief, niet de waarde die vtest.be voor
+# woningproducten hanteert: 1,56 is gedocumenteerd bij de regulator, 1,5565
+# is een waarneming zonder verklaring. Een berekening zal daardoor 6 cent per
+# jaar afwijken van vtest.be op een gasfactuur voor een woning. Wie die
+# afwijking wil wegnemen, moet eerst uitzoeken waar ze vandaan komt — niet
+# het cijfer hier aanpassen tot het past.
+#
+# NOG NIET GEDEKT
+# ---------------
+# - Periodes vóór 01/01/2026. Het tarief is uniform sinds die datum; wat
+#   daarvoor gold is niet vastgesteld. De repository weigert die datums.
+# - Dit is de doorrekening zoals ze op een distributienetaansluiting
+#   terechtkomt. Fluxys hanteert voor wie rechtstreeks op het vervoersnet
+#   zit een entry/exit-capaciteitsstructuur; die wordt hier niet gemodelleerd.
+
+energievorm = "aardgas"
+bron = "CREG-nota (Z)3230 van 11/06/2026 + vtest.be kalibratie 2026-08-31"
+
+[[tarief]]
+klantcategorie = "niet_zakelijk"
+eur_per_kwh = "0.00156"
+geldig_vanaf = "2026-01-01"
+geverifieerd = true
+bron = "CREG-nota (Z)3230; bevestigd door het sociaal tarief op vtest.be (25,37 EUR bij 16.262 kWh)"
+
+[[tarief]]
+klantcategorie = "zakelijk_laagspanning"
+eur_per_kwh = "0.00156"
+geldig_vanaf = "2026-01-01"
+geverifieerd = true
+bron = "CREG-nota (Z)3230; vtest.be kalibratie 2026-08-31 segment onderneming, 5 verbruikspunten exact gereproduceerd"

@@ -179,6 +179,17 @@ De accijnstabellen dragen een **tijdsas**: elke `[[schijf]]` heeft een `geldig_v
 meest recente ingangsdatum. Regimes worden nooit vermengd. Voor datums vóór het oudste regime
 volgt een `HeffingenError` in plaats van een verkeerd tarief.
 
+`config/nettarieven/transport_aardgas.toml` — het vervoerstarief van Fluxys, de doorrekening
+van het vervoersnet op een distributienetaansluiting. Staat in geen VREG-werkboek (die dekken
+alleen de distributie) en ontbrak daardoor volledig, wat elke gasfactuur ongeveer 25 EUR per
+jaar te laag maakte. Geladen via `TransportTariefRepository.load(config_dir)`, met dezelfde
+tijdsas en verificatievlag als de accijnzen.
+
+**Let op**: vtest.be past op gewone woningproducten 1,5565 EUR/MWh toe waar CREG 1,56
+vastlegt — 0,22% lager, oorzaak niet vastgesteld. De masterdata draagt het officiële cijfer;
+`scripts/check_tarieven.py` pint de afwijking vast zodat ze bekend blijft en opvalt als ze
+verandert.
+
 `config/bronregister.toml` — welke bronbestanden de pipeline verwerkt heeft, als vaste
 referentie voor de bronbewaking (`data/` staat niet in git).
 

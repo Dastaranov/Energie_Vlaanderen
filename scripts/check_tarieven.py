@@ -59,6 +59,35 @@ CATEGORIE_PER_SEGMENT = {
 # De energievorm heet in de masterdata "aardgas", in de kalibratie "gas".
 ENERGIEVORM_IN_CONFIG = {"elektriciteit": "elektriciteit", "gas": "aardgas"}
 
+# Het vervoerstarief van Fluxys staat in geen VREG-werkboek en wordt als
+# masterdata bijgehouden; vtest.be rapporteert het wel, dus het is op dezelfde
+# manier te toetsen als de heffingen.
+TRANSPORT_LABEL = "Nettarieven|Afnametarief transport (per kWh)"
+
+# Het vervoerstarief is klein (1,56 EUR/MWh), dus de tolerantie van
+# 0,01 EUR/MWh die voor de accijnzen ruim genoeg is, dekt hier 0,6% van de
+# waarde af — genoeg om een echt verschil te verbergen. Voor transport toetsen
+# we daarom relatief: 0,05% van het tarief, ruim boven de afrondingsruis maar
+# ruim onder een systematisch verschil.
+TRANSPORT_TOLERANTIE_RELATIEF = Decimal("0.0005")
+
+# vtest.be rekent voor gewone woningproducten met 1,5565 in plaats van 1,56
+# EUR/MWh — consistent 0,2244% lager over vijf verbruikspunten. De oorzaak is
+# niet vastgesteld (zie config/nettarieven/transport_aardgas.toml). Het staat
+# hier vastgepind in plaats van weggemoffeld onder een ruime tolerantie: zolang
+# de afwijking precies deze grootte heeft, is ze bekend; verandert ze, dan
+# hoort dat op te vallen.
+BEKENDE_AFWIJKING = {
+    "niet_zakelijk": {
+        "relatief": Decimal("0.002244"),
+        "marge": Decimal("0.0002"),
+        "uitleg": (
+            "vtest.be past op woningproducten 1,5565 EUR/MWh toe in plaats van "
+            "het officiële 1,56; oorzaak niet vastgesteld"
+        ),
+    },
+}
+
 
 def _d(waarde: object) -> Decimal:
     return Decimal(str(waarde))
@@ -93,6 +122,80 @@ def _gemeten_bedragen(rapport: dict, energy: str) -> list[tuple[int, Decimal]]:
             continue
         punten.append((int(meting["kwh"]), _d(meting["componenten"][label])))
     return sorted(punten)
+
+
+def _controleer_transport(
+    rapport: dict, categorie: str, peildatum: date
+) -> tuple[int, int]:
+    """Leg config/nettarieven/ naast de gemeten vervoerstarieven.
+
+    Geeft (gecontroleerd, afwijkingen) terug.
+    """
+    from energie_vlaanderen.nettarieven.transport import (  # noqa: PLC0415
+        TransportTariefError,
+        TransportTariefRepository,
+    )
+
+    blok = rapport.get("gas")
+    if not blok:
+        return 0, 0
+
+    punten = [
+        (int(m["kwh"]), _d(m["componenten"][TRANSPORT_LABEL]))
+        for m in blok["metingen"]
+        if TRANSPORT_LABEL in m["componenten"]
+        and _d(m.get("dominant_aandeel", {}).get(TRANSPORT_LABEL, "0")) >= Decimal("0.6")
+    ]
+    if not punten:
+        return 0, 0
+
+    try:
+        repo = TransportTariefRepository.load(PROJECT_ROOT / "config" / "nettarieven")
+    except TransportTariefError as exc:
+        print(f"\n[OVERGESLAGEN] vervoerstarief: {exc}")
+        return 0, 0
+
+    print(f"\nvervoerstarief aardgas / {categorie} — {len(punten)} meetpunten")
+    gecontroleerd = afwijkingen = 0
+    for kwh, gemeten in sorted(punten):
+        try:
+            berekend = repo.kost_per_jaar("aardgas", categorie, _d(kwh), peildatum)
+        except TransportTariefError as exc:
+            print(f"  {kwh:>7} kWh  KAN NIET BEREKENEN: {exc}")
+            afwijkingen += 1
+            continue
+
+        gecontroleerd += 1
+        verschil = berekend - gemeten
+        relatief = abs(verschil) / berekend if berekend else Decimal(0)
+
+        bekend = BEKENDE_AFWIJKING.get(categorie)
+        # De marge moet de afronding op eurocent meenemen: op een bedrag van
+        # 6,24 EUR is één cent al 0,16%, ruim meer dan de systematische
+        # afwijking van 0,2244% zelf. Een vaste relatieve marge zou het
+        # kleinste meetpunt daardoor onterecht als nieuw verschil melden.
+        marge = (
+            bekend["marge"] + Decimal("0.005") / berekend if bekend and berekend else None
+        )
+        if bekend and abs(relatief - bekend["relatief"]) <= marge:
+            merk = "BEKEND"
+        elif relatief <= TRANSPORT_TOLERANTIE_RELATIEF:
+            merk = "OK"
+        else:
+            merk = "AFWIJKING"
+            afwijkingen += 1
+
+        print(
+            f"  {kwh:>7} kWh  vtest {gemeten:>10} EUR   config "
+            f"{berekend.quantize(Decimal('0.01')):>10} EUR   "
+            f"verschil {verschil.quantize(Decimal('0.01')):>8} EUR "
+            f"({(relatief * 100).quantize(Decimal('0.0001'))}%)  {merk}"
+        )
+
+    if BEKENDE_AFWIJKING.get(categorie):
+        print(f"  BEKEND = {BEKENDE_AFWIJKING[categorie]['uitleg']}")
+
+    return gecontroleerd, afwijkingen
 
 
 def controleer(rapport: dict, config_dir: Path, peildatum: date) -> int:
@@ -144,6 +247,12 @@ def controleer(rapport: dict, config_dir: Path, peildatum: date) -> int:
                 f"verschil {verschil.quantize(Decimal('0.01')):>8} EUR "
                 f"({per_mwh.quantize(Decimal('0.0001'))} EUR/MWh)  {merk}"
             )
+
+    transport_gecontroleerd, transport_afwijkingen = _controleer_transport(
+        rapport, categorie, peildatum
+    )
+    gecontroleerd += transport_gecontroleerd
+    afwijkingen += transport_afwijkingen
 
     print()
     if not gecontroleerd:

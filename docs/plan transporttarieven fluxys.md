@@ -1,8 +1,21 @@
 # Plan: transporttarieven aardgas (Fluxys) toevoegen
 
-Status: voorstel, nog niet uitgevoerd. Opgesteld 2026-08-31 na de vaststelling
-dat dit de enige kostenpost is die vtest.be wel doorrekent en dit repo niet
-kent.
+Status: **uitgevoerd op 2026-09-01.** Opgesteld 2026-08-31 na de vaststelling
+dat dit de enige kostenpost was die vtest.be wel doorrekende en dit repo niet
+kende.
+
+Wat er anders liep dan gepland: het plan ging uit van twee verschillende
+tarieven per segment (1,5565 voor woning, 1,5600 voor onderneming), afgeleid
+uit de metingen. CREG-nota (Z)3230 van 11/06/2026 blijkt echter één uniform
+tarief van **1,56 EUR/MWh excl. btw** voor heel België vast te leggen sinds
+01/01/2026 — precies de ondernemingsmeting, en ook precies wat het sociaal
+tarief binnen de woningscrape hanteert.
+
+De 1,5565 die vtest.be op gewone woningproducten toepast is daarmee geen
+tweede tarief maar een onverklaarde afwijking van 0,22%. In de masterdata
+staat het officiële cijfer; de afwijking is vastgepind in
+`scripts/check_tarieven.py` zodat ze bekend blijft en opvalt als ze
+verandert. Zie de kop van `config/nettarieven/transport_aardgas.toml`.
 
 ## Wat er ontbreekt
 

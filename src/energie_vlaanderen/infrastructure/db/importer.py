@@ -19,6 +19,7 @@ from energie_vlaanderen.infrastructure.db.schema import (
     tarief_injectie,
     netbeheerder,
     netbeheerder_tarief,
+    nettarief_transport,
     vtest_scrape_run,
     vtest_contract,
     vtest_postcode_prijs,
@@ -136,6 +137,12 @@ class ImportResult:
 # ---------------------------------------------------------------------------
 
 def upsert_data_version(conn: sa.Connection, version_id: str, status: str = "staged") -> None:
+    """Registreer de versie, zonder een actieve versie terug te zetten.
+
+    Een herimport van de actieve versie zette de status terug op "staged"
+    terwijl `geactiveerd_op` gevuld bleef. De twee velden spraken elkaar dan
+    tegen: `db verify` zag de versie als actief, het statusveld zei van niet.
+    """
     ts = datetime.now(tz=timezone.utc)
     stmt = sa.dialects.postgresql.insert(data_version).values(
         version_id=version_id,
@@ -143,7 +150,12 @@ def upsert_data_version(conn: sa.Connection, version_id: str, status: str = "sta
         status=status,
     ).on_conflict_do_update(
         index_elements=["version_id"],
-        set_={"status": status},
+        set_={
+            "status": sa.case(
+                (data_version.c.geactiveerd_op.isnot(None), data_version.c.status),
+                else_=status,
+            )
+        },
     )
     conn.execute(stmt)
 
@@ -307,7 +319,23 @@ def import_leverancier_en_product(
 
         groep_cols = ["year", "month", "segment", "energy", "direction",
                       "supplier", "product", "product_type"]
-        for groep_sleutel, groep in df.groupby(groep_cols, dropna=False):
+
+        # Chronologisch verwerken. De CSV wordt met dtype=str gelezen, dus
+        # groupby sorteert de maanden als tekst: 1, 10, 11, 12, 2, 3, ...
+        # De SCD2-historiek werd daardoor in de verkeerde volgorde opgebouwd —
+        # na december kwamen februari tot september nog langs, elk als een
+        # terugwerkende wijziging die de decemberrij afsloot met een geldig_tot
+        # vóór zijn eigen begin.
+        def _periode(sleutel) -> tuple[int, int]:
+            try:
+                return int(sleutel[0] or 0), int(sleutel[1] or 0)
+            except (TypeError, ValueError):
+                return 0, 0
+
+        groepen = sorted(
+            df.groupby(groep_cols, dropna=False), key=lambda kv: _periode(kv[0])
+        )
+        for groep_sleutel, groep in groepen:
             jaar, maand, segment, energie, richting, lev, prod, bron_type_raw = groep_sleutel
             bt = (_str(bron_type_raw) or bron_type_fallback or "onbekend").lower()
 
@@ -498,16 +526,25 @@ def _scd2_upsert(
     """SCD Type 2 upsert voor tarief-tabellen."""
     product_id = row_data.get("product_id")
     meter_type = row_data.get("meter_type", "single")
+    prijs_type = row_data.get("prijs_type")
     geldig_van = row_data.get("geldig_van")
 
     if not product_id or not geldig_van:
         return
 
-    # Query open rij
+    # Query open rij.
+    #
+    # prijs_type hoort hier mee in: hetzelfde product wordt soms zowel
+    # variabel als dynamisch aangeboden ("Bolt Variabel" is allebei), met een
+    # eigen indexatieformule per type. Zonder dat onderscheid bouwt het ene
+    # type de historiek op tot de laatste maand en wordt het andere vanaf de
+    # eerste maand als terugwerkend afgewezen — 62 van de 765
+    # productidentiteiten raakten dat.
     open_row = conn.execute(
         sa.select(tariff_table.c.id, tariff_table.c.geldig_van).where(
             (tariff_table.c.product_id == product_id)
             & (tariff_table.c.meter_type == meter_type)
+            & (tariff_table.c.prijs_type == prijs_type)
             & (tariff_table.c.geldig_tot.is_(None))
         )
     ).fetchone()
@@ -899,6 +936,45 @@ def _scd2_upsert_netbeheerder(conn: sa.Connection, row_data: dict[str, Any]) -> 
 # ---------------------------------------------------------------------------
 # Overheidsheffingen
 # ---------------------------------------------------------------------------
+
+def import_nettarief_transport(conn: sa.Connection, config_dir: Path) -> ImportResult:
+    """Importeer de vervoerstarieven uit config/nettarieven/.
+
+    `config_dir` is de map met de tariefbestanden zelf — `config/nettarieven/`.
+
+    Faalt hard, om dezelfde reden als de heffingen: een gasfactuur zonder
+    vervoerstarief is per definitie ongeveer 25 EUR per jaar te laag, en dat
+    hoort niet met een waarschuwing weggeschreven te worden.
+    """
+    from energie_vlaanderen.nettarieven.transport import TransportTariefRepository
+
+    repo = TransportTariefRepository.load(config_dir)
+
+    # Masterdata zonder version_id: bij elke import wordt de volledige set
+    # vervangen door wat er nu in config/nettarieven/ staat.
+    conn.execute(sa.delete(nettarief_transport))
+
+    rijen = [
+        {
+            "energievorm": tarief.energievorm,
+            "klantcategorie": tarief.klantcategorie,
+            "eur_per_kwh": tarief.eur_per_kwh,
+            "geldig_vanaf": tarief.geldig_vanaf,
+            "geverifieerd": tarief.geverifieerd,
+            "bron": tarief.bron or "onbekend",
+        }
+        for tarief in repo.tarieven()
+    ]
+    if not rijen:
+        raise ValueError(
+            f"Geen vervoerstarieven gevonden in {config_dir}; "
+            "een databank zonder vervoerstarief rekent elke gasfactuur te laag."
+        )
+
+    conn.execute(sa.insert(nettarief_transport), rijen)
+    LOG.info("nettarief_transport: %d rijen", len(rijen))
+    return ImportResult(domain="nettarief_transport", rows_inserted=len(rijen))
+
 
 def import_overheidsheffingen(conn: sa.Connection, config_dir: Path) -> ImportResult:
     """Importeer heffingen naar de databank.

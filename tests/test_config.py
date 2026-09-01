@@ -134,3 +134,41 @@ def test_settings_rejects_zero_download_limit(
                 "ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES": "0",
             },
         )
+
+def test_enexis_is_een_bekende_netbeheerder_zonder_tarieven():
+    """Baarle-Hertog (2387) krijgt zijn aardgas van Enexis, niet van Fluvius.
+
+    De netbeheerder hoort herkend te worden — anders loopt de naam als
+    onbekende code door de import — maar er zijn geen tarieven voor: die
+    staan in een eigen, niet-ingelezen werkboek. Dat onderscheid moet
+    expliciet blijven, anders gebruikt een gasberekening voor die postcode
+    stilzwijgend een Fluvius-tarief.
+    """
+    from energie_vlaanderen.utility.constants import DNB_CODES, DNB_ZONDER_TARIEVEN
+
+    assert DNB_CODES["Enexis Netbeheer"] == "ENEXIS"
+    assert "ENEXIS" in DNB_ZONDER_TARIEVEN
+
+
+def test_alle_netbeheerders_uit_de_gemeentelijst_zijn_bekend():
+    """Een onbekende netbeheerder zou als volledige naam de databank in gaan."""
+    import csv
+    from pathlib import Path
+
+    from energie_vlaanderen.utility.constants import DNB_CODES
+
+    pad = Path(__file__).resolve().parents[1] / "data" / "current" / "DnbPerGemeente.csv"
+    if not pad.is_file():
+        import pytest
+
+        pytest.skip("DnbPerGemeente.csv niet aanwezig")
+
+    onbekend = set()
+    with pad.open(encoding="utf-8-sig") as fh:
+        for rij in csv.DictReader(fh, delimiter=";"):
+            for kolom in ("DNB Elektriciteit", "DNB Gas"):
+                naam = rij[kolom].strip()
+                if naam and naam not in DNB_CODES:
+                    onbekend.add(naam)
+
+    assert onbekend == set()

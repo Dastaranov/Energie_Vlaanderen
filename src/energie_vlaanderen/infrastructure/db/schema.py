@@ -133,8 +133,11 @@ tarief_afname = sa.Table(
     metadata,
     *_tarief_columns(),
     sa.ForeignKeyConstraint(["product_id"], ["energie_product.id"], ondelete="CASCADE"),
-    sa.Index("ix_tarief_afname_open", "product_id", "meter_type", unique=True,
-             postgresql_where=sa.text("geldig_tot IS NULL")),
+    # prijs_type hoort in de sleutel: hetzelfde product wordt soms zowel
+    # variabel als dynamisch aangeboden, met een eigen formule per type.
+    # Zonder dat onderscheid verdringen die elkaars historiek.
+    sa.Index("ix_tarief_afname_open", "product_id", "meter_type", "prijs_type",
+             unique=True, postgresql_where=sa.text("geldig_tot IS NULL")),
     sa.Index("ix_tarief_afname_lookup", "product_id", "geldig_van", "geldig_tot"),
 )
 
@@ -143,8 +146,11 @@ tarief_injectie = sa.Table(
     metadata,
     *_tarief_columns(),
     sa.ForeignKeyConstraint(["product_id"], ["energie_product.id"], ondelete="CASCADE"),
-    sa.Index("ix_tarief_injectie_open", "product_id", "meter_type", unique=True,
-             postgresql_where=sa.text("geldig_tot IS NULL")),
+    # prijs_type hoort in de sleutel: hetzelfde product wordt soms zowel
+    # variabel als dynamisch aangeboden, met een eigen formule per type.
+    # Zonder dat onderscheid verdringen die elkaars historiek.
+    sa.Index("ix_tarief_injectie_open", "product_id", "meter_type", "prijs_type",
+             unique=True, postgresql_where=sa.text("geldig_tot IS NULL")),
 )
 
 # ---------------------------------------------------------------------------
@@ -273,6 +279,26 @@ overheidsheffing_energiefonds = sa.Table(
     sa.Column("eur_per_maand", sa.Numeric(10, 2), nullable=False),
     sa.Column("bron", sa.Text, nullable=False),
     sa.UniqueConstraint("jaar", "spanningsniveau", "klantcategorie", name="uq_overheidsheffing_energiefonds"),
+)
+
+# Vervoerstarief van Fluxys: de doorrekening van het vervoersnet op een
+# distributienetaansluiting. Staat in geen VREG-werkboek — die dekken alleen
+# de distributie — en ontbrak daardoor volledig, wat elke gasfactuur ongeveer
+# 25 EUR per jaar te laag maakte.
+nettarief_transport = sa.Table(
+    "nettarief_transport",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("energievorm", sa.Text, nullable=False),
+    sa.Column("klantcategorie", sa.Text, nullable=False),
+    sa.Column("eur_per_kwh", sa.Numeric(12, 8), nullable=False),
+    sa.Column("geldig_vanaf", sa.Date, nullable=False),
+    sa.Column("geverifieerd", sa.Boolean, nullable=False, server_default="false"),
+    sa.Column("bron", sa.Text, nullable=False),
+    sa.UniqueConstraint(
+        "energievorm", "klantcategorie", "geldig_vanaf",
+        name="uq_nettarief_transport",
+    ),
 )
 
 overheidsheffing_btw = sa.Table(
