@@ -179,12 +179,22 @@ def run_raw_status(args: argparse.Namespace, settings: Settings) -> int:
     rows: list[dict[str, object]] = []
     for manifest in manifests:
         report = store.verify(manifest.version_id)
+        artifacts_info = [
+            {
+                "kind": artifact.kind,
+                "stored_filename": artifact.stored_filename,
+                "original_filename": artifact.original_filename,
+                "size_bytes": artifact.size_bytes,
+            }
+            for artifact in manifest.artifacts.values()
+        ]
         rows.append(
             {
                 "version_id": manifest.version_id,
                 "created_at": manifest.created_at.isoformat(),
                 "valid": report.valid,
                 "checked_files": report.checked_files,
+                "artifacts": artifacts_info,
                 "errors": list(report.errors),
                 "warnings": list(report.warnings),
             }
@@ -200,6 +210,15 @@ def run_raw_status(args: argparse.Namespace, settings: Settings) -> int:
             print(f"  aangemaakt    : {row['created_at']}")
             print(f"  geldig        : {'ja' if row['valid'] else 'nee'}")
             print(f"  bestanden     : {row['checked_files']}")
+
+            if row["artifacts"]:
+                print("  bestanden     :")
+                for artifact in row["artifacts"]:
+                    print(f"    - {artifact['kind']}")
+                    print(f"      opgeslagen: {artifact['stored_filename']}")
+                    print(f"      origineel : {artifact['original_filename']}")
+                    print(f"      grootte   : {artifact['size_bytes']} bytes")
+
             print(f"  fouten        : {len(row['errors'])}")
             print(f"  waarschuwingen: {len(row['warnings'])}")
             print()
@@ -249,8 +268,18 @@ def run_parse_vtest(args: argparse.Namespace, settings: Settings) -> int:
         return fail("%s", exc)
 
     staging_dest = paths.staging / args.version
-    if staging_dest.exists():
-        shutil.rmtree(staging_dest, ignore_errors=True)
+    vtest_staging = staging_dest / "vtest"
+
+    # Zorg dat de staging_dest en vtest subdirectory bestaan
+    vtest_staging.mkdir(parents=True, exist_ok=True)
+
+    # Verwijder ALLEEN de parse-output bestanden (master_vast.csv, master_var_dyn.csv, report)
+    # NIET de scrape-bestanden (vtest_products_*.csv, vtest_product_components_*.csv)
+    for filename in ("master_vast.csv", "master_var_dyn.csv", "pipeline_report.json"):
+        file_path = vtest_staging / filename
+        if file_path.exists():
+            file_path.unlink()
+            LOG.debug("Verwijderd: %s", file_path)
 
     LOG.info("V-testwerkboek verwerken ...")
     try:
@@ -418,8 +447,8 @@ def run_refine_vtest(args: argparse.Namespace, settings: Settings) -> int:
         return _run_refine_matrix(args, settings, staging_dir)
 
     LOG.info(
-        "Scrapen van vtest.be (segment=%s, energie=%s, postcode=%s) ...",
-        args.segment, args.energy, args.postcode,
+        "Scrapen van vtest.be (segment=%s, energie=%s, postcode=%s, timeout=%ds) ...",
+        args.segment, args.energy, args.postcode, args.timeout,
     )
     try:
         result = VTestRefinePipeline().process(
@@ -431,6 +460,7 @@ def run_refine_vtest(args: argparse.Namespace, settings: Settings) -> int:
             headless=not args.show,
             browser=args.browser,
             skip_download=args.no_download,
+            timeout=args.timeout,
         )
     except VTestDownloadError as exc:
         return fail("Download mislukt: %s", exc)
@@ -462,6 +492,81 @@ def run_refine_vtest(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def run_staging_calibrate(args: argparse.Namespace, settings: Settings) -> int:
+    """Reken de heffingen- en nettariefstructuur terug uit vtest.be.
+
+    Scrapt hetzelfde profiel bij een reeks jaarverbruiken en leidt uit de
+    bedragen per kostencomponent de onderliggende schijven af. Het rapport is
+    de toets voor `config/heffingen/*.toml`: die masterdata is handmatig
+    onderhouden, dit is de enige geautomatiseerde controle erop.
+    """
+    from energie_vlaanderen.ingest.vtest.calibration import (
+        CalibrationError,
+        VTestCalibrator,
+    )
+    from energie_vlaanderen.ingest.vtest.html_downloader import VTestDownloadError
+
+    paths = DataPaths.from_settings(settings)
+    staging_dir = paths.staging / args.version
+
+    try:
+        rapport_pad = VTestCalibrator().run(
+            staging_dir=staging_dir,
+            postcode=args.postcode,
+            segment=args.segment,
+            browser=args.browser,
+            headless=not args.show,
+        )
+    except (CalibrationError, VTestDownloadError) as exc:
+        return fail("Kalibratie mislukt: %s", exc)
+
+    rapport = json.loads(rapport_pad.read_text(encoding="utf-8"))
+
+    def _samenvatting() -> list[tuple[str, str, str, bool]]:
+        rijen = []
+        for energy in ("elektriciteit", "gas"):
+            for fit in rapport.get(energy, {}).get("componenten", []):
+                if fit["vaste_term_eur"] is not None:
+                    beschrijving = f"vast {fit['vaste_term_eur']} EUR/jaar"
+                else:
+                    beschrijving = " | ".join(
+                        f"{s['van_kwh']}-{s['tot_kwh'] or '∞'}: {s['eur_per_mwh']} EUR/MWh"
+                        for s in fit["schijven"]
+                    )
+                rijen.append(
+                    (energy, f"{fit['groep']} / {fit['component']}", beschrijving, fit["sluitend"])
+                )
+        return rijen
+
+    def _text() -> None:
+        print(f"Segment  : {rapport['segment']}")
+        print(f"Postcode : {rapport['postcode']}")
+        print(f"Rapport  : {rapport_pad}")
+        for energy, component, beschrijving, sluitend in _samenvatting():
+            merk = "OK" if sluitend else "!!"
+            print(f"[{merk}] {energy:14s} {component:52s} {beschrijving}")
+
+    emit(
+        args,
+        text_fn=_text,
+        json_obj={
+            "rapport": str(rapport_pad),
+            "segment": rapport["segment"],
+            "postcode": rapport["postcode"],
+            "componenten": [
+                {
+                    "energy": energy,
+                    "component": component,
+                    "structuur": beschrijving,
+                    "sluitend": sluitend,
+                }
+                for energy, component, beschrijving, sluitend in _samenvatting()
+            ],
+        },
+    )
+    return 0
+
+
 def _run_refine_matrix(args: argparse.Namespace, settings: Settings, staging_dir: Path) -> int:
     from energie_vlaanderen.ingest.vtest.product_matcher import (
         match_products,
@@ -475,13 +580,14 @@ def _run_refine_matrix(args: argparse.Namespace, settings: Settings, staging_dir
     if not dnb_csv.is_file():
         return fail("DnbPerGemeente.csv niet gevonden op %s (nodig voor --matrix).", dnb_csv)
 
-    LOG.info("Matrix-run gestart (segment x energietype x DNB, 32 combinaties) ...")
+    LOG.info("Matrix-run gestart (segment x energietype x DNB, 32 combinaties, timeout=%ds) ...", args.timeout)
     result = VTestRefineMatrix().run(
         staging_dir=staging_dir,
         version_id=args.version,
         dnb_csv_path=dnb_csv,
         headless=not args.show,
         browser=args.browser,
+        timeout=args.timeout,
     )
 
     vtest_dir = staging_dir / "vtest"
@@ -591,7 +697,17 @@ def run_sync_market(args: argparse.Namespace, settings: Settings) -> int:
 # ---------------------------------------------------------
 
 def run_publish(args: argparse.Namespace, settings: Settings) -> int:
-    """Publiceer een gestagede versie naar de actieve datarepository."""
+    """Publiceer een gestagede versie: naar versions/, naar de databank, en
+    activeer ze.
+
+    Publiceren is één handeling met drie gevolgen die niet uit elkaar mogen
+    lopen: de bestandskopie in `versions/`, de rijen in de databank, en de
+    aanwijzer in `current.txt`. De databank is het eindstation, dus als de
+    import faalt wordt de hele publicatie teruggedraaid — anders zou
+    `current.txt` naar een versie wijzen die in de databank ontbreekt.
+    """
+    from energie_vlaanderen.audit.manager import ApprovalManager
+
     paths = DataPaths.from_settings(settings)
     version_id = args.version
 
@@ -603,6 +719,27 @@ def run_publish(args: argparse.Namespace, settings: Settings) -> int:
     staging_dir = paths.staging / version_id
     if not staging_dir.is_dir():
         return fail("Staging-map bestaat niet: %s", staging_dir)
+
+    # De auditstatus werd tot nu toe niet geraadpleegd: `audit approve` schreef
+    # een statusbestand dat niets afdwong, zodat een versie in quarantaine
+    # gewoon gepubliceerd kon worden. De poort stond open.
+    status = ApprovalManager(paths).get_status(version_id)
+    if status.status != "approved" and not args.force:
+        return fail(
+            "Versie %s staat op '%s' en is niet goedgekeurd.\n\n"
+            "Controleer ze eerst:\n"
+            "  energievergelijker audit sanity  --version %s\n"
+            "  energievergelijker audit golden  --version %s\n"
+            "  energievergelijker audit approve --version %s\n\n"
+            "Of publiceer bewust zonder goedkeuring met --force.",
+            version_id, status.status, version_id, version_id, version_id,
+        )
+    if status.status != "approved":
+        LOG.warning(
+            "Versie %s wordt gepubliceerd zonder goedkeuring (status: %s) "
+            "omdat --force is meegegeven.",
+            version_id, status.status,
+        )
 
     vtest_staging = staging_dir / "vtest"
     if not vtest_staging.is_dir():
@@ -636,12 +773,63 @@ def run_publish(args: argparse.Namespace, settings: Settings) -> int:
         shutil.rmtree(version_dir, ignore_errors=True)
         return fail("Gepubliceerde versie is ongeldig en werd teruggedraaid: %s", exc)
 
+    # Importeer naar de databank vóór de activatie. De databank is het
+    # eindstation; als die de versie niet heeft, mag current.txt er niet naar
+    # wijzen. Faalt de import, dan wordt de versiemap teruggedraaid en blijft
+    # de vorige actieve versie staan.
+    db_geimporteerd = False
+    if not args.skip_db:
+        from energie_vlaanderen.cli.db import import_version_into_db
+
+        try:
+            db_resultaat = import_version_into_db(
+                settings=settings,
+                version_id=version_id,
+                bron_dir=version_dir,
+                overwrite=args.db_overwrite,
+            )
+        except Exception as exc:
+            shutil.rmtree(version_dir, ignore_errors=True)
+            return fail(
+                "Databankimport van versie %s mislukt; de publicatie is "
+                "teruggedraaid en current.txt is ongewijzigd: %s\n\n"
+                "Is de databank bereikbaar en gemigreerd "
+                "(`energievergelijker db init`)? Publiceren zonder databank "
+                "kan met --skip-db, maar dan lopen bestanden en databank uiteen.",
+                version_id, exc,
+            )
+        db_geimporteerd = True
+        LOG.info(
+            "Databankimport voltooid: %d tabellen bijgewerkt.", len(db_resultaat)
+        )
+    else:
+        LOG.warning(
+            "--skip-db: versie %s wordt geactiveerd zonder databankimport. "
+            "current.txt en de databank lopen hierdoor uiteen.",
+            version_id,
+        )
+
     # Activeer de versie (schrijft current.txt atomisch)
     try:
         paths.activate(version_id)
     except DataPathsError as exc:
         shutil.rmtree(version_dir, ignore_errors=True)
         return fail("Activatie van versie %s mislukt: %s", version_id, exc)
+
+    # Markeer dezelfde versie als actief in de databank, zodat current.txt en
+    # data_version.geactiveerd_op hetzelfde zeggen.
+    if db_geimporteerd:
+        from energie_vlaanderen.cli.db import mark_version_active_in_db
+
+        try:
+            mark_version_active_in_db(settings, version_id)
+        except Exception as exc:
+            LOG.warning(
+                "Versie %s is geactiveerd in current.txt maar kon niet als "
+                "actief gemarkeerd worden in de databank: %s. "
+                "Draai `energievergelijker db verify` om de stand te toetsen.",
+                version_id, exc,
+            )
 
     # Ruim staging op (tenzij --keep-staging)
     staging_removed = False

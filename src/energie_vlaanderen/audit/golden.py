@@ -11,6 +11,7 @@ from energie_vlaanderen.ingest.vtest.workbook import VTestWorkbookParser
 from energie_vlaanderen.ingest.vtest.normalizer import VTestDataNormalizer
 from energie_vlaanderen.ingest.tariffs.workbook import TariffWorkbookParser
 from energie_vlaanderen.ingest.tariffs.normalizer import TariffDataNormalizer
+from energie_vlaanderen.ingest.tariffs.pipeline import TariffPipeline
 
 
 @dataclass(frozen=True)
@@ -154,7 +155,49 @@ class TariffGoldenAuditor:
         "Tarieftype", "Tariefdetail", "Tariefnotering", "Prijs_num",
     )
     FLOAT_TOLERANCE = 1e-4
-    SORT_KEYS = ["Netbeheerder", "Contracttype", "Klanttype", "Tarieftype", "Tariefdetail", "source_sheet", "source_row"]
+    # De vergelijking gebeurt op positie na sortering, dus de sortering moet
+    # op beide kanten dezelfde volgorde geven én totaal zijn.
+    #
+    # "Tariefnotering" hoort erbij sinds de normalizer "of"-vervolgregels de
+    # naam van de regel erboven geeft: verschillende eenheden van hetzelfde
+    # tarief delen dan hun Tariefdetail, en zonder de notering is de volgorde
+    # niet meer bepaald.
+    SORT_KEYS = [
+        "Netbeheerder", "Contracttype", "Klanttype", "Tarieftype",
+        "Tariefdetail", "Tariefnotering", "source_sheet", "source_row",
+    ]
+    # Kolommen die als getal moeten sorteren. De gestagede CSV wordt met
+    # dtype=str gelezen, dus "9" zou na "13" komen terwijl de verse kant, waar
+    # het een int is, andersom sorteert. De twee kanten raakten daardoor uit
+    # de pas en de positievergelijking legde ongelijke rijen naast elkaar —
+    # 105 gemelde verschillen die geen van alle een echt dataverschil waren.
+    NUMERIEKE_SORT_KEYS = {"source_row"}
+
+    @classmethod
+    def _sorteer(cls, frame: pd.DataFrame) -> pd.DataFrame:
+        """Sorteer op de sleutelkolommen, met getallen als getal.
+
+        Beide kanten moeten na sortering dezelfde volgorde hebben; anders
+        vergelijkt de audit rijen die niets met elkaar te maken hebben.
+        """
+        sleutels = [k for k in cls.SORT_KEYS if k in frame.columns]
+        if not sleutels:
+            return frame.reset_index(drop=True)
+
+        hulp = frame.copy()
+        hulpkolommen = []
+        for sleutel in sleutels:
+            if sleutel in cls.NUMERIEKE_SORT_KEYS:
+                naam = f"__sort_{sleutel}"
+                hulp[naam] = pd.to_numeric(hulp[sleutel], errors="coerce")
+                hulpkolommen.append(naam)
+            else:
+                hulpkolommen.append(sleutel)
+
+        gesorteerd = hulp.sort_values(hulpkolommen, kind="mergesort")
+        return gesorteerd.drop(
+            columns=[k for k in hulpkolommen if k.startswith("__sort_")]
+        ).reset_index(drop=True)
 
     def audit(
         self,
@@ -166,10 +209,39 @@ class TariffGoldenAuditor:
     ) -> GoldenAuditResult:
         domain = f"{energy_type}_{direction}"
         parsed = TariffWorkbookParser().parse(source_xlsx, energy_type=energy_type)
-        if direction == "afname":
-            fresh_df = TariffDataNormalizer().normalize(parsed.afname, pd.DataFrame()).afname
+        genormaliseerd = TariffDataNormalizer().normalize(parsed.afname, parsed.injectie)
+
+        # De pipeline schrijft de hoogspannings- en middenspanningsklanttypes
+        # naar een eigen CSV, met afname én injectie samen. De verse kant hier
+        # bevat ze nog gewoon in beide frames, dus zonder dezelfde splitsing
+        # wordt een 728-rijenframe vergeleken met een 200-rijen-CSV — op
+        # positie, waardoor élke rij als verschil telt. Dat leverde 108
+        # gemelde verschillen op die geen van alle een echt dataverschil
+        # waren. Gas kent deze splitsing niet en slaagde daarom altijd.
+        def _splits_hs(frame: pd.DataFrame, *, hoogspanning: bool) -> pd.DataFrame:
+            if frame.empty:
+                return frame
+            is_hs = frame["Klanttype"].isin(TariffPipeline.HS_MS_KLANTTYPES)
+            return frame[is_hs if hoogspanning else ~is_hs]
+
+        if energy_type != "electricity":
+            fresh_df = (
+                genormaliseerd.afname if direction == "afname" else genormaliseerd.injectie
+            )
+        elif direction == "hoogspanning":
+            fresh_df = pd.concat(
+                [
+                    _splits_hs(genormaliseerd.afname, hoogspanning=True),
+                    _splits_hs(genormaliseerd.injectie, hoogspanning=True),
+                ],
+                ignore_index=True,
+            )
+        elif direction == "afname":
+            fresh_df = _splits_hs(genormaliseerd.afname, hoogspanning=False)
         else:
-            fresh_df = TariffDataNormalizer().normalize(pd.DataFrame(), parsed.injectie).injectie
+            fresh_df = _splits_hs(genormaliseerd.injectie, hoogspanning=False)
+
+        fresh_df = fresh_df.reset_index(drop=True)
 
         if not staged_csv.is_file():
             return GoldenAuditResult(
@@ -183,10 +255,8 @@ class TariffGoldenAuditor:
 
         staged_df = pd.read_csv(staged_csv, sep=";", dtype=str, encoding="utf-8-sig").fillna("")
 
-        sort_keys_fresh = [k for k in self.SORT_KEYS if k in fresh_df.columns]
-        sort_keys_staged = [k for k in self.SORT_KEYS if k in staged_df.columns]
-        fresh_sorted = fresh_df.sort_values(sort_keys_fresh).reset_index(drop=True) if sort_keys_fresh else fresh_df.reset_index(drop=True)
-        staged_sorted = staged_df.sort_values(sort_keys_staged).reset_index(drop=True) if sort_keys_staged else staged_df.reset_index(drop=True)
+        fresh_sorted = self._sorteer(fresh_df)
+        staged_sorted = self._sorteer(staged_df)
 
         mismatches: list[FieldMismatch] = []
         total = len(staged_sorted)

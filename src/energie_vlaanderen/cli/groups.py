@@ -145,8 +145,54 @@ def _add_staging_group(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Open browser zichtbaar (niet headless).",
     )
+    refine_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=60,
+        help="Timeout in seconden voor wachten op vtest.be resultaten (standaard: 60s, voor traagge combinaties: 120-180s).",
+    )
     add_json_flag(refine_parser)
     refine_parser.set_defaults(handler=ingest.run_refine_vtest)
+
+    calibrate_parser = actions.add_parser(
+        "calibrate",
+        help=(
+            "Reken de heffingen- en nettariefstructuur terug uit vtest.be door "
+            "hetzelfde profiel bij verschillende verbruiken op te vragen."
+        ),
+    )
+    add_version_arg(calibrate_parser)
+    calibrate_parser.add_argument(
+        "--postcode",
+        default="9120",
+        help=(
+            "Postcode voor de kalibratie (standaard 9120). Heffingen zijn "
+            "federaal en dus postcode-onafhankelijk; de nettarieven niet."
+        ),
+    )
+    calibrate_parser.add_argument(
+        "--segment",
+        default="woning",
+        choices=("woning", "onderneming"),
+        help=(
+            "Klantsegment (standaard woning). De accijnshervorming van 2023 "
+            "gold enkel voor residentiële afnemers, dus beide segmenten "
+            "dragen andere tarieven en krijgen een eigen rapport."
+        ),
+    )
+    calibrate_parser.add_argument(
+        "--browser",
+        default="chrome",
+        choices=("chrome", "firefox"),
+        help="Browser voor Selenium (standaard: chrome).",
+    )
+    calibrate_parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Open browser zichtbaar (niet headless).",
+    )
+    add_json_flag(calibrate_parser)
+    calibrate_parser.set_defaults(handler=ingest.run_staging_calibrate)
 
 
 def _add_market_group(subparsers: argparse._SubParsersAction) -> None:
@@ -227,6 +273,29 @@ def _add_audit_group(subparsers: argparse._SubParsersAction) -> None:
     add_json_flag(sample_parser)
     sample_parser.set_defaults(handler=audit.run_audit_sample)
 
+    heffingen_parser = actions.add_parser(
+        "heffingen",
+        help=(
+            "Controleer de heffingen-masterdata in config/heffingen/ op "
+            "sluitende schijven, ontbrekende jaren en ongeverifieerde cijfers."
+        ),
+    )
+    heffingen_parser.add_argument(
+        "--datum",
+        default=None,
+        help=(
+            "Peildatum (YYYY-MM-DD) voor de dekkingscontrole; "
+            "standaard vandaag."
+        ),
+    )
+    heffingen_parser.add_argument(
+        "--streng",
+        action="store_true",
+        help="Behandel waarschuwingen als fouten (voor CI).",
+    )
+    add_json_flag(heffingen_parser)
+    heffingen_parser.set_defaults(handler=audit.run_audit_heffingen)
+
 
 def _add_version_group(subparsers: argparse._SubParsersAction) -> None:
     version_parser = subparsers.add_parser(
@@ -237,13 +306,37 @@ def _add_version_group(subparsers: argparse._SubParsersAction) -> None:
 
     publish_parser = actions.add_parser(
         "publish",
-        help="Publiceer een gestagede versie naar de actieve datarepository.",
+        help=(
+            "Publiceer een goedgekeurde versie: kopieer naar versions/, "
+            "importeer naar de databank en activeer ze."
+        ),
     )
     add_version_arg(publish_parser, help="Versie-id van de te publiceren staging-map.")
     publish_parser.add_argument(
         "--keep-staging",
         action="store_true",
         help="Bewaar de staging-map na publicatie (standaard: verwijderen).",
+    )
+    publish_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Publiceer ook als de versie niet goedgekeurd is "
+            "(`audit approve` niet uitgevoerd)."
+        ),
+    )
+    publish_parser.add_argument(
+        "--skip-db",
+        action="store_true",
+        help=(
+            "Sla de databankimport over. Let op: current.txt en de databank "
+            "lopen dan uiteen."
+        ),
+    )
+    publish_parser.add_argument(
+        "--db-overwrite",
+        action="store_true",
+        help="Herlaad de versie in de databank als ze er al in zit.",
     )
     add_json_flag(publish_parser)
     publish_parser.set_defaults(handler=ingest.run_publish)
@@ -280,6 +373,16 @@ def _add_db_group(subparsers: argparse._SubParsersAction) -> None:
     )
     add_json_flag(import_parser)
     import_parser.set_defaults(handler=db.run_db_import)
+
+    verify_parser = actions.add_parser(
+        "verify",
+        help=(
+            "Toets of de databank één op één overeenkomt met current.txt: "
+            "zelfde actieve versie, aanwezig en geïmporteerd."
+        ),
+    )
+    add_json_flag(verify_parser)
+    verify_parser.set_defaults(handler=db.run_db_verify)
 
     status_parser = actions.add_parser(
         "status",

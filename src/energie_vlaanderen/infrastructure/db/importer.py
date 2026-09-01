@@ -27,7 +27,9 @@ from energie_vlaanderen.infrastructure.db.schema import (
     overheidsheffing_btw,
 )
 from energie_vlaanderen.heffingen.repository import HeffingenRepository
+from energie_vlaanderen.ingest.vtest.normalizer import FORMULA_COMPONENTS
 from energie_vlaanderen.utility.constants import DNB_CODES
+from energie_vlaanderen.utility.normalizer import ontleed_leveranciersnaam
 
 LOG = logging.getLogger(__name__)
 
@@ -35,7 +37,49 @@ _SEP = ";"
 _ENC = "utf-8-sig"
 
 # Meter-types die in de component-kolom voorkomen
-METER_TYPES = {"single", "day", "night", "exclusive_night", "night_low", "piekuren", "daluren", "superdaluren", "dynamic"}
+# Componentcodes die een eigen prijsband vormen: elk krijgt een eigen rij in
+# tarief_afname/tarief_injectie met zijn eigen energieprijs. De naam
+# "meter_type" is historisch — het gaat niet alleen om de meteropstelling
+# (single/day/night) maar ook om contractuele banden: tijdsblokken van een
+# ToU-contract, het gewaarborgde vaste deel van een variabel contract, of
+# zelfverbruik.
+#
+# Alles wat hier niet in staat en ook geen toeslagkolom is, wordt bij de
+# import weggegooid. Dat gebeurde met 295 prijsrijen: de ToU-banden stonden er
+# nog onder hun oude Nederlandse namen (daluren/piekuren/superdaluren), en de
+# _vast-varianten stonden er nooit in.
+#
+# De afgeleide varianten worden daarom niet met de hand opgesomd maar uit de
+# vocabulaire van de normalizer opgebouwd. Die maakt "<code>_vast" voor het
+# gewaarborgde deel van een variabel contract en "<code>_low" voor de lage
+# verbruiksschijf; met de hand bijhouden liet er telkens een paar wegvallen.
+_BASIS_PRIJSBANDEN = {
+    # Meteropstelling
+    "single",
+    "day",
+    "night",
+    "exclusive_night",
+    # Ebem bundelt dag- en exclusief-nachttarief in één regel
+    "single_and_exclusive_night",
+    # Tijdsblokken van ToU-contracten (ENGIE Empower met Flextime)
+    "tou_peak",
+    "tou_offpeak",
+    "tou_super_offpeak",
+    # Zelfverbruik uit de eigen installatie (EnergyVision)
+    "self_consumption",
+    # Dynamisch uurtarief
+    "dynamic",
+    # Lekt uit VREG's eigen datamodel (ENGIE Easy); als eigen band bewaard
+    # zodat de prijs niet verdwijnt zonder te doen alsof het iets anders is.
+    "consumptiontotal",
+}
+
+METER_TYPES = (
+    _BASIS_PRIJSBANDEN
+    | {f"{code}_vast" for code in FORMULA_COMPONENTS}
+    | {f"{code}_low" for code in _BASIS_PRIJSBANDEN}
+    | {f"{code}_vast_low" for code in FORMULA_COMPONENTS}
+)
 
 
 def _dec(val: Any) -> Decimal | None:
@@ -241,6 +285,18 @@ def import_leverancier_en_product(
     total_producten = 0
     total_tarieven = 0
     unmapped_components: set[str] = set()
+    onbekende_annotaties: set[str] = set()
+    product_cache: dict[tuple, int] = {}
+
+    # Leveranciers in het geheugen bijhouden: er zijn ruim tienduizend
+    # productgroepen maar amper vijfendertig leveranciers, dus per groep naar
+    # de databank gaan is verspilde rondreistijd.
+    leverancier_cache: dict[str, int] = {
+        naam.casefold(): id_
+        for id_, naam in conn.execute(
+            sa.select(leverancier.c.id, leverancier.c.naam)
+        ).fetchall()
+    }
 
     for csv_path, bron_type_fallback in [(vast_csv, "vast"), (var_dyn_csv, None)]:
         if not csv_path.is_file():
@@ -256,20 +312,56 @@ def import_leverancier_en_product(
             bt = (_str(bron_type_raw) or bron_type_fallback or "onbekend").lower()
 
             # Stap 1 — leverancier upsert
-            lev_naam = _str(lev) or ""
+            #
+            # De VREG-export spelt dezelfde leverancier niet altijd gelijk:
+            # "Dots Energy" (36 rijen) en "Dots energy" (38) staan er beide in.
+            # Op naam alleen levert dat twee leverancierrijen op, waarna de
+            # producten van één leverancier over twee records verdeeld raken —
+            # en de vreg_id-koppeling, die op lower(naam) zoekt, twee rijen
+            # terugkrijgt en de import laat klappen.
+            #
+            # Daarnaast schrijft VREG dezelfde leverancier soms met en soms
+            # zonder juridische entiteit: "ENGIE" naast "ENGIE (handelsnaam
+            # van Electrabel)". We splitsen dat: de merknaam is de identiteit,
+            # de entiteit een eigenschap.
+            lev_ruw = _str(lev) or ""
+            if not lev_ruw:
+                continue
+            ontleed = ontleed_leveranciersnaam(lev_ruw)
+            lev_naam, lev_entiteit = ontleed.naam, ontleed.juridische_entiteit
             if not lev_naam:
                 continue
+            if ontleed.onbekende_annotatie:
+                # Een nieuwe schrijfwijze zou anders stil een tweede
+                # leverancier worden; melden zodat de normalisatie meegroeit.
+                onbekende_annotaties.add(lev_ruw)
 
-            lev_stmt = sa.dialects.postgresql.insert(leverancier).values(naam=lev_naam)
-            lev_stmt = lev_stmt.on_conflict_do_nothing(index_elements=["naam"])
-            conn.execute(lev_stmt)
-
-            lev_result = conn.execute(
-                sa.select(leverancier.c.id).where(leverancier.c.naam == lev_naam)
-            ).fetchone()
-            if not lev_result:
-                continue
-            lev_id = lev_result[0]
+            lev_id = leverancier_cache.get(lev_naam.casefold())
+            if lev_id is None:
+                lev_stmt = sa.dialects.postgresql.insert(leverancier).values(
+                    naam=lev_naam, juridische_entiteit=lev_entiteit
+                )
+                lev_stmt = lev_stmt.on_conflict_do_nothing(index_elements=["naam"])
+                conn.execute(lev_stmt)
+                lev_result = conn.execute(
+                    sa.select(leverancier.c.id).where(
+                        sa.func.lower(leverancier.c.naam) == lev_naam.casefold()
+                    )
+                ).fetchone()
+                if not lev_result:
+                    continue
+                lev_id = lev_result[0]
+                leverancier_cache[lev_naam.casefold()] = lev_id
+            elif lev_entiteit:
+                # De korte schrijfwijze kwam eerst; vul de entiteit alsnog aan.
+                conn.execute(
+                    sa.update(leverancier)
+                    .where(
+                        (leverancier.c.id == lev_id)
+                        & leverancier.c.juridische_entiteit.is_(None)
+                    )
+                    .values(juridische_entiteit=lev_entiteit)
+                )
 
             # Stap 2 — energie_product upsert
             prod_naam = _str(prod) or ""
@@ -278,36 +370,49 @@ def import_leverancier_en_product(
             if not (prod_naam and ener_type and seg):
                 continue
 
-            prod_stmt = sa.dialects.postgresql.insert(energie_product).values(
-                leverancier_id=lev_id,
-                product_naam=prod_naam,
-                energie_type=ener_type,
-                segment=seg,
-            ).on_conflict_do_nothing(
-                constraint="uq_energie_product_identiteit"
-            ).returning(energie_product.c.id)
+            # Dezelfde productidentiteit komt in veel groepen terug (één per
+            # maand), dus onthouden scheelt twee rondreizen per groep.
+            prod_sleutel = (lev_id, prod_naam, ener_type, seg)
+            prod_id = product_cache.get(prod_sleutel)
 
-            prod_result = conn.execute(prod_stmt).fetchone()
-            if prod_result is None:
-                prod_result = conn.execute(
-                    sa.select(energie_product.c.id).where(
-                        (energie_product.c.leverancier_id == lev_id)
-                        & (energie_product.c.product_naam == prod_naam)
-                        & (energie_product.c.energie_type == ener_type)
-                        & (energie_product.c.segment == seg)
-                    )
-                ).fetchone()
-            prod_id = prod_result[0] if prod_result else None
-            if not prod_id:
-                continue
+            if prod_id is None:
+                prod_stmt = sa.dialects.postgresql.insert(energie_product).values(
+                    leverancier_id=lev_id,
+                    product_naam=prod_naam,
+                    energie_type=ener_type,
+                    segment=seg,
+                ).on_conflict_do_nothing(
+                    constraint="uq_energie_product_identiteit"
+                ).returning(energie_product.c.id)
+
+                prod_result = conn.execute(prod_stmt).fetchone()
+                if prod_result is None:
+                    prod_result = conn.execute(
+                        sa.select(energie_product.c.id).where(
+                            (energie_product.c.leverancier_id == lev_id)
+                            & (energie_product.c.product_naam == prod_naam)
+                            & (energie_product.c.energie_type == ener_type)
+                            & (energie_product.c.segment == seg)
+                        )
+                    ).fetchone()
+                prod_id = prod_result[0] if prod_result else None
+                if not prod_id:
+                    continue
+                product_cache[prod_sleutel] = prod_id
             total_producten += 1
 
             # Stap 3 — bepaal meter_types in deze groep
             geldig_van = date(int(jaar) if jaar else 1970, int(maand) if maand else 1, 1)
             richting_str = _str(richting or "").lower()
 
+            # Eén keer naar dicts: `iterrows()` bouwt per rij een Series, en
+            # de lus hieronder liep de groep opnieuw door voor elk meter_type.
+            # Bij vier meter_types werd dezelfde groep dus vijf keer met
+            # pandas doorlopen; dat was het grootste deel van de importtijd.
+            groep_rijen = groep.to_dict("records")
+
             meter_types_in_groep: set[str] = {"single"}
-            for _, r in groep.iterrows():
+            for r in groep_rijen:
                 comp_code = _str(r.get("component")) or ""
                 if comp_code.lower() in METER_TYPES:
                     meter_types_in_groep.add(comp_code.lower())
@@ -339,7 +444,7 @@ def import_leverancier_en_product(
                         tarief_row[f"index_waarde_{idx}"] = val
 
                 # Voeg component-waarden toe
-                for _, comp_r in groep.iterrows():
+                for comp_r in groep_rijen:
                     comp_code = _str(comp_r.get("component")) or ""
                     # Skip meter_type codes
                     if comp_code.lower() in METER_TYPES:
@@ -365,6 +470,14 @@ def import_leverancier_en_product(
 
     if unmapped_components:
         LOG.warning("Onbekende component-codes: %s", sorted(unmapped_components))
+
+    if onbekende_annotaties:
+        LOG.warning(
+            "Leveranciersnamen met een onbekende annotatie tussen haakjes: %s. "
+            "Deze blijven als aparte leverancier staan; breid "
+            "utility.normalizer._ANNOTATIES uit als het om dezelfde aanbieder gaat.",
+            sorted(onbekende_annotaties),
+        )
 
     LOG.info(
         "leverancier_en_product totaal: %d producten, %d tarief-snapshots",
@@ -392,7 +505,7 @@ def _scd2_upsert(
 
     # Query open rij
     open_row = conn.execute(
-        sa.select(tariff_table.c.id).where(
+        sa.select(tariff_table.c.id, tariff_table.c.geldig_van).where(
             (tariff_table.c.product_id == product_id)
             & (tariff_table.c.meter_type == meter_type)
             & (tariff_table.c.geldig_tot.is_(None))
@@ -400,7 +513,33 @@ def _scd2_upsert(
     ).fetchone()
 
     if open_row:
-        open_id = open_row[0]
+        open_id, open_geldig_van = open_row
+
+        # Zelfde periode: dit is dezelfde momentopname, geen nieuwe versie.
+        # Blind afsluiten en opnieuw invoegen maakte van elke herimport een
+        # nieuwe historiekrij met een negatieve geldigheidsduur — de oude rij
+        # kreeg geldig_tot = geldig_van - 1 dag terwijl de nieuwe op dezelfde
+        # dag begon. Op netbeheerder_tarief liep dat vast op de unieke
+        # sleutel; op tarief_afname, dat er geen heeft, groeide de tabel stil
+        # aan met onzinnige rijen.
+        if open_geldig_van == geldig_van:
+            conn.execute(
+                sa.update(tariff_table)
+                .where(tariff_table.c.id == open_id)
+                .values(**{k: v for k, v in row_data.items() if k != "geldig_van"})
+            )
+            return
+
+        # Terugwerkende import: de open rij is jonger dan wat we invoegen.
+        # Die zou afsluiten met een geldig_tot vóór zijn eigen geldig_van.
+        if open_geldig_van > geldig_van:
+            LOG.warning(
+                "Overgeslagen: %s voor product %s/%s begint op %s terwijl de "
+                "open rij al op %s begint.",
+                tariff_table.name, product_id, meter_type, geldig_van, open_geldig_van,
+            )
+            return
+
         # Sluit oude rij
         vorige_dag = date.fromordinal(geldig_van.toordinal() - 1)
         conn.execute(
@@ -431,20 +570,35 @@ def link_energie_product_vreg_ids(
 
     df_links = pd.read_csv(links_csv, sep=";", encoding=_ENC).fillna("")
     linked_count = 0
+    overgeslagen = 0
 
     for _, r in df_links.iterrows():
         vreg_id = _str(r.get("vreg_id"))
         matched_lev = _str(r.get("matched_handelsnaam"))
         matched_prod = _str(r.get("matched_productnaam"))
+        energie_type = _str(r.get("energy"))
+        segment = _str(r.get("segment"))
 
         if not (vreg_id and matched_lev and matched_prod):
             continue
 
-        # Update energie_product met deze vreg_id
+        if not (energie_type and segment):
+            # Zonder energievorm en segment is de rij niet eenduidig te
+            # koppelen; overslaan is beter dan de verkeerde rij raken.
+            overgeslagen += 1
+            continue
+
+        # De identiteit van een product is (leverancier, naam, energievorm,
+        # segment). Matchen op naam en leverancier alleen raakte álle
+        # varianten tegelijk: "Sociaal tarief" bestaat voor elektriciteit én
+        # gas, en beide kregen dan dezelfde vreg_id — wat botst op de unieke
+        # sleutel van energie_product.vreg_id.
         result = conn.execute(
             sa.update(energie_product)
             .where(
                 (sa.func.lower(energie_product.c.product_naam) == matched_prod.lower())
+                & (sa.func.lower(energie_product.c.energie_type) == energie_type.lower())
+                & (sa.func.lower(energie_product.c.segment) == segment.lower())
                 & (
                     sa.select(leverancier.c.id).where(
                         sa.func.lower(leverancier.c.naam) == matched_lev.lower()
@@ -454,8 +608,23 @@ def link_energie_product_vreg_ids(
             )
             .values(vreg_id=vreg_id)
         )
+        if (result.rowcount or 0) > 1:
+            # Kan niet meer voorkomen met de volledige sleutel, maar als het
+            # toch gebeurt is stil doorgaan het slechtste antwoord: dan zou de
+            # unieke sleutel de import alsnog opblazen, of erger, een vreg_id
+            # bij het verkeerde product belanden.
+            raise ValueError(
+                f"vreg_id {vreg_id} matchte {result.rowcount} productrijen "
+                f"({matched_lev} / {matched_prod} / {energie_type} / {segment}); "
+                "er hoort er precies één te zijn."
+            )
         linked_count += result.rowcount or 0
 
+    if overgeslagen:
+        LOG.warning(
+            "%d koppelingen overgeslagen: energievorm of segment ontbrak in %s.",
+            overgeslagen, links_csv.name,
+        )
     LOG.info("energie_product_vreg_links: %d gekoppeld", linked_count)
     return ImportResult(domain="energie_product_vreg", rows_inserted=linked_count)
 
@@ -643,7 +812,10 @@ def import_netbeheerder_tarieven(
                 "klanttype": _str(r.get("Klanttype")) or "",
                 "tarieftype": _str(r.get("Tarieftype")),
                 "tariefdetail": _str(r.get("Tariefdetail")),
-                "tariefnotering": _str(r.get("Tariefnotering")),
+                # Leeg wordt "" en niet None: de notering zit in de unieke
+                # sleutel, en PostgreSQL ziet NULLs daarin als onderling
+                # verschillend — een echt dubbel zou er dan alsnog in mogen.
+                "tariefnotering": _str(r.get("Tariefnotering")) or "",
                 "prijs": prijs,
                 "geldig_van": geldig_van,
                 "source_sheet": _str(r.get("source_sheet")),
@@ -664,29 +836,58 @@ def _scd2_upsert_netbeheerder(conn: sa.Connection, row_data: dict[str, Any]) -> 
     klanttype = row_data.get("klanttype")
     tarieftype = row_data.get("tarieftype")
     tariefdetail = row_data.get("tariefdetail")
+    tariefnotering = row_data.get("tariefnotering") or ""
     geldig_van = row_data.get("geldig_van")
 
     if not all([netbeheerder_code, energie_type, contract_richting, klanttype, geldig_van]):
         return
 
-    # Sluit eventuele open rij
+    # Sluit eventuele open rij.
+    #
+    # De notering hoort hier mee in: dezelfde tariefnaam komt voor met
+    # verschillende eenheden (bij FA staat het prosumententarief zowel als
+    # 51,54 EUR/kW/jaar als 1,8984501 zonder eenheid). Zonder de notering zou
+    # de ene versie als de open rij van de andere gelden en die afsluiten —
+    # een tariefhistoriek die zichzelf overschrijft.
     open_row = conn.execute(
-        sa.select(netbeheerder_tarief.c.id).where(
+        sa.select(netbeheerder_tarief.c.id, netbeheerder_tarief.c.geldig_van).where(
             (netbeheerder_tarief.c.netbeheerder_code == netbeheerder_code)
             & (netbeheerder_tarief.c.energie_type == energie_type)
             & (netbeheerder_tarief.c.contract_richting == contract_richting)
             & (netbeheerder_tarief.c.klanttype == klanttype)
             & (netbeheerder_tarief.c.tarieftype == tarieftype)
             & (netbeheerder_tarief.c.tariefdetail == tariefdetail)
+            & (netbeheerder_tarief.c.tariefnotering == tariefnotering)
             & (netbeheerder_tarief.c.geldig_tot.is_(None))
         )
     ).fetchone()
 
     if open_row:
+        open_id, open_geldig_van = open_row
+
+        # Zelfde periode: bijwerken in plaats van een nieuwe historiekrij.
+        # Zie _scd2_upsert — blind afsluiten en invoegen liet een herimport
+        # van dezelfde versie stuklopen op de unieke sleutel.
+        if open_geldig_van == geldig_van:
+            conn.execute(
+                sa.update(netbeheerder_tarief)
+                .where(netbeheerder_tarief.c.id == open_id)
+                .values(**{k: v for k, v in row_data.items() if k != "geldig_van"})
+            )
+            return
+
+        if open_geldig_van > geldig_van:
+            LOG.warning(
+                "Overgeslagen: netbeheerder_tarief %s/%s/%s begint op %s "
+                "terwijl de open rij al op %s begint.",
+                netbeheerder_code, klanttype, tariefdetail, geldig_van, open_geldig_van,
+            )
+            return
+
         vorige_dag = date.fromordinal(geldig_van.toordinal() - 1)
         conn.execute(
             sa.update(netbeheerder_tarief)
-            .where(netbeheerder_tarief.c.id == open_row[0])
+            .where(netbeheerder_tarief.c.id == open_id)
             .values(geldig_tot=vorige_dag)
         )
 
@@ -700,77 +901,88 @@ def _scd2_upsert_netbeheerder(conn: sa.Connection, row_data: dict[str, Any]) -> 
 # ---------------------------------------------------------------------------
 
 def import_overheidsheffingen(conn: sa.Connection, config_dir: Path) -> ImportResult:
-    """Importeer heffingen uit config/heffingen/."""
-    try:
-        heffingenrepo = HeffingenRepository.load(config_dir)
-    except Exception as exc:
-        LOG.error("Kon heffingen niet laden: %s", exc)
-        return ImportResult(domain="overheidsheffing", rows_inserted=0)
+    """Importeer heffingen naar de databank.
 
-    # TRUNCATE
+    `config_dir` is de map met de heffingenbestanden zelf — `config/heffingen/`,
+    niet `config/`.
+
+    Deze functie faalt hard. Ze deed dat niet: elk blok stond in een
+    `try/except` die de fout naar een LOG.warning schreef en daarna een
+    succesvolle ImportResult teruggaf. Een mislukte accijnsinsert leverde zo
+    een databank zonder accijnzen op, met een groene melding erboven — precies
+    het patroon dat een verkeerd tarief jarenlang onopgemerkt liet.
+
+    De heffingen zijn de kern van de factuur en de databank is het eindstation;
+    een onvolledige import hoort de hele transactie terug te draaien.
+    """
+    heffingenrepo = HeffingenRepository.load(config_dir)
+
+    # Heffingen zijn masterdata zonder version_id: bij elke import wordt de
+    # volledige set vervangen door wat er nu in config/heffingen/ staat.
     conn.execute(sa.delete(overheidsheffing_btw))
     conn.execute(sa.delete(overheidsheffing_energiefonds))
     conn.execute(sa.delete(overheidsheffing_accijns_schijf))
 
     total = 0
 
-    # Accijns
-    try:
-        accijns_tabellen = heffingenrepo.accijns_tabellen()
-        accijns_rows = []
-        for tabel in accijns_tabellen.values():
-            for schijf in tabel.schijven:
-                accijns_rows.append({
-                    "energievorm": tabel.energievorm,
-                    "klantcategorie": schijf.klantcategorie,
-                    "van_mwh": schijf.van_mwh,
-                    "tot_mwh": schijf.tot_mwh,
-                    "accijns_eur_mwh": schijf.accijns_eur_mwh,
-                    "bijzondere_accijns_eur_mwh": schijf.bijzondere_accijns_eur_mwh,
-                    "energiebijdrage_eur_mwh": schijf.energiebijdrage_eur_mwh,
-                    "bron": tabel.bron or "onbekend",
-                })
-        if accijns_rows:
-            conn.execute(sa.insert(overheidsheffing_accijns_schijf), accijns_rows)
-            total += len(accijns_rows)
-    except Exception as exc:
-        LOG.warning("Accijns-heffingen fout: %s", exc)
+    accijns_rows = [
+        {
+            "energievorm": tabel.energievorm,
+            "klantcategorie": schijf.klantcategorie,
+            "van_mwh": schijf.van_mwh,
+            "tot_mwh": schijf.tot_mwh,
+            "accijns_eur_mwh": schijf.accijns_eur_mwh,
+            "bijzondere_accijns_eur_mwh": schijf.bijzondere_accijns_eur_mwh,
+            "energiebijdrage_eur_mwh": schijf.energiebijdrage_eur_mwh,
+            # Zonder de ingangsdatum slaat de tabel de regimes plat: 46,00 en
+            # 47,4811 EUR/MWh zouden niet meer uit elkaar te houden zijn.
+            "geldig_vanaf": schijf.geldig_vanaf,
+            "geverifieerd": schijf.geverifieerd,
+            # De schijf draagt een preciezere bronvermelding dan het bestand:
+            # per regime staat er hoe dat cijfer gecontroleerd is.
+            "bron": schijf.bron or tabel.bron or "onbekend",
+        }
+        for tabel in heffingenrepo.accijns_tabellen().values()
+        for schijf in tabel.schijven
+    ]
+    if not accijns_rows:
+        raise ValueError(
+            f"Geen accijnsschijven gevonden in {config_dir}; "
+            "een databank zonder accijnzen rekent elke factuur te laag."
+        )
+    conn.execute(sa.insert(overheidsheffing_accijns_schijf), accijns_rows)
+    total += len(accijns_rows)
 
-    # Energiefonds
-    try:
-        energiefonds_tarieven = heffingenrepo.energiefonds_tarieven()
-        energiefonds_rows = []
-        for tarief in energiefonds_tarieven:
-            energiefonds_rows.append({
-                "jaar": tarief.jaar,
-                "spanningsniveau": tarief.spanningsniveau,
-                "klantcategorie": tarief.klantcategorie or "",
-                "eur_per_maand": tarief.eur_per_maand,
-                "bron": tarief.bron or "onbekend",
-            })
-        if energiefonds_rows:
-            conn.execute(sa.insert(overheidsheffing_energiefonds), energiefonds_rows)
-            total += len(energiefonds_rows)
-    except Exception as exc:
-        LOG.warning("Energiefonds-heffingen fout: %s", exc)
+    energiefonds_rows = [
+        {
+            "jaar": tarief.jaar,
+            "spanningsniveau": tarief.spanningsniveau,
+            "klantcategorie": tarief.klantcategorie or "",
+            "eur_per_maand": tarief.eur_per_maand,
+            "bron": tarief.bron or "onbekend",
+        }
+        for tarief in heffingenrepo.energiefonds_tarieven()
+    ]
+    if energiefonds_rows:
+        conn.execute(sa.insert(overheidsheffing_energiefonds), energiefonds_rows)
+        total += len(energiefonds_rows)
 
-    # BTW
-    try:
-        btw_tarieven = heffingenrepo.btw_tarieven()
-        btw_rows = []
-        for tarief in btw_tarieven:
-            btw_rows.append({
-                "component": tarief.component,
-                "percentage": tarief.percentage,
-                "vrijgesteld": tarief.vrijgesteld,
-                "geldig_vanaf": tarief.geldig_vanaf,
-                "bron": tarief.bron or "onbekend",
-            })
-        if btw_rows:
-            conn.execute(sa.insert(overheidsheffing_btw), btw_rows)
-            total += len(btw_rows)
-    except Exception as exc:
-        LOG.warning("BTW-heffingen fout: %s", exc)
+    btw_rows = [
+        {
+            "component": tarief.component,
+            "percentage": tarief.percentage,
+            "vrijgesteld": tarief.vrijgesteld,
+            "geldig_vanaf": tarief.geldig_vanaf,
+            "bron": tarief.bron or "onbekend",
+        }
+        for tarief in heffingenrepo.btw_tarieven()
+    ]
+    if btw_rows:
+        conn.execute(sa.insert(overheidsheffing_btw), btw_rows)
+        total += len(btw_rows)
 
-    LOG.info("overheidsheffing: %d rijen", total)
+    LOG.info(
+        "overheidsheffing: %d rijen (%d accijnsschijven, %d energiefonds, %d btw)",
+        total, len(accijns_rows), len(energiefonds_rows), len(btw_rows),
+    )
     return ImportResult(domain="overheidsheffing", rows_inserted=total)

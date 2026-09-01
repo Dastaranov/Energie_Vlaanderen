@@ -82,7 +82,15 @@ def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
             LOG.warning("Tarieven-werkboek niet gevonden: %s", xlsx_path)
             continue
 
-        for direction in ("afname", "injectie"):
+        # Elektriciteit heeft een derde bestand: de pipeline schrijft de
+        # hoogspannings- en middenspanningsklanttypes apart weg. Dat bleef
+        # tot nu toe volledig buiten de golden audit — 528 van de 776
+        # elektriciteitsrijen werden dus nooit tegen het werkboek gelegd.
+        richtingen = ("afname", "injectie")
+        if energy_type == "electricity":
+            richtingen = ("afname", "injectie", "hoogspanning")
+
+        for direction in richtingen:
             csv_path = tariffs_dir / f"tariffs_{energy_type}_{direction}.csv"
             result = t_auditor.audit(
                 staged_csv=csv_path,
@@ -283,3 +291,77 @@ def run_audit_sample(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+
+
+# ---------------------------------------------------------
+# audit-heffingen
+# ---------------------------------------------------------
+
+def run_audit_heffingen(args: argparse.Namespace, settings: Settings) -> int:
+    """Controleer config/heffingen/ zonder netwerk.
+
+    Draait in CI bij elke commit: de masterdata is handgeschreven, dus een
+    typfout in een schijfgrens komt er anders pas uit wanneer een berekening
+    een verkeerd bedrag geeft — en dan valt het niemand op.
+    """
+    from datetime import date
+
+    from energie_vlaanderen.heffingen.repository import (
+        HeffingenError,
+        HeffingenRepository,
+    )
+    from energie_vlaanderen.heffingen.validation import controleer_alles
+
+    config_dir = settings.project_root / "config" / "heffingen"
+    if args.datum:
+        try:
+            peildatum = date.fromisoformat(args.datum)
+        except ValueError:
+            return fail("--datum moet YYYY-MM-DD zijn, kreeg %r.", args.datum)
+    else:
+        peildatum = date.today()
+
+    try:
+        repo = HeffingenRepository.load(config_dir)
+    except (HeffingenError, OSError, KeyError) as exc:
+        return fail("Heffingen-masterdata kon niet geladen worden: %s", exc)
+
+    bevindingen = controleer_alles(repo, peildatum)
+    fouten = [b for b in bevindingen if b.ernst == "fout"]
+    waarschuwingen = [b for b in bevindingen if b.ernst == "waarschuwing"]
+
+    def _text() -> None:
+        print(f"Configmap : {config_dir}")
+        print(f"Peildatum : {peildatum.isoformat()}")
+        print(f"Tabellen  : {', '.join(sorted(repo.accijns_tabellen()))}")
+        for bevinding in bevindingen:
+            merk = {"fout": "FOUT", "waarschuwing": "LET OP", "info": "info"}[
+                bevinding.ernst
+            ]
+            print(f"[{merk:6s}] {bevinding.onderwerp}: {bevinding.bericht}")
+        if not bevindingen:
+            print("Geen bevindingen.")
+
+    emit(
+        args,
+        text_fn=_text,
+        json_obj={
+            "config_dir": str(config_dir),
+            "peildatum": peildatum.isoformat(),
+            "energievormen": sorted(repo.accijns_tabellen()),
+            "bevindingen": [
+                {
+                    "ernst": b.ernst,
+                    "onderwerp": b.onderwerp,
+                    "bericht": b.bericht,
+                }
+                for b in bevindingen
+            ],
+        },
+    )
+
+    if fouten:
+        return 2
+    if waarschuwingen and args.streng:
+        return 2
+    return 0
