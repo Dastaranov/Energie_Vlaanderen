@@ -17,14 +17,25 @@ class Profile:
     injectie_nacht_kwh: Decimal = D("0")
     omvormer_kva: Decimal = D("0")
     maandpieken_kw: tuple[Decimal, ...] = ()
-    # LET OP: 2,5 kW is de wettelijke ondergrens van het capaciteitstarief,
-    # niet een representatieve schatting. Wie geen eigen maandpieken aanlevert,
-    # rekent hiermee dus per definitie op de bodem. vtest.be hanteert voor zijn
-    # standaardwoning 4,218 kW (teruggerekend uit de gescrapete
-    # capaciteitstarieven van alle acht netbeheerders, 2026-08-31) — ongeveer
-    # 86 EUR/jaar meer nettarief. Bewust nog niet gewijzigd: dit is een
-    # financiële standaardwaarde en die hoort een expliciete keuze te zijn.
-    geschatte_maandpiek_kw: Decimal = D("2.5")
+    # Twee getallen die vroeger één getal waren, en dat is precies de fout die
+    # ze scheidt: 2,5 kW is de wettelijke ondergrens van het capaciteitstarief
+    # en 4,218 kW is een schatting van een werkelijke piek. Ze hadden allebei
+    # de waarde 2,5, waardoor wie geen eigen maandpieken aanlevert per
+    # definitie op de bodem rekende — een factuur die er plausibel uitzag en
+    # ongeveer 86 EUR/jaar te laag was.
+    #
+    # 4,218 kW is teruggerekend uit de gescrapete capaciteitstarieven van alle
+    # acht netbeheerders (2026-08-31): het is de piek waarmee vtest.be zijn
+    # standaardwoning doorrekent. Dat maakt het geen natuurwet maar wel de
+    # waarde waarmee de officiële vergelijkingstool van VREG rekent, en die
+    # volgen we hier.
+    geschatte_maandpiek_kw: Decimal = D("4.218")
+    # De wettelijke ondergrens. Het capaciteitstarief rekent nooit met minder,
+    # ook niet als de gemeten piek lager ligt. Staat hier als veld en niet als
+    # constante in de calculator omdat het een tarifair gegeven is dat kan
+    # wijzigen, en omdat een berekening moet kunnen zeggen wélke ondergrens ze
+    # toegepast heeft.
+    minimum_maandpiek_kw: Decimal = D("2.5")
     kwartier_csv: Optional[Path] = None
     @property
     def afname_kwh(self): return self.afname_dag_kwh + self.afname_nacht_kwh

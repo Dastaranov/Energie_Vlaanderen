@@ -29,10 +29,11 @@ class Calculator:
         if p.meter=="digitaal":
             rate=val("Gemiddelde maandpiek","EUR/kW/jaar")
             peaks=p.maandpieken_kw or tuple([p.geschatte_maandpiek_kw]*12)
-            capacity=sum((max(x,D("2.5"))*rate/D("12") for x in peaks),D("0"))
+            floor=p.minimum_maandpiek_kw
+            capacity=sum((max(x,floor)*rate/D("12") for x in peaks),D("0"))
             maximum=val("Maximumtarief","EUR/kWh")*p.afname_kwh
             capacity_plus_volume=min(capacity+volume,maximum) if maximum>0 else capacity+volume
-            minimum=D("2.5")*rate
+            minimum=floor*rate
             grid=max(capacity_plus_volume,minimum)+data
         else:
             fixed=val("Vaste term","EUR/jaar","Tarieven voor netgebruik")
