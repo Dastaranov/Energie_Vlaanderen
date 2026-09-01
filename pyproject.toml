@@ -6,7 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "energievergelijker-v3"
 version = "3.0.0"
 description = "Modulaire energievergelijker voor Vlaanderen"
-requires-python = ">=3.10"
+# 3.11 is de ondergrens omdat de masterdata via tomllib ingelezen wordt, en
+# dat zit pas vanaf 3.11 in de standaardbibliotheek.
+requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.0",
     "openpyxl>=3.1",
