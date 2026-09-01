@@ -67,9 +67,9 @@ python energievergelijker.py version publish --version <versie-id>
 | --- | --- |
 | `source` | `download --year`, `list --year` |
 | `raw` | `verify --version`, `status` |
-| `staging` | `parse --version [--only vtest\|tariffs\|curves\|all] [--overwrite]`, `refine --version [--postcode] [--segment woning\|onderneming] [--energy elektriciteit\|gas] [--matrix] [--no-download] [--browser chrome\|firefox] [--show]` |
+| `staging` | `parse --version [--only vtest\|tariffs\|curves\|all] [--overwrite]`, `refine --version [...]`, `calibrate --version [--postcode]` |
 | `market` | `sync --start --end` |
-| `audit` | `status`, `approve`, `golden`, `set-golden`, `sanity`, `sample` |
+| `audit` | `status`, `approve`, `golden`, `set-golden`, `sanity`, `sample`, `heffingen` |
 | `version` | `publish --version` |
 | `db` | `init`, `import --version [--gemeente] [--overwrite]`, `status` |
 | `paths` | *(geen actie)* |
@@ -92,9 +92,37 @@ Elke ingest-run krijgt een versie-id (`YYYYMMDDTHHMMSSZ-<8hex>`) en doorloopt
 pointer naar de actieve versie. `python energievergelijker.py paths` toont de
 gebruikte mappen en de actieve versie.
 
-## Heffingen-masterdata
+**De databank is het eindstation.** `version publish` kopieert de versie naar
+`versions/`, importeert ze naar PostgreSQL en activeert ze — één handeling, met
+terugdraaien als de import faalt. Zo kan `current.txt` nooit naar een versie
+wijzen die de databank niet heeft. `energievergelijker db verify` toetst die
+gelijkheid en faalt met exitcode 2 bij elk verschil.
+
+Publiceren vereist een goedgekeurde versie (`audit approve`); `--force` is de
+bewuste uitzondering, `--skip-db` publiceert zonder databank.
+
+## Heffingen-masterdata en tariefbewaking
 
 Heffingen en btw (`config/heffingen/*.toml`) zijn handmatig onderhouden
 masterdata, geen scraper-output — elk bestand vermeldt zijn eigen bron. Dit
 is wél gecommit (in tegenstelling tot `data/`), en wordt geladen via
-`HeffingenRepository.load(...)`. Zie `CLAUDE.md` voor detail.
+`HeffingenRepository.load(...)`.
+
+Omdat er geen scrapebare bron voor heffingen bestaat, worden de cijfers
+*teruggerekend* uit vtest.be zelf: `staging calibrate` vraagt hetzelfde
+profiel op bij een reeks jaarverbruiken en leidt uit VREG's eigen
+kostenopbouw de tariefstructuur af. Elk recht stuk van de kostenfunctie is
+één verbruiksschijf, de helling het tarief in EUR/MWh, een knik een
+schijfgrens.
+
+```bash
+energievergelijker audit heffingen                     # structuur, offline
+energievergelijker staging calibrate --version <id>    # ~13 min, Selenium
+python scripts/check_tarieven.py --versie <id>         # config vs. vtest.be
+python scripts/check_bronnen.py                        # nieuwe VREG-bestanden?
+```
+
+`.github/workflows/bronbewaking.yml` draait de laatste twee dagelijks en maakt
+er een issue van. De accijnstabellen dragen een tijdsas (`geldig_vanaf` per
+schijf), want de tarieven wijzigen binnen een jaar. Zie `CLAUDE.md` voor
+detail.

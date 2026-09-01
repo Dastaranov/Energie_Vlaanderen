@@ -1,0 +1,55 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Installeer package
+        run: pip install -e ".[test]"
+
+      # De integratietests vereisen een lokale dataset onder data/, en die
+      # staat niet in git. Ze worden hier dus expliciet overgeslagen in
+      # plaats van stil te falen op ontbrekende bestanden.
+      - name: Unit tests
+        run: pytest -q -m "not integration"
+
+  masterdata:
+    # Structurele controle op config/heffingen/ en config/bronregister.toml:
+    # geen netwerk nodig, dus dit hoort bij elke commit te draaien. De
+    # inhoudelijke controle tegen de live bronnen staat in bronbewaking.yml.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installeer package
+        run: pip install -e ".[test]"
+
+      # Zonder --streng: waarschuwingen (nog te verifiëren tarieven, een
+      # ontbrekend volgend jaar) horen niet elke PR te blokkeren. De
+      # geplande bronbewaking maakt er wel een issue van.
+      - name: Controleer heffingen-masterdata
+        run: python -m energie_vlaanderen.cli audit heffingen

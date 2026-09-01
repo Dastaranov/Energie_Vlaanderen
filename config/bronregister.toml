@@ -1,0 +1,50 @@
+# Welke bronbestanden de pipeline op dit moment verwerkt.
+#
+# `data/` staat niet in git, dus zonder dit register is er in CI geen enkel
+# aanknopingspunt om te zien dát VREG iets nieuws publiceerde. Het register is
+# die vaste referentie: `scripts/check_bronnen.py` haalt de VREG-pagina's op en
+# vergelijkt de gevonden bestandsnamen hiermee.
+#
+# Bijwerken doe je niet met de hand maar met:
+#
+#     python scripts/check_bronnen.py --bijwerken
+#
+# en dan pas nadat `energievergelijker source download` en de parse-stap
+# gedraaid hebben. Het register zegt "dit hebben we verwerkt", niet "dit staat
+# online".
+#
+# `bestandsnaam` bevat bewust géén VersionId uit de URL: VREG hangt daar een
+# nieuwe waarde aan bij elke herupload, ook als de inhoud ongewijzigd blijft,
+# en dat zou dagelijks vals alarm geven. De naam draagt de periode
+# (202608-...) en dat is precies het signaal dat telt.
+
+bijgewerkt_op = "2026-08-31"
+verwerkte_versie = "20260829T202059Z-853a7046"
+
+[[bron]]
+kind = "vtest"
+bestandsnaam = "202608-v-test-data-exclbtw v2_0.xlsx"
+sha256 = "2fd6c4996e28860fcada315404c90614a906f9dd3440bd44c59f8d607f542712"
+periodiciteit = "maandelijks"
+opmerking = "V-test-data, alle prijzen excl. btw. Nieuwe versie rond de 28e van de maand."
+
+[[bron]]
+kind = "energy_curves"
+bestandsnaam = "202609-Energieprijscurves v01.xlsx"
+sha256 = "a90062de569facf205d16709ac81ce77a4814bc61bb593b5f9cf0507edf27414"
+periodiciteit = "maandelijks"
+opmerking = "Draagt de maand vooruit in de naam: het septemberbestand verschijnt eind augustus."
+
+[[bron]]
+kind = "electricity_tariffs"
+bestandsnaam = "Distributienettarieven elektriciteit 2026.xlsx"
+sha256 = "ead234effca40c2c69d825e7f824ee8be3fe91e646343deec646fcb153c30fce"
+periodiciteit = "jaarlijks"
+opmerking = "Gecontroleerd tegen vtest.be: alle 8 netbeheerders komen exact overeen."
+
+[[bron]]
+kind = "gas_tariffs"
+bestandsnaam = "Distributienettarieven aardgas 2026.xlsx"
+sha256 = "facaf73ab39f5b4066f4ad372861e52da78fa0e9b34c83558111432be4bd5397"
+periodiciteit = "jaarlijks"
+opmerking = "Gecontroleerd tegen vtest.be: alle 8 netbeheerders komen exact overeen. Enexis aardgas 2026 staat wel op de pagina maar wordt niet ingelezen."

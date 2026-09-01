@@ -1,0 +1,215 @@
+name: Bronbewaking
+
+# Twee dingen kunnen buiten dit repo veranderen zonder dat iemand het merkt:
+# VREG publiceert een nieuw bronbestand, of de wetgever wijzigt een heffing.
+# In beide gevallen blijft de code draaien en blijven de uitkomsten er
+# geloofwaardig uitzien — ze zijn alleen verouderd. Deze workflow maakt dat
+# zichtbaar door er een issue van te maken.
+#
+# Een openstaande bevinding wordt hier niet als build failure gerapporteerd.
+# Een geplande workflow die maandenlang rood staat omdat er nog een tarief te
+# verifiëren valt, wordt genegeerd — en dan mist ze ook de dag dat er echt
+# iets stukgaat. Rood betekent hier: de controle zelf lukte niet.
+
+on:
+  schedule:
+    # Elke werkdag om 06:30 UTC. VREG publiceert de V-test-data rond de 28e
+    # van de maand; dagelijks kijken kost niets en scheelt weken vertraging.
+    - cron: "30 6 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      jaar:
+        description: "Jaar voor de tariefbestanden"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  bronnen:
+    name: Nieuwe bronbestanden bij VREG
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installeer package
+        run: pip install -e "."
+
+      - id: check
+        name: Vergelijk VREG-pagina's met het bronregister
+        env:
+          JAAR: ${{ inputs.jaar }}
+        run: |
+          set +e
+          python scripts/check_bronnen.py ${JAAR:+--jaar "$JAAR"} --json > bronnen.json
+          code=$?
+          set -e
+          cat bronnen.json
+          # 0 = niets nieuws, 3 = nieuwe bron, 2 = onbereikbaar.
+          # Alleen 2 is een storing; 3 hoort een issue op te leveren.
+          if [ "$code" = "2" ]; then
+            echo "::error::VREG-pagina's onbereikbaar of pagina-indeling gewijzigd."
+            exit 1
+          fi
+          python -c "import json;print('status='+json.load(open('bronnen.json'))['status'])" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Meld nieuwe bronnen als issue
+        if: steps.check.outputs.status == 'nieuw'
+        uses: actions/github-script@v7
+        env:
+          # Via env en niet via ${{ }} in het script: de bestandsnamen komen
+          # van een externe webpagina en horen als data behandeld te worden,
+          # niet als stuk JavaScript.
+          BRONNEN_JSON_PAD: bronnen.json
+        with:
+          script: |
+            const fs = require("fs");
+            const data = JSON.parse(fs.readFileSync(process.env.BRONNEN_JSON_PAD, "utf8"));
+            const regels = data.nieuw.map(
+              (item) =>
+                `- **${item.kind}**: \`${item.verwerkt}\` → \`${item.online}\`\n  ${item.url}`
+            );
+            const titel = "Nieuwe bronbestanden beschikbaar bij VREG";
+            const body = [
+              "De bronbewaking vond bestanden die nog niet verwerkt zijn.",
+              "",
+              ...regels,
+              "",
+              "Verwerken:",
+              "```bash",
+              "energievergelijker source download --year <jaar>",
+              "energievergelijker staging parse --version <nieuwe versie>",
+              "energievergelijker staging calibrate --version <nieuwe versie>",
+              "python scripts/check_tarieven.py --versie <nieuwe versie>",
+              "python scripts/check_bronnen.py --bijwerken --versie <nieuwe versie>",
+              "```",
+            ].join("\n");
+
+            // Eén lopend issue volstaat: dagelijks een nieuwe aanmaken zou de
+            // lijst volstampen met hetzelfde bericht.
+            const bestaande = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "bronbewaking",
+            });
+            const open = bestaande.data.find((i) => i.title === titel);
+            if (open) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open.number,
+                body: `Nog steeds open op ${new Date().toISOString().slice(0, 10)}:\n\n${regels.join("\n")}`,
+              });
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: titel,
+              body,
+              labels: ["bronbewaking"],
+            });
+
+  masterdata:
+    name: Dekking van de heffingen-masterdata
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installeer package
+        run: pip install -e "."
+
+      - id: check
+        name: Controleer heffingen op dekking en verificatie
+        run: |
+          set +e
+          python -m energie_vlaanderen.cli audit heffingen --json > heffingen.json
+          code=$?
+          set -e
+          cat heffingen.json
+          if [ "$code" != "0" ] && [ "$code" != "2" ]; then
+            echo "::error::audit heffingen liep vast."
+            exit 1
+          fi
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          bevindingen = json.load(open("heffingen.json"))["bevindingen"]
+          fouten = [b for b in bevindingen if b["ernst"] == "fout"]
+          print(f"aantal_fouten={len(fouten)}")
+          print(f"aantal_bevindingen={len(bevindingen)}")
+          PY
+
+      # Een fout is structureel — een gat tussen twee schijven, een ontbrekend
+      # jaar. Dat is een echte defect in het repo en hoort de run rood te maken.
+      - name: Faal op structurele fouten
+        if: steps.check.outputs.aantal_fouten != '0'
+        run: |
+          echo "::error::De heffingen-masterdata bevat structurele fouten."
+          exit 1
+
+      - name: Meld openstaande verificaties als issue
+        if: steps.check.outputs.aantal_bevindingen != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const data = JSON.parse(fs.readFileSync("heffingen.json", "utf8"));
+            const regels = data.bevindingen.map(
+              (b) => `- \`${b.ernst}\` **${b.onderwerp}**: ${b.bericht}`
+            );
+            const titel = "Heffingen-masterdata: openstaande punten";
+            const body = [
+              `Peildatum ${data.peildatum}.`,
+              "",
+              ...regels,
+              "",
+              "Een tarief verifiëren:",
+              "```bash",
+              "energievergelijker staging calibrate --version <versie>",
+              "python scripts/check_tarieven.py --versie <versie>",
+              "```",
+            ].join("\n");
+
+            const bestaande = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "bronbewaking",
+            });
+            const open = bestaande.data.find((i) => i.title === titel);
+            if (open) {
+              // Bijwerken in plaats van bijkomend commentaar: deze lijst is een
+              // stand van zaken, geen gebeurtenis.
+              if (open.body !== body) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: open.number,
+                  body,
+                });
+              }
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: titel,
+              body,
+              labels: ["bronbewaking"],
+            });
