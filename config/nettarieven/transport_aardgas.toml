@@ -33,8 +33,8 @@
 # Ook het sociaal tarief in de woningscrape rekent met dit tarief: 25,37 EUR
 # op het standaardprofiel van 16.262 kWh, precies 16,262 x 1,56.
 #
-# EEN AFWIJKING DIE NIET VERKLAARD IS
-# -----------------------------------
+# WAAROM WONING EN ONDERNEMING VERSCHILLEN
+# ----------------------------------------
 # vtest.be rekent voor gewone woningproducten met 1,5565 EUR/MWh in plaats van
 # 1,56 — consistent 0,22% lager, over vijf verbruikspunten van 4.000 tot
 # 35.000 kWh. Op het standaardprofiel is dat 25,31 in plaats van 25,37 EUR,
@@ -43,14 +43,25 @@
 # Onderzocht en uitgesloten: afronding per maand, per kwartaal of per dag;
 # een vaste term naast het kWh-tarief; een verband met de gastariefgroep
 # (GAS_T1/T2). Het sociaal tarief en het segment onderneming gebruiken wél
-# 1,56 exact.
+# 1,56 exact. De oorzaak is niet vastgesteld.
 #
-# Hier staat daarom het officiële tarief, niet de waarde die vtest.be voor
-# woningproducten hanteert: 1,56 is gedocumenteerd bij de regulator, 1,5565
-# is een waarneming zonder verklaring. Een berekening zal daardoor 6 cent per
-# jaar afwijken van vtest.be op een gasfactuur voor een woning. Wie die
-# afwijking wil wegnemen, moet eerst uitzoeken waar ze vandaan komt — niet
-# het cijfer hier aanpassen tot het past.
+# Keuze van 2026-09-01: vtest.be is hier de leidende bron. Deze toepassing
+# vergelijkt met de officiële vergelijkingstool van VREG, en dan weegt
+# overeenkomen met wat die tool een klant toont zwaarder dan overeenkomen met
+# de CREG-nota waarop ze zich baseert. Woningproducten dragen daarom 1,5565,
+# onderneming 1,56 — allebei zoals vtest.be ze werkelijk toepast.
+#
+# Dat is bewust géén poging tot verklaring: het verschil blijft onbegrepen,
+# het wordt alleen niet langer als afwijking gemeld. Wijzigt het cijfer bij
+# een volgende kalibratie, dan is de eerste vraag of vtest.be zijn berekening
+# veranderd heeft.
+#
+# LET OP bij het sociaal tarief
+# -----------------------------
+# Dat valt onder `niet_zakelijk` maar rekent met 1,56 exact (25,37 EUR bij
+# 16.262 kWh). Zodra sociale tarieven apart doorgerekend worden, hoort daar
+# dus een eigen categorie bij; nu wordt er 6 cent per jaar te weinig
+# aangerekend op een sociaal gastarief.
 #
 # NOG NIET GEDEKT
 # ---------------
@@ -65,10 +76,10 @@ bron = "CREG-nota (Z)3230 van 11/06/2026 + vtest.be kalibratie 2026-08-31"
 
 [[tarief]]
 klantcategorie = "niet_zakelijk"
-eur_per_kwh = "0.00156"
+eur_per_kwh = "0.0015565"
 geldig_vanaf = "2026-01-01"
 geverifieerd = true
-bron = "CREG-nota (Z)3230; bevestigd door het sociaal tarief op vtest.be (25,37 EUR bij 16.262 kWh)"
+bron = "vtest.be kalibratie 2026-08-31, woningproducten, 5 verbruikspunten van 4.000 tot 35.000 kWh; wijkt 0,22% af van CREG-nota (Z)3230 (1,56) om onbekende reden, vtest is hier de leidende bron"
 
 [[tarief]]
 klantcategorie = "zakelijk_laagspanning"

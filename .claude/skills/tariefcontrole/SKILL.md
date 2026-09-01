@@ -147,11 +147,13 @@ Twee dingen die daarbij van pas komen:
 ## Wat níet gedekt is
 
 - Het transporttarief van Fluxys voor aardgas zit niet in de
-  VREG-distributiewerkboeken en staat nergens in dit repo. Het is wél al
-  gemeten (1,5565 EUR/MWh voor een woning, 1,5600 voor een onderneming);
-  `docs/plan transporttarieven fluxys.md` beschrijft hoe het toe te voegen.
-  Voor elektriciteit bestaat dit gat niet: het transporttarief van Elia zit
-  al in de ODV-post van het distributiewerkboek.
+  VREG-distributiewerkboeken, maar staat sinds 2026-09-01 wél in dit repo:
+  `config/nettarieven/transport_aardgas.toml`, met de waarden die vtest.be
+  werkelijk toepast (1,5565 EUR/MWh voor een woning, 1,5600 voor een
+  onderneming). Dat verschil van 0,22% is onverklaard; vtest.be geldt hier als
+  leidende bron, dus het wordt niet meer als afwijking gemeld. Voor
+  elektriciteit bestaat dit gat niet: het transporttarief van Elia zit al in
+  de ODV-post van het distributiewerkboek.
 - De accijnsschijven boven 50 MWh zijn niet op vtest.be te meten en dragen
   daarom `geverifieerd = false`.
 - Periodes vóór 01/07/2023 staan niet in de masterdata; de repository stopt

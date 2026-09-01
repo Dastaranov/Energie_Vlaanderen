@@ -185,10 +185,15 @@ alleen de distributie) en ontbrak daardoor volledig, wat elke gasfactuur ongevee
 jaar te laag maakte. Geladen via `TransportTariefRepository.load(config_dir)`, met dezelfde
 tijdsas en verificatievlag als de accijnzen.
 
-**Let op**: vtest.be past op gewone woningproducten 1,5565 EUR/MWh toe waar CREG 1,56
-vastlegt — 0,22% lager, oorzaak niet vastgesteld. De masterdata draagt het officiële cijfer;
-`scripts/check_tarieven.py` pint de afwijking vast zodat ze bekend blijft en opvalt als ze
-verandert.
+**vtest.be is hier de leidende bron.** Op gewone woningproducten past vtest.be 1,5565
+EUR/MWh toe waar CREG 1,56 vastlegt — 0,22% lager, oorzaak onderzocht en niet gevonden.
+De masterdata draagt sinds 2026-09-01 de vtest-waarde: deze toepassing vergelijkt met de
+officiële vergelijkingstool van VREG, en dan weegt overeenkomen met wat die tool een klant
+toont zwaarder dan overeenkomen met de nota waarop ze zich baseert. Onderneming draagt
+1,56, want daar past vtest.be dat cijfer wél exact toe.
+
+Het sociaal tarief valt onder dezelfde categorie `niet_zakelijk` maar rekent met 1,56;
+zodra sociale tarieven apart doorgerekend worden, hoort daar een eigen categorie bij.
 
 `config/bronregister.toml` — welke bronbestanden de pipeline verwerkt heeft, als vaste
 referentie voor de bronbewaking (`data/` staat niet in git).

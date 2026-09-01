@@ -71,22 +71,14 @@ TRANSPORT_LABEL = "Nettarieven|Afnametarief transport (per kWh)"
 # ruim onder een systematisch verschil.
 TRANSPORT_TOLERANTIE_RELATIEF = Decimal("0.0005")
 
-# vtest.be rekent voor gewone woningproducten met 1,5565 in plaats van 1,56
-# EUR/MWh — consistent 0,2244% lager over vijf verbruikspunten. De oorzaak is
-# niet vastgesteld (zie config/nettarieven/transport_aardgas.toml). Het staat
-# hier vastgepind in plaats van weggemoffeld onder een ruime tolerantie: zolang
-# de afwijking precies deze grootte heeft, is ze bekend; verandert ze, dan
-# hoort dat op te vallen.
-BEKENDE_AFWIJKING = {
-    "niet_zakelijk": {
-        "relatief": Decimal("0.002244"),
-        "marge": Decimal("0.0002"),
-        "uitleg": (
-            "vtest.be past op woningproducten 1,5565 EUR/MWh toe in plaats van "
-            "het officiële 1,56; oorzaak niet vastgesteld"
-        ),
-    },
-}
+# Hier stond een vastgepinde uitzondering: vtest.be rekent op woningproducten
+# met 1,5565 in plaats van de 1,56 uit de CREG-nota, consistent 0,2244% lager,
+# oorzaak onbekend. Sinds 2026-09-01 is vtest.be de leidende bron en draagt de
+# masterdata die 1,5565 zelf, dus is er niets meer om te gedogen: het verschil
+# hoort nu gewoon nul te zijn en elke afwijking is echt.
+#
+# Het onderliggende raadsel is daarmee niet opgelost, alleen verplaatst naar
+# config/nettarieven/transport_aardgas.toml, waar het beschreven staat.
 
 
 def _d(waarde: object) -> Decimal:
@@ -169,17 +161,13 @@ def _controleer_transport(
         verschil = berekend - gemeten
         relatief = abs(verschil) / berekend if berekend else Decimal(0)
 
-        bekend = BEKENDE_AFWIJKING.get(categorie)
-        # De marge moet de afronding op eurocent meenemen: op een bedrag van
-        # 6,24 EUR is één cent al 0,16%, ruim meer dan de systematische
-        # afwijking van 0,2244% zelf. Een vaste relatieve marge zou het
-        # kleinste meetpunt daardoor onterecht als nieuw verschil melden.
-        marge = (
-            bekend["marge"] + Decimal("0.005") / berekend if bekend and berekend else None
+        # De afronding op eurocent meetellen: op een bedrag van 6,24 EUR is één
+        # cent al 0,16%, ruim meer dan de relatieve tolerantie zelf. Zonder die
+        # correctie zou het kleinste meetpunt altijd als afwijking gelden.
+        marge = TRANSPORT_TOLERANTIE_RELATIEF + (
+            Decimal("0.005") / berekend if berekend else Decimal(0)
         )
-        if bekend and abs(relatief - bekend["relatief"]) <= marge:
-            merk = "BEKEND"
-        elif relatief <= TRANSPORT_TOLERANTIE_RELATIEF:
+        if relatief <= marge:
             merk = "OK"
         else:
             merk = "AFWIJKING"
@@ -191,9 +179,6 @@ def _controleer_transport(
             f"verschil {verschil.quantize(Decimal('0.01')):>8} EUR "
             f"({(relatief * 100).quantize(Decimal('0.0001'))}%)  {merk}"
         )
-
-    if BEKENDE_AFWIJKING.get(categorie):
-        print(f"  BEKEND = {BEKENDE_AFWIJKING[categorie]['uitleg']}")
 
     return gecontroleerd, afwijkingen
 

@@ -13,9 +13,17 @@ tarief binnen de woningscrape hanteert.
 
 De 1,5565 die vtest.be op gewone woningproducten toepast is daarmee geen
 tweede tarief maar een onverklaarde afwijking van 0,22%. In de masterdata
-staat het officiële cijfer; de afwijking is vastgepind in
-`scripts/check_tarieven.py` zodat ze bekend blijft en opvalt als ze
-verandert. Zie de kop van `config/nettarieven/transport_aardgas.toml`.
+kwam eerst het officiële cijfer te staan, met de afwijking vastgepind in
+`scripts/check_tarieven.py` zodat ze bekend bleef.
+
+**Herzien op 2026-09-01.** Die keuze is teruggedraaid: vtest.be geldt nu als
+leidende bron, dus de masterdata draagt 1,5565 voor woning en 1,5600 voor
+onderneming — precies wat oorspronkelijk gemeten was. De redenering is dat
+deze toepassing vergelijkt met de officiële vergelijkingstool van VREG, en dat
+overeenkomen met wat die tool een klant toont dan zwaarder weegt dan
+overeenkomen met de nota waarop ze zich baseert. Het verschil blijft
+onverklaard; het wordt alleen niet meer als afwijking gemeld. Zie de kop van
+`config/nettarieven/transport_aardgas.toml`.
 
 ## Wat er ontbreekt
 
