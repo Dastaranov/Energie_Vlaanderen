@@ -37,6 +37,7 @@ from energie_vlaanderen.ingest.sources import (  # noqa: E402
     SourceDiscoveryError,
     VnrSourceScraper,
 )
+from energie_vlaanderen.ingest.synergrid_sources import SynergridSourceScraper  # noqa: E402
 from energie_vlaanderen.settings import Settings  # noqa: E402
 
 REGISTER = PROJECT_ROOT / "config" / "bronregister.toml"
@@ -99,10 +100,21 @@ def main() -> int:
     verwacht = {b["kind"]: b["bestandsnaam"] for b in register["bron"]}
 
     settings = Settings.load()
+    gevonden_artefacten: dict[str, object] = {}
     try:
-        gevonden_artefacten = VnrSourceScraper(settings).discover(args.jaar)
+        gevonden_artefacten.update(VnrSourceScraper(settings).discover(args.jaar))
     except (SourceDiscoveryError, OSError) as exc:
         boodschap = f"Kon de VREG-pagina's niet raadplegen: {exc}"
+        if args.json:
+            print(json.dumps({"status": "onbereikbaar", "fout": str(exc)}, ensure_ascii=False))
+        else:
+            print(boodschap)
+        return 2
+
+    try:
+        gevonden_artefacten.update(SynergridSourceScraper(settings).discover(args.jaar))
+    except (SourceDiscoveryError, OSError) as exc:
+        boodschap = f"Kon de Synergrid-pagina niet raadplegen: {exc}"
         if args.json:
             print(json.dumps({"status": "onbereikbaar", "fout": str(exc)}, ensure_ascii=False))
         else:

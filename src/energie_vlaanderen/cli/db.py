@@ -84,6 +84,8 @@ def import_version_into_db(
     3. vtest-contracten en postcode-prijzen
     4. Netbeheerder-tarieven (SCD2)
     5. Overheidsheffingen
+    6. Verbruiksprofielen (SLP-EX/RLP0N/SPP), indien de versie een
+       `profielen/`-submap heeft — optioneel, geen fout als die ontbreekt
 
     Met `overwrite` wordt alleen version_id-gebonden data verwijderd
     (vtest_scrape_run, vtest_postcode_prijs). De tariefhistoriek blijft
@@ -199,6 +201,9 @@ def import_version_into_db(
                 conn, settings.project_root / "config" / "heffingen"
             )
         )
+
+        LOG.info("Importeren van verbruiksprofielen (indien aanwezig) ...")
+        results.append(imp.import_verbruiksprofielen(conn, bron_dir, version_id))
 
         imp.mark_imported(conn, version_id)
 

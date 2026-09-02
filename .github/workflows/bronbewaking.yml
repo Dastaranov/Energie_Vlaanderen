@@ -1,10 +1,10 @@
 name: Bronbewaking
 
 # Twee dingen kunnen buiten dit repo veranderen zonder dat iemand het merkt:
-# VREG publiceert een nieuw bronbestand, of de wetgever wijzigt een heffing.
-# In beide gevallen blijft de code draaien en blijven de uitkomsten er
-# geloofwaardig uitzien — ze zijn alleen verouderd. Deze workflow maakt dat
-# zichtbaar door er een issue van te maken.
+# VREG of Synergrid publiceert een nieuw bronbestand, of de wetgever wijzigt
+# een heffing. In beide gevallen blijft de code draaien en blijven de
+# uitkomsten er geloofwaardig uitzien — ze zijn alleen verouderd. Deze
+# workflow maakt dat zichtbaar door er een issue van te maken.
 #
 # Een openstaande bevinding wordt hier niet als build failure gerapporteerd.
 # Een geplande workflow die maandenlang rood staat omdat er nog een tarief te
@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   bronnen:
-    name: Nieuwe bronbestanden bij VREG
+    name: Nieuwe bronbestanden bij VREG/Synergrid
     runs-on: ubuntu-latest
 
     steps:
@@ -44,7 +44,7 @@ jobs:
         run: pip install -e "."
 
       - id: check
-        name: Vergelijk VREG-pagina's met het bronregister
+        name: Vergelijk VREG- en Synergrid-pagina's met het bronregister
         env:
           JAAR: ${{ inputs.jaar }}
         run: |
@@ -56,7 +56,7 @@ jobs:
           # 0 = niets nieuws, 3 = nieuwe bron, 2 = onbereikbaar.
           # Alleen 2 is een storing; 3 hoort een issue op te leveren.
           if [ "$code" = "2" ]; then
-            echo "::error::VREG-pagina's onbereikbaar of pagina-indeling gewijzigd."
+            echo "::error::VREG- of Synergrid-pagina onbereikbaar, of pagina-indeling gewijzigd."
             exit 1
           fi
           python -c "import json;print('status='+json.load(open('bronnen.json'))['status'])" \
@@ -78,7 +78,29 @@ jobs:
               (item) =>
                 `- **${item.kind}**: \`${item.verwerkt}\` → \`${item.online}\`\n  ${item.url}`
             );
-            const titel = "Nieuwe bronbestanden beschikbaar bij VREG";
+            const synergridKinds = ["slp_ex", "rlp0n_elektriciteit", "rlp0n_gas", "spp"];
+            const heeftVreg = data.nieuw.some((item) => !synergridKinds.includes(item.kind));
+            const heeftSynergrid = data.nieuw.some((item) => synergridKinds.includes(item.kind));
+            const titel = "Nieuwe bronbestanden beschikbaar bij VREG/Synergrid";
+            const recept = [];
+            if (heeftVreg) {
+              recept.push(
+                "# VREG (vtest, energieprijscurves, distributienettarieven):",
+                "energievergelijker source download --year <jaar>",
+                "energievergelijker staging parse --version <nieuwe versie>",
+                "energievergelijker staging calibrate --version <nieuwe versie>",
+                "python scripts/check_tarieven.py --versie <nieuwe versie>",
+              );
+            }
+            if (heeftSynergrid) {
+              recept.push(
+                "# Synergrid (SLP-EX/RLP0N/SPP):",
+                "energievergelijker synergrid download --year <jaar>",
+                "energievergelijker staging parse --version <versie> --only profielen \\",
+                "    --synergrid-version <synergrid-versie> --jaar <jaar>",
+              );
+            }
+            recept.push("python scripts/check_bronnen.py --bijwerken --versie <nieuwe versie>");
             const body = [
               "De bronbewaking vond bestanden die nog niet verwerkt zijn.",
               "",
@@ -86,11 +108,7 @@ jobs:
               "",
               "Verwerken:",
               "```bash",
-              "energievergelijker source download --year <jaar>",
-              "energievergelijker staging parse --version <nieuwe versie>",
-              "energievergelijker staging calibrate --version <nieuwe versie>",
-              "python scripts/check_tarieven.py --versie <nieuwe versie>",
-              "python scripts/check_bronnen.py --bijwerken --versie <nieuwe versie>",
+              ...recept,
               "```",
             ].join("\n");
 

@@ -26,6 +26,7 @@ from energie_vlaanderen.infrastructure.db.schema import (
     overheidsheffing_accijns_schijf,
     overheidsheffing_energiefonds,
     overheidsheffing_btw,
+    verbruiksprofiel_waarde,
 )
 from energie_vlaanderen.heffingen.repository import HeffingenRepository
 from energie_vlaanderen.ingest.vtest.normalizer import FORMULA_COMPONENTS
@@ -1216,3 +1217,160 @@ def import_overheidsheffingen(conn: sa.Connection, config_dir: Path) -> ImportRe
         total, len(accijns_rows), len(energiefonds_rows), len(btw_rows),
     )
     return ImportResult(domain="overheidsheffing", rows_inserted=total)
+
+
+# ---------------------------------------------------------------------------
+# Verbruiksprofielen (Synergrid: SLP-EX, RLP0N, SPP)
+# ---------------------------------------------------------------------------
+
+# Bestandsnaam -> (profiel_type, energie_type). energie_type "" i.p.v. None:
+# zie de toelichting bij verbruiksprofiel_waarde in schema.py — NULL in de
+# unieke sleutel zou de ON CONFLICT-upsert breken.
+_PROFIEL_BESTANDSVOORVOEGSELS: dict[str, tuple[str, str]] = {
+    "slp_ex": ("slp_ex", ""),
+    "rlp0n_elektriciteit": ("rlp0n", "elektriciteit"),
+    "rlp0n_gas": ("rlp0n", "gas"),
+    "spp": ("spp", ""),
+}
+
+# PostgreSQL/psycopg staat maximaal 65.535 bind-parameters per query toe.
+# Bij 8 kolommen per rij is dat hooguit 8.191 rijen per multi-row INSERT —
+# 10.000 (8 x 10.000 = 80.000 parameters) liep hier stuk op een echte
+# databank met "number of parameters must be between 0 and 65535", een fout
+# die tegen SQLite of via offline SQL-compilatie niet zichtbaar wordt.
+_PROFIELEN_CHUNK_SIZE = 5_000
+
+# Sentinel-netbeheerder voor "geen netbeheerder van toepassing" (de
+# nationale profielen SLP-EX/RLP0N-gas/SPP). Aangemaakt door migratie 0016;
+# hier nogmaals als on_conflict_do_nothing-vangnet voor een databank die
+# deze rij om een andere reden nog niet heeft.
+_GEEN_NETBEHEERDER_CODE = ""
+
+
+def _profiel_meta_uit_bestandsnaam(bestandsnaam: str) -> tuple[str, str, int]:
+    """Leid (profiel_type, energie_type, jaar) af uit bv. 'rlp0n_gas_2026.csv'."""
+    stem = Path(bestandsnaam).stem
+    for voorvoegsel, (profiel_type, energie_type) in _PROFIEL_BESTANDSVOORVOEGSELS.items():
+        prefix = f"{voorvoegsel}_"
+        if stem.startswith(prefix) and stem[len(prefix):].isdigit():
+            return profiel_type, energie_type, int(stem[len(prefix):])
+    raise ValueError(
+        f"Onbekend profielenbestand: {bestandsnaam!r} — verwacht "
+        f"'<{'|'.join(_PROFIEL_BESTANDSVOORVOEGSELS)}>_<jaar>.csv'."
+    )
+
+
+def import_verbruiksprofielen(conn: sa.Connection, bron_dir: Path, version_id: str) -> ImportResult:
+    """Importeer de gestagede Synergrid-profielen-CSV's naar de databank.
+
+    `bron_dir` is de map met de verwerkte CSV's — `versions/<id>/` of
+    `staging/<id>/`, net als de andere import_*-functies. Optioneel: een
+    versie zonder `profielen/`-submap (bv. omdat enkel vtest/tariffs/curves
+    verwerkt zijn) levert gewoon 0 geïmporteerde rijen op, geen fout — dit
+    is de enige dataset die niet bij elke versie hoort te bestaan.
+    """
+    profielen_dir = bron_dir / "profielen"
+    if not profielen_dir.is_dir():
+        LOG.info("Geen profielen/-map in %s, overgeslagen.", bron_dir)
+        return ImportResult(domain="verbruiksprofiel_waarde", rows_inserted=0)
+
+    csv_paths = sorted(p for p in profielen_dir.glob("*.csv"))
+    if not csv_paths:
+        return ImportResult(domain="verbruiksprofiel_waarde", rows_inserted=0)
+
+    conn.execute(
+        sa.dialects.postgresql.insert(netbeheerder)
+        .values(code=_GEEN_NETBEHEERDER_CODE, naam="(nationaal, geen netbeheerder)")
+        .on_conflict_do_nothing(index_elements=["code"])
+    )
+
+    totaal = 0
+    for csv_path in csv_paths:
+        totaal += _import_een_profielenbestand(conn, csv_path, version_id)
+
+    LOG.info("verbruiksprofiel_waarde: %d rijen uit %d bestand(en)", totaal, len(csv_paths))
+    return ImportResult(domain="verbruiksprofiel_waarde", rows_inserted=totaal)
+
+
+def _import_een_profielenbestand(conn: sa.Connection, csv_path: Path, version_id: str) -> int:
+    profiel_type, energie_type, jaar = _profiel_meta_uit_bestandsnaam(csv_path.name)
+    df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
+    if df.empty:
+        return 0
+
+    # Netbeheerders die deze CSV meebrengt en nog geen rij hebben, eerst
+    # zaaien/aanvullen met hun GLN — anders faalt de FK op
+    # verbruiksprofiel_waarde. _dnb_code() hergebruikt de bestaande
+    # Vlaamse code (bv. "Fluvius Antwerpen" -> "FA") wanneer die naam al in
+    # DNB_CODES voorkomt, en valt anders terug op de volledige naam als
+    # code — precies wat import_gemeente ook al doet.
+    unieke_nb = (
+        df[df["netbeheerder_gln"] != ""][["netbeheerder_gln", "netbeheerder_naam"]]
+        .drop_duplicates()
+    )
+    code_by_gln: dict[str, str] = {}
+    if not unieke_nb.empty:
+        nb_rows = []
+        for _, r in unieke_nb.iterrows():
+            gln = r["netbeheerder_gln"]
+            naam = r["netbeheerder_naam"] or gln
+            code = _dnb_code(naam)
+            code_by_gln[gln] = code
+            nb_rows.append({"code": code, "naam": naam, "gln": gln})
+
+        # `gln` draagt een UNIQUE-constraint (migratie 0016). Zou Synergrid
+        # ooit een netbeheerder een nieuwe GLN geven onder dezelfde naam
+        # (dus dezelfde afgeleide `code`), dan botst deze upsert met de rij
+        # die de oude GLN nog draagt — een IntegrityError die de hele import
+        # terugdraait. Dat is met opzet geen stille aanname: de code kent
+        # geen "welke GLN is de juiste" en hoort dat ook niet te gokken.
+        stmt = sa.dialects.postgresql.insert(netbeheerder).values(nb_rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["code"],
+            set_={"gln": stmt.excluded.gln, "bijgewerkt_op": sa.func.now()},
+        )
+        conn.execute(stmt)
+
+    # itertuples i.p.v. iterrows, en de batch in stukken van
+    # _PROFIELEN_CHUNK_SIZE meteen wegschrijven i.p.v. eerst alle ~770.000
+    # rijen (RLP0N-elektriciteit) als dict op te bouwen: dat laatste piekte
+    # op 1-2 GB voor niets, terwijl enkel de write al gechunkt was.
+    totaal = 0
+    batch: list[dict] = []
+    for r in df.itertuples(index=False):
+        gln = r.netbeheerder_gln or None
+        batch.append(
+            {
+                "version_id": version_id,
+                "profiel_type": profiel_type,
+                "energie_type": energie_type,
+                "jaar": jaar,
+                "netbeheerder_code": code_by_gln.get(gln, _GEEN_NETBEHEERDER_CODE),
+                "tijdstip": _ts(r.tijdstip),
+                "waarde": float(r.waarde) if r.waarde not in ("", "nan") else None,
+                "bron_bestand": csv_path.name,
+            }
+        )
+        if len(batch) >= _PROFIELEN_CHUNK_SIZE:
+            _upsert_verbruiksprofiel_batch(conn, batch)
+            totaal += len(batch)
+            batch = []
+
+    if batch:
+        _upsert_verbruiksprofiel_batch(conn, batch)
+        totaal += len(batch)
+
+    return totaal
+
+
+def _upsert_verbruiksprofiel_batch(conn: sa.Connection, batch: list[dict]) -> None:
+    stmt = sa.dialects.postgresql.insert(verbruiksprofiel_waarde).values(batch)
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_verbruiksprofiel_waarde",
+        set_={
+            "waarde": stmt.excluded.waarde,
+            "bron_bestand": stmt.excluded.bron_bestand,
+            "version_id": stmt.excluded.version_id,
+        },
+    )
+    conn.execute(stmt)

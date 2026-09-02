@@ -23,6 +23,7 @@ from energie_vlaanderen.ingest.curves.pipeline import CurvesPipeline, CurvesPipe
 from energie_vlaanderen.ingest.downloader import ArtifactDownloader
 from energie_vlaanderen.ingest.raw_store import RawStore
 from energie_vlaanderen.ingest.sources import VnrSourceScraper
+from energie_vlaanderen.cli.synergrid import run_parse_profielen
 from energie_vlaanderen.ingest.tariffs.pipeline import TariffPipeline, TariffPipelineError
 from energie_vlaanderen.ingest.vtest.pipeline import VTestPipeline, VTestPipelineError
 from energie_vlaanderen.ingest.vtest.refine_pipeline import VTestRefinePipeline
@@ -232,6 +233,12 @@ def run_raw_status(args: argparse.Namespace, settings: Settings) -> int:
 # ---------------------------------------------------------
 
 _STAGING_TARGETS = ("vtest", "tariffs", "curves")
+# "profielen" zit bewust niet in _STAGING_TARGETS/"all": het heeft een eigen
+# --synergrid-version en --jaar nodig (Synergrid heeft een eigen raw-store,
+# los van de VREG-versie die --version hier verder aanduidt) en kan dus niet
+# zomaar meelopen in de all-in-één-run van de andere drie doelen. Expliciet
+# opvragen met --only profielen werkt wel — zie de keuzelijst in
+# cli/groups.py.
 
 
 def run_staging_parse(args: argparse.Namespace, settings: Settings) -> int:
@@ -242,6 +249,7 @@ def run_staging_parse(args: argparse.Namespace, settings: Settings) -> int:
         "vtest": run_parse_vtest,
         "tariffs": run_parse_tariffs,
         "curves": run_parse_curves,
+        "profielen": run_parse_profielen,
     }
 
     overall_rc = 0

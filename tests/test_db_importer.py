@@ -18,6 +18,7 @@ pytest.importorskip("sqlalchemy")
 from energie_vlaanderen.infrastructure.db.importer import (
     _dnb_code,
     _map_component_code_to_field,
+    _profiel_meta_uit_bestandsnaam,
     import_gemeente,
     import_netbeheerder_tarieven,
     seed_netbeheerder,
@@ -54,6 +55,28 @@ class TestDnbCode:
         """Baarle-Hertog krijgt zijn aardgas van Enexis; die hoort herkend te
         worden in plaats van als losse naam de databank in te gaan."""
         assert _dnb_code("Enexis Netbeheer") == "ENEXIS"
+
+
+class TestProfielMetaUitBestandsnaam:
+    """Pure-Python: geen databankverbinding nodig."""
+
+    def test_slp_ex_heeft_geen_energie_type(self):
+        assert _profiel_meta_uit_bestandsnaam("slp_ex_2026.csv") == ("slp_ex", "", 2026)
+
+    def test_spp_heeft_geen_energie_type(self):
+        assert _profiel_meta_uit_bestandsnaam("spp_2026.csv") == ("spp", "", 2026)
+
+    def test_rlp0n_elektriciteit(self):
+        assert _profiel_meta_uit_bestandsnaam("rlp0n_elektriciteit_2026.csv") == (
+            "rlp0n", "elektriciteit", 2026,
+        )
+
+    def test_rlp0n_gas(self):
+        assert _profiel_meta_uit_bestandsnaam("rlp0n_gas_2026.csv") == ("rlp0n", "gas", 2026)
+
+    def test_onbekend_voorvoegsel_faalt_hard(self):
+        with pytest.raises(ValueError):
+            _profiel_meta_uit_bestandsnaam("iets_onbekends_2026.csv")
 
 
 @pytest.fixture()

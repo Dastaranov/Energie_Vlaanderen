@@ -30,6 +30,9 @@ Centrale ingang voor de documentatie in deze map.
   `config/heffingen/bijzondere_accijns_*.toml` zich baseert.
 - [Tarief energiebijdrage](research/tarief%20energiebijdrage.md) — brontabel waarop
   `config/heffingen/bijdrage_energiefonds.toml` zich baseert.
+- [Verbruiksprofielen](research/verbruiksprofielen.md) — wat SLP-EX, RLP0N en SPP zijn, waar Synergrid
+  ze publiceert en hoe ze berekend worden; de inhoudelijke basis voor `ingest/profielen/`
+  (zie CLAUDE.md, sectie "Verbruiksprofielen (Synergrid)").
 
 ## Archief
 

@@ -12,9 +12,14 @@ Installeer altijd mét de `db`-extra, ook als je niet naar de databank schrijft:
 vier testmodules importeren SQLAlchemy en falen anders bij het inlezen. Ze draaien
 op SQLite in het geheugen en hebben geen server nodig.
 
+De `profielen`-extra (`pyxlsb`) is enkel nodig om RLP0N/SLP-EX (.xlsb) te lezen —
+SPP is .xlsx en werkt al met de basisinstallatie. Zonder deze extra faalt
+`staging parse --only profielen` op die twee bronnen met een duidelijke foutmelding
+i.p.v. een cryptische ImportError.
+
 ```bash
 # Install (editable, with all dependencies)
-pip install -e ".[test,db,scrape]"
+pip install -e ".[test,db,scrape,profielen]"
 
 # Run all tests
 pytest -q
@@ -51,7 +56,8 @@ The CLI is grouped as `<groep> <actie> [opties]`; every action also accepts `--j
 |---|---|
 | `source` | `download --year`, `list --year` |
 | `raw` | `verify --version`, `status` |
-| `staging` | `parse --version [--only vtest\|tariffs\|curves\|all] [--overwrite]`, `refine --version [--postcode] [--segment woning\|onderneming] [--energy elektriciteit\|gas] [--matrix] [--no-download] [--browser chrome\|firefox] [--show]`, `calibrate --version [--postcode] [--browser] [--show]` |
+| `staging` | `parse --version [--only vtest\|tariffs\|curves\|profielen\|all] [--overwrite] [--synergrid-version] [--jaar]`, `refine --version [--postcode] [--segment woning\|onderneming] [--energy elektriciteit\|gas] [--matrix] [--no-download] [--browser chrome\|firefox] [--show]`, `calibrate --version [--postcode] [--browser] [--show]` |
+| `synergrid` | `list --year`, `download --year`, `verify --version`, `status` |
 | `market` | `sync --start --end [--no-api]` |
 | `audit` | `status`, `approve`, `golden`, `set-golden`, `sanity`, `sample` (all `--version`), `heffingen [--datum] [--streng]` (geen versie nodig) |
 
@@ -63,6 +69,8 @@ The CLI is grouped as `<groep> <actie> [opties]`; every action also accepts `--j
 Running `energievergelijker` with no arguments starts the interactive shell instead of erroring; `energievergelijker <groep> <actie>` keeps working exactly as a normal one-shot CLI call for scripts.
 
 `staging refine` scrapes the live vtest.be comparison tool via Selenium (requires `pip install -e ".[scrape]"` and a local Chrome or Firefox). `--segment`/`--energy` pick one of the four categories (woning/onderneming × elektriciteit/gas); `--matrix` runs all 4 × the 8 DNB-representative postcodes (32 combinations, one courtesy pause between each) and merges the results. Output per combination: `vtest_products_<segment>_<energy>_<postcode>.csv` (contract metadata) and `vtest_product_components_<segment>_<energy>_<postcode>.csv` (the full per-contract cost breakdown extracted from vtest.be's own `data-productinvoicestring`, incl. its own Nettarieven/Heffingen calculation — a useful cross-check against the tariffs/heffingen pipelines).
+
+`staging parse --only profielen` heeft, anders dan de andere drie doelen, een eigen `--synergrid-version` nodig naast de gewone `--version`: Synergrid heeft een eigen raw-store (`SynergridRawStore`, `data/raw/synergrid/<versie>/`) los van de VREG-raw-store, met een eigen jaarlijkse cadans. `--version` bepaalt enkel wáár de output landt (`staging/<versie>/profielen/`); `--synergrid-version` + `--jaar` bepalen wélke Synergrid-download verwerkt wordt. Daarom zit `profielen` bewust niet in `--only all` — de andere drie doelen hebben geen tweede versie-id nodig, `profielen` wel, en dat zou `all` een stille extra vereiste geven.
 
 ### Tariefbewaking
 
@@ -78,14 +86,15 @@ knik een schijfgrens.
 energievergelijker audit heffingen                     # structuur, offline
 energievergelijker staging calibrate --version <id>    # ~13 min, Selenium
 python scripts/check_tarieven.py --versie <id>         # config vs. vtest.be
-python scripts/check_bronnen.py                        # nieuwe VREG-bestanden?
+python scripts/check_bronnen.py                        # nieuwe VREG-/Synergrid-bestanden?
 ```
 
 `config/bronregister.toml` legt vast welke bronbestanden de pipeline verwerkt
 heeft; `.github/workflows/bronbewaking.yml` vergelijkt dat dagelijks met de
-VREG-pagina's en maakt er een issue van. De agent `.claude/agents/tariefwacht.md`
+VREG- en Synergrid-pagina's en maakt er een issue van. De agent `.claude/agents/tariefwacht.md`
 en de skill `.claude/skills/tariefcontrole/` beschrijven de werkwijze bij een
-afwijking.
+afwijking — beide gaan over tarieven/heffingen, niet over verbruiksprofielen
+(zie hieronder), maar volgen wel hetzelfde stramien.
 
 **Let op bij vergelijken**: de masterdata staat exclusief btw, publieke
 communicatie noemt bedragen doorgaans inclusief 6%. Een verschil van precies
@@ -99,6 +108,88 @@ bedrag. Het energiefonds gedraagt zich anders en faalt wél hard.
 `docs/jaarwissel 2026-2027.md` zet per bestand op een rij wat er in december
 nagekeken moet worden, met bron, commando en eindtoets.
 
+### Verbruiksprofielen (Synergrid)
+
+Voor klassieke meters en variabele contracten wordt het jaarverbruik verdeeld
+over kwartieren/uren met een gebruiksprofiel — zie
+`docs/research/verbruiksprofielen.md` voor de achtergrond (SLP-EX, RLP0N,
+SPP) en `docs/manifest.md` §4.4/§9 voor de functionele eis. De ingest hiervoor
+(`ingest/synergrid_sources.py`, `ingest/synergrid_downloader.py`,
+`ingest/profielen/`) is bewust een apart domein naast `ingest/curves/`:
+`curves/` verwerkt een door VREG zelf gecureerd werkboek
+(`energy_curves`-artefact, van vlaamsenutsregulator.be) dat toevallig ook
+RLP/SPP-achtige sheets bevat, maar met een andere bron, ander
+bestandsformaat en zonder per-netbeheerderdetail. De doeltabel waar dat naar
+zou schrijven (`marktcurve`) is bovendien een ongebruikt scaffold zonder
+importer.
+
+```bash
+energievergelijker synergrid download --year 2026
+energievergelijker staging parse --version <staging-versie> --only profielen \
+    --synergrid-version <synergrid-versie> --jaar 2026
+energievergelijker db import --version <staging-versie>
+```
+
+**`version publish` neemt een profielen-only staging-versie niet mee** —
+`run_publish` eist nog altijd een `vtest/`-submap in de staging-directory
+(ongewijzigd gedrag, niet veralgemeend voor deze feature). Een versie die
+enkel `--only profielen` verwerkt heeft, publiceert dus niet; ze gaat wél
+via `energievergelijker db import --version <id>` rechtstreeks de databank
+in (`import_verbruiksprofielen` wordt door `import_version_into_db`
+aangeroepen, los van `run_publish`). Voor een versie die vtest/tariffs/
+curves én profielen samen bevat, werkt `version publish` gewoon.
+
+Wat geverifieerd is door de echte Synergrid-bestanden te downloaden en te
+parsen (2026):
+
+- **RLP0N en SLP-EX zijn `.xlsb`**, niet `.xlsx` — vereist de `pyxlsb`-
+  engine (`profielen`-extra). Enkel SPP is `.xlsx` (openpyxl). `pyxlsb`
+  geeft tijdstippen als ruw Excel-serienummer terug; `_format_ts` uit
+  `ingest/curves/workbook.py` (`CurvesWorkbookParser`) lost dat al op en
+  wordt hier hergebruikt, niet herïmplementeerd.
+- **SLP-EX draagt CET als "UTC+1, no DST"** — niet hetzelfde als
+  `Europe/Brussels` (dat wél zomertijd kent). De parser gebruikt daarom de
+  `ENU_UTC`-sheet, niet `ENU_CET`.
+- **RLP0N-elektriciteit ("all DSOs"-bestand) is breed**: één kolom per
+  netbeheerder, geïdentificeerd via een GLN-code in de derde headerrij
+  (`ingest/profielen/workbook.py::parse_breed_per_netbeheerder`, meldt naar
+  lange vorm zoals `CurvesWorkbookParser._parse_timeseries` al doet). Dekt
+  héél België — Fluvius, ORES-varianten, RESA, Sibelga, AIEG, AIESH, Régie
+  de Wavre — niet enkel de 8 Vlaamse DNB's uit `DNB_CODES`. Een paar kleine
+  netbeheerders komen dubbel als kolom voor met identieke GLN en waarden;
+  de validator staat dat toe zolang de waarden overeenkomen en faalt hard
+  bij een tegenstrijdigheid (`duplicate_gln_conflict`).
+- **RLP0N-gas** (via het GOS-bestand) is, anders dan elektriciteit, een
+  nationaal profiel — geen per-netbeheerderkolommen — en uurresolutie
+  (dag begint om 6u CET, vaste gasconventie).
+- **SPP ex-ante sommeert niet tot 1** — het is productie per kWp
+  geïnstalleerd vermogen, geen verdeling. De som-tot-1-controle
+  (`ProfielenValidator`, harde fout, citeert `docs/manifest.md` §4.4) geldt
+  daarom enkel voor SLP-EX en RLP0N.
+- **Regressiemodel-/parameterbestanden** (CL1/CL2/CL3-clusters,
+  weer-/kalendercoëfficiënten) en de **SPP ex-post-historiek** (5 jaar, per
+  netbeheerder) worden bewust nog niet geparsed — dat zijn geen
+  kant-en-klare tijdreeksen maar invoer voor een eigen model.
+- **Precisie**: profielgewichten zijn geen geldbedrag — `waarde` is
+  `sa.Float` (double precision), niet `Numeric`, om de brondata (tot 16
+  decimalen) niet stil af te ronden. Zie de toelichting in `schema.py` bij
+  `verbruiksprofiel_waarde`.
+- **`netbeheerder_code`/`energie_type` zijn `NOT NULL DEFAULT ''`**, niet
+  nullable: PostgreSQL behandelt NULL in een unieke sleutel als onderling
+  verschillend, wat de `ON CONFLICT`-upsert van de nationale profielen zou
+  breken (zelfde reden als `netbeheerder_tarief.tariefnotering`).
+- Synergrid-URL's zijn **niet af te leiden** — 2026-bestanden staan onder
+  `/SLP-RLP-SPP/2026/`, 2025-bestanden grotendeels niet. De scraper leest
+  altijd de links van de pagina zelf, net als `VnrSourceScraper`.
+
+`ArtifactDownloader`/`RawStore` (VREG, maandelijks, altijd `.xlsx`) zijn
+bewust niet uitgebreid met de Synergrid-bronnen (jaarlijks, `.xlsb`): een
+gewone `source download` zou anders elke maand 50+ MB ongewijzigde
+jaarbestanden meeslepen. `SynergridDownloader`/`SynergridRawStore`
+(`ingest/synergrid_downloader.py`) zijn een kleinere, parallelle set met een
+eigen manifestvorm en een `.xlsb`-tak in de containervalidatie
+(`xl/workbook.bin` i.p.v. `xl/workbook.xml`).
+
 ## Architecture
 
 The package lives in `src/energie_vlaanderen/`. `energievergelijker.py` at the root is the entry point; it delegates to `src/energie_vlaanderen/cli/` (a package, not a single module).
@@ -108,11 +199,12 @@ The package lives in `src/energie_vlaanderen/`. `energievergelijker.py` at the r
 ```
 __init__.py    # build_parser(), main() — re-exports the public API used by tests/pyproject
 __main__.py    # `python -m energie_vlaanderen.cli`
-groups.py      # builds the group→action parser tree (source/raw/staging/market/audit/version/db/paths)
+groups.py      # builds the group→action parser tree (source/raw/staging/synergrid/market/audit/version/db/paths)
 shell.py       # interactive REPL: opstart/werking dashboards, generic ✓/!/✗ result rendering
 status.py      # dashboard data sources (live where possible, honest placeholders otherwise)
 paths_cmd.py   # `paths` — run_paths, show_paths
 ingest.py      # source/raw/staging/market/version handlers (incl. run_staging_parse)
+synergrid.py   # synergrid group handlers + run_parse_profielen (staging parse --only profielen)
 audit.py       # audit group handlers
 db.py          # db group handlers
 args.py        # add_version_arg(), add_json_flag() — shared argparse registration helpers
@@ -138,6 +230,16 @@ ingest/
   sources.py     # VnrSourceScraper: scrapes XLSX download links from vlaamsenutsregulator.be
   downloader.py  # ArtifactDownloader: downloads XLSX files safely
   raw_store.py   # RawStore: persists raw downloads with version IDs
+  synergrid_sources.py    # SynergridSourceScraper: scrapes .xlsb/.xlsx profile links
+                 #   from synergrid.be (subclasses VnrSourceScraper's link-select logic)
+  synergrid_downloader.py # SynergridDownloader/SynergridRawStore: parallel, smaller
+                 #   set of the two classes above — own manifest shape, own .xlsb
+                 #   container check, own raw-store path (data/raw/synergrid/)
+  profielen/     # Verbruiksprofielen (SLP-EX, RLP0N, SPP): workbook.py (nationaal
+                 #   1-waarde-per-tijdstip vs. breed 1-kolom-per-netbeheerder,
+                 #   beide gemold naar lange vorm) → validator.py (som-tot-1,
+                 #   intervaltelling, dubbele-GLN-conflict) → pipeline.py
+                 #   (1 process()-aanroep per bronbestand, zoals TariffPipeline)
   vtest/         # Two separate paths for the same domain:
                  #   1) bulk export: workbook.py → normalizer.py → validator.py → pipeline.py
                  #      (parses the VREG "V-test data" XLSX into master_vast/var_dyn.csv)
@@ -185,6 +287,10 @@ infrastructure/
                  # bulkbewerkingen in. 5.252 queries in plaats van ~90.000; 64 s in plaats van ~900.
                  # `_scd2_upsert` is een schil om `_scd2_bulk_upsert` zodat er één implementatie
                  # van de semantiek bestaat. Alles blijft in één transactie.
+                 # verbruiksprofiel_waarde (migratie 0016) is bewust géén SCD2: Synergrid
+                 # vervangt een jaarprofiel in zijn geheel, geen wijzigingshistoriek binnen
+                 # het jaar. import_verbruiksprofielen() doet een gebatchte ON CONFLICT-upsert
+                 # (chunks van 10.000 rijen) i.p.v. de SCD2-machinerie.
 utility/
   constants.py   # D() (Decimal factory), LOCAL_TZ, DNB_CODES
   normalizer.py  # money(), dec() helpers
@@ -389,7 +495,8 @@ ervoor.
 | `ENERGIEVERGELIJKER_REQUEST_TIMEOUT` | `60` | HTTP timeout in seconds |
 | `ENERGIEVERGELIJKER_VTEST_PAGE_URL` | vlaamsenutsregulator.be URL | V-test scrape target |
 | `ENERGIEVERGELIJKER_TARIFF_PAGE_URL` | vlaamsenutsregulator.be URL | Tariff scrape target |
-| `ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES` | `52428800` | Download size cap |
+| `ENERGIEVERGELIJKER_SYNERGRID_PROFIELEN_PAGE_URL` | synergrid.be URL | Verbruiksprofielen scrape target |
+| `ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES` | `104857600` (100 MiB — was 50 MiB, te krap voor het ~49,7 MiB SPP-bestand) | Download size cap |
 
 `ENTSOE_API_KEY` and database credentials are in `.env` (not committed to git beyond `.env` itself).
 

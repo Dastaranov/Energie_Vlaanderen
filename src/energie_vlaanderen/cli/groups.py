@@ -6,7 +6,7 @@ commandolijn: welke groepen en acties er bestaan en welke handler elke
 combinatie aanroept.
 
 Registratievolgorde (bepaalt de volgorde in --help en het shell-menu):
-    source, raw, staging, market, audit, version, db, paths
+    source, raw, staging, synergrid, market, audit, version, db, paths
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 
-from energie_vlaanderen.cli import audit, db, ingest, paths_cmd
+from energie_vlaanderen.cli import audit, db, ingest, paths_cmd, synergrid
 from energie_vlaanderen.cli.args import add_json_flag, add_version_arg
 from energie_vlaanderen.cli.helpers import positive_integer
 
@@ -90,14 +90,32 @@ def _add_staging_group(subparsers: argparse._SubParsersAction) -> None:
     add_version_arg(parse_parser, help="Raw-versie-id die verwerkt moet worden.")
     parse_parser.add_argument(
         "--only",
-        choices=("vtest", "tariffs", "curves", "all"),
+        choices=("vtest", "tariffs", "curves", "profielen", "all"),
         default="all",
-        help="Beperk de verwerking tot één dataset (standaard: all).",
+        help=(
+            "Beperk de verwerking tot één dataset (standaard: all — "
+            "'profielen' loopt daar bewust niet in mee, zie --synergrid-version)."
+        ),
     )
     parse_parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overschrijf een bestaande tarieven-/curves-stagingmap (vtest wordt altijd overschreven).",
+        help="Overschrijf een bestaande tarieven-/curves-/profielen-stagingmap (vtest wordt altijd overschreven).",
+    )
+    parse_parser.add_argument(
+        "--synergrid-version",
+        default=None,
+        help=(
+            "Synergrid raw-versie-id (verplicht bij --only profielen). "
+            "Komt van 'energievergelijker synergrid download', niet van "
+            "--version — Synergrid heeft een eigen, jaarlijkse raw-store."
+        ),
+    )
+    parse_parser.add_argument(
+        "--jaar",
+        type=int,
+        default=None,
+        help="Profieljaar (verplicht bij --only profielen).",
     )
     add_json_flag(parse_parser)
     parse_parser.set_defaults(handler=ingest.run_staging_parse)
@@ -203,6 +221,55 @@ def _add_staging_group(subparsers: argparse._SubParsersAction) -> None:
     )
     add_json_flag(calibrate_parser)
     calibrate_parser.set_defaults(handler=ingest.run_staging_calibrate)
+
+
+def _add_synergrid_group(subparsers: argparse._SubParsersAction) -> None:
+    synergrid_parser = subparsers.add_parser(
+        "synergrid",
+        help="Synergrid-verbruiksprofielen (SLP-EX, RLP0N, SPP) ontdekken en downloaden.",
+    )
+    actions = synergrid_parser.add_subparsers(dest="action", required=True)
+
+    list_parser = actions.add_parser(
+        "list",
+        help="Ontdek de actuele Synergrid-profielbestanden zonder ze te downloaden.",
+    )
+    list_parser.add_argument(
+        "--year",
+        type=int,
+        default=datetime.now().year,
+        help="Profieljaar.",
+    )
+    add_json_flag(list_parser)
+    list_parser.set_defaults(handler=synergrid.run_synergrid_list)
+
+    download_parser = actions.add_parser(
+        "download",
+        help="Ontdek en download de Synergrid-profielbestanden naar een nieuwe raw-versie.",
+    )
+    download_parser.add_argument(
+        "--year",
+        type=int,
+        default=datetime.now().year,
+        help="Profieljaar.",
+    )
+    add_json_flag(download_parser)
+    download_parser.set_defaults(handler=synergrid.run_synergrid_download)
+
+    verify_parser = actions.add_parser(
+        "verify",
+        help="Controleer manifest, bestanden en checksums van een Synergrid raw-versie.",
+    )
+    add_version_arg(verify_parser, help="Synergrid raw-versie-id die gecontroleerd wordt.")
+    add_json_flag(verify_parser)
+    verify_parser.set_defaults(handler=synergrid.run_synergrid_verify)
+
+    status_parser = actions.add_parser(
+        "status",
+        help="Toon de lokaal opgeslagen Synergrid raw-versies en hun validatiestatus.",
+    )
+    add_json_flag(status_parser)
+    status_parser.set_defaults(handler=synergrid.run_synergrid_status)
 
 
 def _add_market_group(subparsers: argparse._SubParsersAction) -> None:
@@ -416,6 +483,7 @@ def add_all(subparsers: argparse._SubParsersAction) -> None:
     _add_source_group(subparsers)
     _add_raw_group(subparsers)
     _add_staging_group(subparsers)
+    _add_synergrid_group(subparsers)
     _add_market_group(subparsers)
     _add_audit_group(subparsers)
     _add_version_group(subparsers)

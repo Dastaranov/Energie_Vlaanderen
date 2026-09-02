@@ -48,3 +48,37 @@ bestandsnaam = "Distributienettarieven aardgas 2026.xlsx"
 sha256 = "facaf73ab39f5b4066f4ad372861e52da78fa0e9b34c83558111432be4bd5397"
 periodiciteit = "jaarlijks"
 opmerking = "Gecontroleerd tegen vtest.be: alle 8 netbeheerders komen exact overeen. Enexis aardgas 2026 staat wel op de pagina maar wordt niet ingelezen."
+
+# Vanaf hier: Synergrid-verbruiksprofielen (SLP-EX, RLP0N, SPP), zie
+# `energievergelijker synergrid list/download`. Andere pagina, ander ritme
+# (jaarlijks, rond het jaareinde) en ander bestandsformaat (.xlsb) dan de
+# vier VREG-bronnen hierboven — vandaar de eigen `SynergridSourceScraper`
+# i.p.v. een uitbreiding van `VnrSourceScraper`.
+
+[[bron]]
+kind = "slp_ex"
+bestandsnaam = "SLP_EX_2026.xlsb"
+sha256 = "846d6acc7e83c8f18856ac86a09352d9b07f77160b651e03dc9c23b559428a77"
+periodiciteit = "jaarlijks"
+opmerking = "Nationaal profiel, kwartierresolutie. Som van ENU over het jaar geverifieerd op 1,0000000000000000 (binnen floating-point-marge)."
+
+[[bron]]
+kind = "rlp0n_elektriciteit"
+bestandsnaam = "RLP0N 2026 Electricity all DSOs.xlsb"
+sha256 = "27586d6f942cb9dc31f3776c243fb04b930f498d4df7be00d69d23aa3631788e"
+periodiciteit = "jaarlijks"
+opmerking = "Eén kolom per netbeheerder (GLN-code), heel België — niet enkel de 8 Vlaamse Fluvius-DNB's."
+
+[[bron]]
+kind = "rlp0n_gas"
+bestandsnaam = "RLP0N 2026 Gas GOS.xlsb"
+sha256 = "e38a7f7fb677a67e2858e1bb32b5250c773a343b38f72cc7dc678e174fe7ecd0"
+periodiciteit = "jaarlijks"
+opmerking = "Nationaal profiel, uurresolutie, dag begint om 6u CET (vaste gasconventie)."
+
+[[bron]]
+kind = "spp"
+bestandsnaam = "SPP_ex-ante_and_ex-post_2026.xlsx"
+sha256 = "5dfe184539a3f8d4e849d2bf83d9257171a71e3f5e5422887275616405daf36f"
+periodiciteit = "jaarlijks"
+opmerking = "Enkel de ex-ante-sheet wordt verwerkt (productiefractie per kWp); de ex-post-historiek (5 jaar, per netbeheerder) is nog niet in scope."

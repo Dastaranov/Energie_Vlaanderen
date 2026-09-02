@@ -28,6 +28,13 @@ scrape = [
     "selenium>=4.0",
 ]
 
+# RLP0N en SLP-EX (Synergrid-verbruiksprofielen) worden gepubliceerd als
+# .xlsb (Excel Binary Workbook), niet .xlsx — openpyxl leest dat formaat
+# niet. SPP blijft gewoon .xlsx en heeft deze extra niet nodig.
+profielen = [
+    "pyxlsb>=1.0",
+]
+
 db = [
     "psycopg[binary]>=3.1",
     "SQLAlchemy>=2.0",

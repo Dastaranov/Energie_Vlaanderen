@@ -13,6 +13,12 @@ netbeheerder = sa.Table(
     metadata,
     sa.Column("code", sa.String(40), primary_key=True),
     sa.Column("naam", sa.Text, nullable=False),
+    # GLN (Global Location Number): de identifier waarmee Synergrid
+    # netbeheerders in de verbruiksprofielen (SLP-EX/RLP0N/SPP) aanduidt.
+    # Nullable — de oorspronkelijke 8 Vlaamse Fluvius-DNB's + Enexis werden
+    # nooit met een GLN gezaaid, enkel de netbeheerders die via de
+    # profielenimport bijkomen dragen er standaard één.
+    sa.Column("gln", sa.String(20), nullable=True, unique=True),
     sa.Column("bijgewerkt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
 )
 
@@ -316,6 +322,69 @@ overheidsheffing_btw = sa.Table(
     sa.Column("geldig_vanaf", sa.Date, nullable=False),
     sa.Column("bron", sa.Text, nullable=False),
     sa.UniqueConstraint("component", "geldig_vanaf", name="uq_overheidsheffing_btw"),
+)
+
+# ---------------------------------------------------------------------------
+# Groep 4b — Verbruiksprofielen (Synergrid: SLP-EX, RLP0N, SPP)
+# ---------------------------------------------------------------------------
+
+# Bewust geen Numeric en geen SCD2. Numeric(14,6) (zoals marktcurve
+# hieronder) zou de brondata stilzwijgend afronden: een SLP-EX-gewicht als
+# 0,0002049609 heeft 10 decimalen, een SPP-waarde tot 16. "Decimal only for
+# financial values — never float" (zie CLAUDE.md) is hier niet van
+# toepassing: dit zijn geen geldbedragen maar statistische profielgewichten
+# en productiefracties, waarvoor IEEE double precision (~15-17 significante
+# cijfers) exact genoeg is en geen kunstmatige afronding invoert. Geen
+# SCD2 (geldig_van/geldig_tot): Synergrid publiceert één keer per jaar een
+# volledig nieuw profiel, geen wijzigingshistoriek binnen een jaar — een
+# jaar/profieltype-combinatie wordt bij een herimport in zijn geheel
+# vervangen (ON CONFLICT DO UPDATE op de unieke sleutel), niet aangevuld.
+verbruiksprofiel_waarde = sa.Table(
+    "verbruiksprofiel_waarde",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+    sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
+    # "slp_ex" | "rlp0n" | "spp"
+    sa.Column("profiel_type", sa.Text, nullable=False),
+    # "elektriciteit" | "gas" | "" (SPP en SLP-EX kennen geen aparte
+    # energievorm — SLP-EX is per definitie elektriciteit-only, maar dat
+    # apart vastleggen voegt niets toe zolang er geen gas-SLP bestaat).
+    # Leeg, niet NULL: zie de toelichting bij netbeheerder_code hieronder,
+    # dezelfde reden geldt hier.
+    sa.Column("energie_type", sa.Text, nullable=False, server_default=""),
+    sa.Column("jaar", sa.SmallInteger, nullable=False),
+    # Leeg ("") voor de nationale profielen (SLP-EX, RLP0N-gas via GOS, SPP
+    # ex-ante); gevuld voor RLP0N-elektriciteit, dat per netbeheerder
+    # gepubliceerd wordt. Net als bij `netbeheerder_tarief.tariefnotering`
+    # (zie de toelichting daar) is dit bewust geen NULL: PostgreSQL
+    # behandelt NULLs in een unieke sleutel als onderling verschillend,
+    # zodat elke nieuwe import van een nationaal profiel zijn 35.040 rijen
+    # gewoon zou bíjvoegen in plaats van de vorige import te vervangen via
+    # ON CONFLICT. Een lege string is voor de databank een gewone,
+    # vergelijkbare waarde en laat de upsert wél werken. De FK vereist
+    # daarom een gezaaide netbeheerder-rij met code="" (zie
+    # `import_verbruiksprofielen` in importer.py) — geen losse partiële
+    # index, om precies dezelfde reden als bij tariefnotering.
+    sa.Column(
+        "netbeheerder_code", sa.String(40), sa.ForeignKey("netbeheerder.code"),
+        nullable=False, server_default="",
+    ),
+    sa.Column("tijdstip", sa.TIMESTAMP(timezone=True), nullable=False),
+    # Float(53) i.p.v. kaal Float: PostgreSQL leest een ongequalificeerde
+    # FLOAT weliswaar al als double precision (float8), maar 53 bits
+    # precisie hier expliciet vastleggen laat geen twijfel bestaan — dit is
+    # exact de kolom waarvoor de precisie is uitgemeten (16 decimalen bij
+    # SPP, zie hierboven).
+    sa.Column("waarde", sa.Float(53), nullable=True),
+    sa.Column("bron_bestand", sa.Text, nullable=True),
+    sa.UniqueConstraint(
+        "profiel_type", "energie_type", "jaar", "netbeheerder_code", "tijdstip",
+        name="uq_verbruiksprofiel_waarde",
+    ),
+    sa.Index(
+        "ix_verbruiksprofiel_waarde_lookup",
+        "profiel_type", "jaar", "netbeheerder_code",
+    ),
 )
 
 # ---------------------------------------------------------------------------

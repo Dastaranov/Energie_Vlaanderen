@@ -17,8 +17,14 @@ DEFAULT_TARIFF_PAGE = (
     "hoeveel-bedragen-de-distributienettarieven"
 )
 
+DEFAULT_SYNERGRID_PROFIELEN_PAGE = (
+    "https://www.synergrid.be/nl/documentencentrum/"
+    "statistieken-gegevens/profielen-slp-spp-rlp"
+)
+
 DEFAULT_ALLOWED_DOWNLOAD_HOSTS = (
     "assets.vlaamsenutsregulator.be",
+    "www.synergrid.be",
 )
 
 
@@ -85,13 +91,18 @@ class Settings:
 
     vtest_page_url: str = DEFAULT_VTEST_PAGE
     tariff_page_url: str = DEFAULT_TARIFF_PAGE
+    synergrid_profielen_page_url: str = DEFAULT_SYNERGRID_PROFIELEN_PAGE
 
     allowed_download_hosts: tuple[str, ...] = (
         DEFAULT_ALLOWED_DOWNLOAD_HOSTS
     )
 
     request_timeout_seconds: float = 60.0
-    max_download_bytes: int = 50 * 1024 * 1024
+    # 50 MiB liet nauwelijks marge voor het SPP-productieprofiel van
+    # Synergrid (~49,7 MiB voor 2026) — een volgend jaar met meer DNB's of
+    # meer historiek kwam er zo overheen. 100 MiB geeft ademruimte zonder de
+    # eigenlijke bescherming (een oneindige/foute download) te verzwakken.
+    max_download_bytes: int = 100 * 1024 * 1024
     download_chunk_bytes: int = 1024 * 1024
 
     user_agent: str = "EnergieVergelijker/3.0"
@@ -165,6 +176,11 @@ class Settings:
             DEFAULT_TARIFF_PAGE,
         )
 
+        synergrid_profielen_page_url = env.get(
+            "ENERGIEVERGELIJKER_SYNERGRID_PROFIELEN_PAGE_URL",
+            DEFAULT_SYNERGRID_PROFIELEN_PAGE,
+        )
+
         max_download_text = env.get(
             "ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES",
             str(50 * 1024 * 1024),
@@ -189,6 +205,7 @@ class Settings:
             data_root=data_root,
             vtest_page_url=vtest_page_url,
             tariff_page_url=tariff_page_url,
+            synergrid_profielen_page_url=synergrid_profielen_page_url,
             request_timeout_seconds=timeout,
             max_download_bytes=max_download_bytes,
         )

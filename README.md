@@ -1,4 +1,4 @@
-# EnergieVergelijker
+# Energie Vlaanderen
 
 [![Tests](https://github.com/Dastaranov/Energie_Vlaanderen/actions/workflows/tests.yml/badge.svg)](https://github.com/Dastaranov/Energie_Vlaanderen/actions/workflows/tests.yml)
 [![Bronbewaking](https://github.com/Dastaranov/Energie_Vlaanderen/actions/workflows/bronbewaking.yml/badge.svg)](https://github.com/Dastaranov/Energie_Vlaanderen/actions/workflows/bronbewaking.yml)
@@ -19,6 +19,7 @@ en zet ze in een PostgreSQL-databank als centrale bron voor prijsberekeningen.
 - [Gebruik](#gebruik)
 - [Dataversies en de databank](#dataversies-en-de-databank)
 - [Masterdata en tariefbewaking](#masterdata-en-tariefbewaking)
+- [Verbruiksprofielen (Synergrid)](#verbruiksprofielen-synergrid)
 - [Testen](#testen)
 - [Documentatie](#documentatie)
 
@@ -36,6 +37,13 @@ en zet ze in een PostgreSQL-databank als centrale bron voor prijsberekeningen.
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[test,db,scrape]"
+```
+
+Voor de Synergrid-verbruiksprofielen (RLP0N/SLP-EX, `.xlsb`) is er een extra
+`profielen`-groep nodig — SPP (`.xlsx`) werkt al met de basisinstallatie:
+
+```bash
+pip install -e ".[profielen]"
 ```
 
 Maak daarnaast een `.env` in de projectroot (staat niet in git):
@@ -115,7 +123,8 @@ Energie_vlaanderen >> exit
 | --- | --- |
 | `source` | `download --year`, `list --year` |
 | `raw` | `verify --version`, `status` |
-| `staging` | `parse --version [--only vtest\|tariffs\|curves\|all] [--overwrite]`, `refine --version [--postcode] [--segment] [--energy] [--matrix] [--met-contractdetails] [--browser]`, `calibrate --version [--postcode]` |
+| `staging` | `parse --version [--only vtest\|tariffs\|curves\|profielen\|all] [--overwrite] [--synergrid-version] [--jaar]`, `refine --version [--postcode] [--segment] [--energy] [--matrix] [--met-contractdetails] [--browser]`, `calibrate --version [--postcode]` |
+| `synergrid` | `list --year`, `download --year`, `verify --version`, `status` |
 | `market` | `sync --start --end [--no-api]` |
 | `audit` | `status`, `approve`, `golden`, `set-golden`, `sanity`, `sample` (alle `--version`), `heffingen [--datum] [--streng]` |
 | `version` | `publish --version [--keep-staging] [--force] [--skip-db] [--db-overwrite]` |
@@ -157,7 +166,7 @@ eigen kostenopbouw.
 energievergelijker audit heffingen                     # structuur, offline
 energievergelijker staging calibrate --version <id>    # Selenium
 python scripts/check_tarieven.py --versie <id>         # config vs. vtest.be
-python scripts/check_bronnen.py                        # nieuwe VREG-bestanden?
+python scripts/check_bronnen.py                        # nieuwe VREG-/Synergrid-bestanden?
 ```
 
 Een GitHub Action draait de laatste twee dagelijks en meldt afwijkingen als
@@ -167,6 +176,40 @@ zonder waarschuwing als de masterdata niet meegaat.
 
 **Let op bij vergelijken met externe bronnen:** de masterdata staat exclusief
 btw, publieke communicatie noemt bedragen doorgaans inclusief 6%.
+
+## Verbruiksprofielen (Synergrid)
+
+Voor klassieke (niet-digitale) meters en variabele contracten wordt het
+jaarverbruik verdeeld over kwartieren/uren met een gebruiksprofiel — zie
+[`docs/research/verbruiksprofielen.md`](docs/research/verbruiksprofielen.md).
+Synergrid publiceert die profielen (SLP-EX, RLP0N, SPP) jaarlijks als losse
+werkboeken, grotendeels als `.xlsb` in plaats van `.xlsx`. Dat is een andere
+bron, ander ritme en ander bestandsformaat dan de vier VREG-bronnen
+hierboven, en heeft daarom een eigen `synergrid`-commandogroep en een eigen
+raw-store (`data/raw/synergrid/`) los van `source`/`raw`.
+
+```bash
+energievergelijker synergrid download --year 2026
+energievergelijker staging parse --version <staging-versie> --only profielen \
+    --synergrid-version <synergrid-versie> --jaar 2026
+```
+
+`--version` is de gewone stagingversie (kan samenvallen met een vtest/
+tariffs/curves-run); `--synergrid-version` wijst naar de Synergrid raw-versie
+van de download hierboven. Verwerkt worden: SLP-EX, RLP0N (elektriciteit én
+gas) en de SPP ex-ante-sheet — één nationaal profiel voor SLP-EX/RLP0N-gas/
+SPP, één rij per netbeheerder (GLN-gekoppeld, alle Belgische DNB's) voor
+RLP0N-elektriciteit. De regressiemodel-/parameterbestanden en de SPP
+ex-post-historiek worden bewust nog niet geparsed.
+
+Een harde validatieregel: profielgewichten moeten per jaar (en voor RLP0N per
+netbeheerder) sommeren tot 1 — zie `docs/manifest.md` §4.4. SPP is daarvan
+uitgezonderd: dat is productie per kWp geïnstalleerd vermogen, geen
+verdeling.
+
+`energievergelijker db import`/`version publish` nemen een `profielen/`-
+stagingmap automatisch mee naar de `verbruiksprofiel_waarde`-tabel; ontbreekt
+die map, dan wordt er gewoon niets geïmporteerd (geen fout).
 
 ## Testen
 
