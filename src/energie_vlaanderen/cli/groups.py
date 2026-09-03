@@ -6,7 +6,7 @@ commandolijn: welke groepen en acties er bestaan en welke handler elke
 combinatie aanroept.
 
 Registratievolgorde (bepaalt de volgorde in --help en het shell-menu):
-    source, raw, staging, synergrid, market, audit, version, db, paths
+    source, raw, staging, synergrid, market, audit, version, db, gebruiker, paths
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 
-from energie_vlaanderen.cli import audit, db, ingest, paths_cmd, synergrid
+from energie_vlaanderen.cli import audit, db, gebruikers, ingest, paths_cmd, synergrid
 from energie_vlaanderen.cli.args import add_json_flag, add_version_arg
 from energie_vlaanderen.cli.helpers import positive_integer
 
@@ -154,9 +154,13 @@ def _add_staging_group(subparsers: argparse._SubParsersAction) -> None:
     )
     refine_parser.add_argument(
         "--browser",
-        default="chrome",
+        default="firefox",
         choices=("chrome", "firefox"),
-        help="Browser voor Selenium (standaard: chrome).",
+        help=(
+            "Browser voor Selenium (standaard: firefox — headless chrome "
+            "laadt de resultatenlijst van vtest.be voor segment onderneming "
+            "structureel niet volledig in, zie html_downloader.py)."
+        ),
     )
     refine_parser.add_argument(
         "--show",
@@ -210,9 +214,12 @@ def _add_staging_group(subparsers: argparse._SubParsersAction) -> None:
     )
     calibrate_parser.add_argument(
         "--browser",
-        default="chrome",
+        default="firefox",
         choices=("chrome", "firefox"),
-        help="Browser voor Selenium (standaard: chrome).",
+        help=(
+            "Browser voor Selenium (standaard: firefox — zie de toelichting "
+            "bij 'refine --browser')."
+        ),
     )
     calibrate_parser.add_argument(
         "--show",
@@ -373,6 +380,32 @@ def _add_audit_group(subparsers: argparse._SubParsersAction) -> None:
     add_json_flag(heffingen_parser)
     heffingen_parser.set_defaults(handler=audit.run_audit_heffingen)
 
+    hardware_parser = actions.add_parser(
+        "hardware",
+        help=(
+            "Controleer de batterij-/omvormermasterdata in config/hardware/ "
+            "op plausibele waarden en ongeverifieerde cijfers."
+        ),
+    )
+    hardware_parser.add_argument(
+        "--streng",
+        action="store_true",
+        help="Behandel waarschuwingen als fouten (voor CI).",
+    )
+    add_json_flag(hardware_parser)
+    hardware_parser.set_defaults(handler=audit.run_audit_hardware)
+    hardware_parser.add_argument(
+        "--c10-26",
+        dest="c10_26",
+        action="store_true",
+        help=(
+            "Leg de masterdata ook naast de Synergrid C10/26-lijst: is het "
+            "toestel gehomologeerd voor een Belgisch distributienet, en kloppen "
+            "vermogen en aantal fasen? Vereist het werkboek in "
+            "data/datasheets/ (of ENERGIEVERGELIJKER_C1026_PAD)."
+        ),
+    )
+
 
 def _add_version_group(subparsers: argparse._SubParsersAction) -> None:
     version_parser = subparsers.add_parser(
@@ -469,6 +502,85 @@ def _add_db_group(subparsers: argparse._SubParsersAction) -> None:
     status_parser.set_defaults(handler=db.run_db_status)
 
 
+def _add_gebruiker_group(subparsers: argparse._SubParsersAction) -> None:
+    gebruiker_parser = subparsers.add_parser(
+        "gebruiker",
+        help="Lees, controleer en bereken een gebruikersdossier.",
+    )
+    actions = gebruiker_parser.add_subparsers(dest="action", required=True)
+
+    def _gedeeld(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--toml",
+            help=(
+                "Pad naar het gebruikersprofiel. Standaard gebruiker.toml in de "
+                "projectroot."
+            ),
+        )
+        add_json_flag(parser)
+
+    toon_parser = actions.add_parser(
+        "toon",
+        help="Toon het gebruikersdossier zoals het ingelezen wordt.",
+    )
+    _gedeeld(toon_parser)
+    toon_parser.set_defaults(handler=gebruikers.run_gebruiker_toon)
+
+    controleer_parser = actions.add_parser(
+        "controleer",
+        help=(
+            "Toets het dossier structureel. Exitcode 2 zodra er een fout in zit; "
+            "niet-geverifieerde aannames zijn waarschuwingen."
+        ),
+    )
+    _gedeeld(controleer_parser)
+    controleer_parser.add_argument(
+        "--hardware",
+        action="store_true",
+        help=(
+            "Controleer ook of het gekozen batterij-/omvormermodel in "
+            "config/hardware/ bestaat."
+        ),
+    )
+    controleer_parser.set_defaults(handler=gebruikers.run_gebruiker_controleer)
+
+    bereken_parser = actions.add_parser(
+        "bereken",
+        help=(
+            "Reken de kost over een periode, opgesplitst bij elke contract-, "
+            "tariefkaart-, heffingen- en jaargrens."
+        ),
+    )
+    _gedeeld(bereken_parser)
+    bereken_parser.add_argument(
+        "--van",
+        required=True,
+        type=gebruikers.datum,
+        help="Begin van de periode (JJJJ-MM-DD), inclusief.",
+    )
+    bereken_parser.add_argument(
+        "--tot",
+        required=True,
+        type=gebruikers.datum,
+        help="Einde van de periode (JJJJ-MM-DD), exclusief.",
+    )
+    bereken_parser.add_argument(
+        "--version",
+        help="Dataversie om mee te rekenen. Standaard de actieve versie.",
+    )
+    bereken_parser.add_argument(
+        "--geen-metingen",
+        dest="geen_metingen",
+        action="store_true",
+        help=(
+            "Negeer het meetbestand uit [verbruik].fluvius_csv en verdeel het "
+            "jaarverbruik pro rata over de deelperiodes. Handig om te zien wat "
+            "de meetdata aan het resultaat verandert."
+        ),
+    )
+    bereken_parser.set_defaults(handler=gebruikers.run_gebruiker_bereken)
+
+
 def _add_paths_command(subparsers: argparse._SubParsersAction) -> None:
     paths_parser = subparsers.add_parser(
         "paths",
@@ -488,4 +600,5 @@ def add_all(subparsers: argparse._SubParsersAction) -> None:
     _add_audit_group(subparsers)
     _add_version_group(subparsers)
     _add_db_group(subparsers)
+    _add_gebruiker_group(subparsers)
     _add_paths_command(subparsers)

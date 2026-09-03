@@ -370,3 +370,102 @@ def run_audit_heffingen(args: argparse.Namespace, settings: Settings) -> int:
     if waarschuwingen and args.streng:
         return 2
     return 0
+
+
+# ---------------------------------------------------------
+# audit-hardware
+# ---------------------------------------------------------
+
+def run_audit_hardware(args: argparse.Namespace, settings: Settings) -> int:
+    """Controleer config/hardware/ (batterijen/omvormers) zonder netwerk.
+
+    Zelfde vorm als `run_audit_heffingen`: de masterdata is handgeschreven
+    (er bestaat geen scrapebare bron voor batterij-/omvormerspecificaties,
+    zie docs/research/technische_data_batterijen_en_omvormers.md), dus een
+    typfout in een vermogen of percentage komt er anders pas uit wanneer een
+    simulatie een vreemd resultaat geeft.
+    """
+    from energie_vlaanderen.hardware.repository import (
+        BatterijRepository,
+        HardwareError,
+        OmvormerRepository,
+    )
+    from energie_vlaanderen.hardware.validation import controleer_alles
+
+    batterijen_dir = settings.project_root / "config" / "hardware" / "batterijen"
+    omvormers_dir = settings.project_root / "config" / "hardware" / "omvormers"
+
+    try:
+        batterij_repo = BatterijRepository.load(batterijen_dir)
+        omvormer_repo = OmvormerRepository.load(omvormers_dir)
+    except HardwareError as exc:
+        return fail("Hardware-masterdata kon niet geladen worden: %s", exc)
+
+    bevindingen = controleer_alles(batterij_repo, omvormer_repo)
+
+    # De C10/26-lijst is de enige onafhankelijke bron op deze masterdata: alles
+    # eromheen komt uit fabrikantsdatasheets. Ze is optioneel omdat het werkboek
+    # buiten git valt (zie data/datasheets/LEESMIJ.md) — zonder het bestand
+    # blijft de structurele controle gewoon werken.
+    lijst_bron = None
+    if getattr(args, "c10_26", False):
+        from energie_vlaanderen.hardware.homologatie import (
+            C1026Lijst,
+            HomologatieError,
+            controleer_hardware,
+        )
+
+        try:
+            lijst = C1026Lijst.standaard(settings.project_root)
+        except HomologatieError as exc:
+            return fail("C10/26-lijst kon niet geladen worden: %s", exc)
+        lijst_bron = lijst.bron
+        bevindingen.extend(
+            controleer_hardware(
+                lijst,
+                batterij_repo.batterijen().values(),
+                omvormer_repo.omvormers().values(),
+            )
+        )
+
+    fouten = [b for b in bevindingen if b.ernst == "fout"]
+    waarschuwingen = [b for b in bevindingen if b.ernst == "waarschuwing"]
+
+    def _text() -> None:
+        print(f"Batterijen : {batterijen_dir}")
+        if lijst_bron is not None:
+            print(f"C10/26     : {lijst_bron}")
+        print(f"Omvormers  : {omvormers_dir}")
+        print(f"Modellen   : {', '.join(sorted(f'{m}/{mo}' for m, mo in batterij_repo.batterijen())) or '(geen)'}")
+        for bevinding in bevindingen:
+            merk = {"fout": "FOUT", "waarschuwing": "LET OP", "info": "info"}[
+                bevinding.ernst
+            ]
+            print(f"[{merk:6s}] {bevinding.onderwerp}: {bevinding.bericht}")
+        if not bevindingen:
+            print("Geen bevindingen.")
+
+    emit(
+        args,
+        text_fn=_text,
+        json_obj={
+            "batterijen_dir": str(batterijen_dir),
+            "omvormers_dir": str(omvormers_dir),
+            "batterijmodellen": sorted(f"{m}/{mo}" for m, mo in batterij_repo.batterijen()),
+            "omvormermodellen": sorted(f"{m}/{mo}" for m, mo in omvormer_repo.omvormers()),
+            "bevindingen": [
+                {
+                    "ernst": b.ernst,
+                    "onderwerp": b.onderwerp,
+                    "bericht": b.bericht,
+                }
+                for b in bevindingen
+            ],
+        },
+    )
+
+    if fouten:
+        return 2
+    if waarschuwingen and args.streng:
+        return 2
+    return 0

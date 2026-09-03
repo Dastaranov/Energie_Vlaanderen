@@ -62,6 +62,30 @@ bron = "vtest.be (kalibratie 2026-08-31) + programmawet 19/03/2023 en 2026"
 # Regime sinds de hervorming van 01/07/2023: schijf 1 (0-3 MWh) en schijf 2
 # (3-20 MWh) kregen toen hetzelfde tarief, waardoor de heffing in het hele
 # huishoudelijke bereik vlak is.
+#
+# DE BIJDRAGE OP DE ENERGIE STOND HIER OP NUL, EN DAT WAS FOUT.
+#
+# Artikel 39 van de programmawet van 25/12/2021 (B.S. 31/12/2021) zet voor
+# niet-zakelijk gebruik in élke verbruiksschijf "bijdrage op de energie:
+# 1,9261 euro per MWh" — zie `docs/research/tarief bijzonder accijns.md`, dat
+# de wettekst letterlijk bevat. Dezelfde 1,9261 die deze masterdata wél voor
+# `zakelijk_laagspanning` draagt.
+#
+# Een echte eindafrekening bevestigt het: ENGIE, factuurdatum 2026-05-27,
+# verbruiksperiode 28/05/2025-27/05/2026, rekent een huishouden "Bijdrage op
+# de energie" aan van 4,09 EUR op 2.124 kWh en 9,04 EUR op 4.693 kWh — beide
+# 1,9261 EUR/MWh — als een regel *naast* de bijzondere accijns van 47,4811.
+# Ze zijn dus niet geïntegreerd maar additief; samen 49,4072 EUR/MWh. Zie
+# `tests/fixturen/facturen/engie_easy_vast_2025_2026.toml`.
+#
+# Waarom het gemist werd: vtest.be toont deze post voor huishoudens niet. In
+# het kalibratierapport van 2026-08-31 bestaat alleen "Heffingen | Bijzondere
+# accijns", en de fit sloot op 0,00 EUR residu — de vergelijkingstool laat de
+# bijdrage gewoon weg. Op 6.817 kWh scheelt dat 13,13 EUR per jaar.
+#
+# Dit is de ene plaats waar vtest.be *niet* leidend is: een wettekst en een
+# betaalde factuur die elkaar bevestigen wegen zwaarder dan een
+# vergelijkingstool die een post niet toont.
 
 [[schijf]]
 klantcategorie = "niet_zakelijk"
@@ -69,21 +93,27 @@ van_mwh = "0"
 tot_mwh = ""
 accijns_eur_mwh = "0"
 bijzondere_accijns_eur_mwh = "47.4811"
-energiebijdrage_eur_mwh = "0"
+energiebijdrage_eur_mwh = "1.9261"
 geldig_vanaf = "2023-07-01"
-geverifieerd = false
-bron = "Mega/Luminus tariefoverzichten hervorming 2023 (secundaire bron)"
+geverifieerd = true
+bron = "Programmawet 25/12/2021 art. 39 (B.S. 31/12/2021) voor de bijdrage op de energie, bevestigd door de ENGIE-eindafrekening van 2026-05-27; bijzondere accijns uit de Mega/Luminus tariefoverzichten hervorming 2023"
 
+# Voor het regime vanaf 01/08/2026 is er nog geen factuur die de bijdrage op
+# de energie toont — deze afrekening loopt tot 30/04/2026. De 1,9261 staat er
+# op grond van continuïteit: de hervorming van 01/08/2026 wijzigde de
+# bijzondere accijns (47,4811 -> 46,00) en zegt niets over de bijdrage op de
+# energie, die uit een andere wet komt. `geverifieerd = false` houdt dat
+# zichtbaar tot een afrekening van ná 01/08/2026 het bevestigt.
 [[schijf]]
 klantcategorie = "niet_zakelijk"
 van_mwh = "0"
 tot_mwh = ""
 accijns_eur_mwh = "0"
 bijzondere_accijns_eur_mwh = "46.0000"
-energiebijdrage_eur_mwh = "0"
+energiebijdrage_eur_mwh = "1.9261"
 geldig_vanaf = "2026-08-01"
-geverifieerd = true
-bron = "vtest.be kalibratie 2026-08-31, postcode 9120, 7 verbruikspunten, residu 0,00 EUR"
+geverifieerd = false
+bron = "bijzondere accijns: vtest.be kalibratie 2026-08-31, postcode 9120, 7 verbruikspunten, residu 0,00 EUR; bijdrage op de energie: continuïteit met het regime van 2023-07-01, nog niet tegen een factuur gelegd"
 
 # --- Zakelijk gebruik, aansluiting <= 1 kV (laagspanning) ---
 #

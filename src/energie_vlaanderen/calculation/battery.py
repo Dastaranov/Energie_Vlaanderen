@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from energie_vlaanderen.hardware.models import BatterijSpec
+
 """
 Module voor het definiëren van de Battery-dataclass en gerelateerde berekeningen.
 """
@@ -81,6 +83,49 @@ class Battery:
     def __post_init__(self) -> None:
         """Legt de nieuwstaat vast als eerste regel van de geschiedenis."""
         self.geschiedenis.append(self._snapshot(actie="Aangemaakt"))
+
+    @classmethod
+    def from_masterdata(
+        cls,
+        spec: BatterijSpec,
+        *,
+        state_of_charge: float = 100.0,
+        state_of_health: float = 100.0,
+    ) -> "Battery":
+        """Bouwt een `Battery` uit een geladen `BatterijSpec` (zie
+        `hardware.repository.BatterijRepository`) in plaats van de
+        nameplate-kwargs rechtstreeks in Python te hardcoden.
+
+        `state_of_charge`/`state_of_health` horen niet in een nameplate-spec
+        thuis — dat is de runtime-toestand van één concreet exemplaar, geen
+        vaste fabrieksspecificatie — en blijven daarom expliciete
+        keyword-argumenten met een nieuwstaat-default (100%/100%).
+        """
+        return cls(
+            synergrid_id=spec.synergrid_id,
+            merknaam=spec.merk,
+            productnaam=spec.model,
+            power_control_system=spec.power_control_system,
+            P_active_power=spec.p_active_power_w,
+            Smax_apparent_power=spec.smax_apparent_power_w,
+            num_phase=spec.num_phase,
+            max_charge_w=spec.max_charge_w,
+            max_discharge_w=spec.max_discharge_w,
+            max_capacity=spec.max_capacity_kwh,
+            minimum_capacity=spec.minimum_capacity_pct,
+            standby_power_w=spec.standby_power_w,
+            round_trip_efficiency=spec.round_trip_efficiency_pct,
+            rte_ac_dc=spec.rte_ac_dc_pct,
+            rte_dc_ac=spec.rte_dc_ac_pct,
+            rte_storage=spec.rte_storage_pct,
+            ramp_up_time=spec.ramp_up_time_s,
+            max_cycle=spec.max_cycle,
+            max_depth_of_discharge=spec.max_depth_of_discharge_pct,
+            state_of_charge=state_of_charge,
+            state_of_health=state_of_health,
+            c_rate=spec.c_rate,
+            eol_criteria=spec.eol_criteria_pct,
+        )
 
     def __setattr__(self, naam: str, waarde) -> None:
         """

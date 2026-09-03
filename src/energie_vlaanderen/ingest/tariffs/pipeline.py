@@ -46,9 +46,12 @@ class TariffPipeline:
         version_id: str,
         energy_type: str = "electricity",
         overwrite: bool = False,
+        tarief_jaar: int | None = None,
     ) -> TariffPipelineResult:
         parsed = self.workbook_parser.parse(source_path, energy_type=energy_type)
-        normalized = self.normalizer.normalize(parsed.afname, parsed.injectie)
+        normalized = self.normalizer.normalize(
+            parsed.afname, parsed.injectie, parsed.kolomkaarten()
+        )
         validation = self.validator.validate(normalized.afname, normalized.injectie)
 
         if normalized.errors or not validation.valid:
@@ -90,6 +93,11 @@ class TariffPipeline:
             report = {
                 "version_id": version_id,
                 "energy_type": energy_type,
+                # Het jaar waarvoor deze tarieven gelden, uit de oorspronkelijke
+                # bestandsnaam van het werkboek. Zonder dit veld leidt de
+                # databankimport het jaar af uit het versie-id, en dat is het
+                # moment van downloaden — niet het tariefjaar.
+                "tarief_jaar": tarief_jaar,
                 "processed_at": datetime.now(timezone.utc).isoformat(),
                 "afname_rows": len(afname_out),
                 "injectie_rows": len(injectie_out),

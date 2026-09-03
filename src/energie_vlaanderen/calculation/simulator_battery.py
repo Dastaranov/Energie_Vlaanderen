@@ -1,72 +1,76 @@
-import pandas as pd
 from energie_vlaanderen.calculation.battery import Battery
+from energie_vlaanderen.gebruikers.models import AssetType, GebruikersError
+from energie_vlaanderen.gebruikers.toml_io import lees_dossier
+from energie_vlaanderen.hardware.repository import BatterijRepository, HardwareError
+from energie_vlaanderen.settings import Settings
 
 
 def start_simulator():
     print("--- Batterij Simulator Gestart ---")
-    
-    # 1. Maak de batterij aan met realistische gegevens
-    # We gebruiken als voorbeeld de Marstek Venus specificaties
-    mijn_batterij = Battery(
-        synergrid_id="SG-123456",
-        merknaam="Marstek",
-        productnaam="Venus 5.12",
-        power_control_system="Hybride",
-        P_active_power=5.0,
-        Smax_apparent_power=5.0,
-        num_phase=1,
-        
-        # Technische info
-        max_charge_w=2500.0,       # 2.5 kW maximaal laadvermogen
-        max_discharge_w=2500.0,    # 2.5 kW maximaal ontlaadvermogen
-        max_capacity=5.12,         # 5.12 kWh nominale capaciteit
-        minimum_capacity=10.0,     # BMS buffer van 10%
-        standby_power_w=15.0,      # 15 Watt sluimerverbruik
-        
-        # Rendement (RTE)
-        round_trip_efficiency=95.0,
-        rte_ac_dc=98.0,
-        rte_dc_ac=98.0,
-        rte_storage=99.0,
-        
-        ramp_up_time=0.5,
-        
-        # Levensduur & Status
-        max_cycle=6000,
-        max_depth_of_discharge=90.0,
-        state_of_charge=100.0,     # We starten met een volle batterij
-        state_of_health=100.0,
-        c_rate=0.5,
-        eol_criteria=80.0
-    )
+
+    # 1. Batterij bouwen uit masterdata, niet uit hardcoded kwargs.
+    #
+    # Welk model dat is, staat in gebruiker.toml (`[aansluiting.batterij]`),
+    # niet in dit script — zo hangt de gekozen batterij niet vast aan de
+    # broncode, en levert een tweede simulatie (ander model) geen Python-
+    # wijziging meer op, enkel een andere regel in gebruiker.toml.
+    settings = Settings.load()
+    try:
+        dossier = lees_dossier(
+            settings.project_root / "gebruiker.toml",
+            project_root=settings.project_root,
+        )
+    except GebruikersError as exc:
+        print(f"Kon gebruikersprofiel niet lezen: {exc}")
+        return
+
+    batterijen = [a for a in dossier.assets if a.type is AssetType.BATTERIJ]
+    if not batterijen:
+        print(
+            "gebruiker.toml heeft geen batterij gekozen "
+            "([aansluiting.batterij] merk/model) — simulatie overgeslagen."
+        )
+        return
+    asset = batterijen[0]
+
+    try:
+        repo = BatterijRepository.load(
+            settings.project_root / "config" / "hardware" / "batterijen"
+        )
+        spec = repo.batterij(asset.merk, asset.model)
+    except HardwareError as exc:
+        print(f"Kon batterijmasterdata niet laden: {exc}")
+        return
+
+    mijn_batterij = Battery.from_masterdata(spec)
 
     print(f"\nBatterij geïnitialiseerd: {mijn_batterij.merknaam} {mijn_batterij.productnaam}"
-          f" met een capaciteit van {mijn_batterij.max_capacity} kWh en een maximale levensduur van {mijn_batterij.max_cycle} cycli.")  
+          f" met een capaciteit van {mijn_batterij.max_capacity} kWh en een maximale levensduur van {mijn_batterij.max_cycle} cycli.")
 
     # =====================================================================
     # SIMULATIE DEEL 1: Jarenlange slijtage (Levensduur zonder compromissen)
     # =====================================================================
     print("\n--- Deel 1: Levensduur Simulatie (eerste en laatste cycli) ---")
-    
+
     # Simuleer 6000 cycli en sla het op in een DataFrame
     levensduur_df = mijn_batterij.simuleer_bruikbare_capaciteit(aantal_cycli_te_simuleren=6000)
-    
+
     # Print de eerste 2 en de laatste 2 resultaten om te zien hoe de capaciteit daalt
-    print(levensduur_df.head(2))
+    print(levensduur_df.head(5))
     print("...")
-    print(levensduur_df.tail(2))
+    print(levensduur_df.tail(5))
 
 
     # =====================================================================
     # SIMULATIE DEEL 2: Een dag uit het leven van de batterij (Real-time)
     # =====================================================================
     print("\n--- Deel 2: Real-time Dagelijkse Cyclus ---")
-    
+
     # Eerst wissen we de geschiedenis, zodat we een schone lei hebben voor deze testrun
     mijn_batterij.wis_geschiedenis()
-    
+
     # We starten de ochtend met een batterij die leeg is tot aan de veilige BMS grens (10%)
-    mijn_batterij.state_of_charge = 10.0 
+    mijn_batterij.state_of_charge = 10.0
 
     # Gebeurtenis 1: Zonnepanelen geven veel stroom (Laden)
     # We laden met 2000 Watt gedurende 2 uur (7200 seconden)
@@ -86,10 +90,10 @@ def start_simulator():
     # RESULTAAT: De automatische geschiedenis bekijken
     # =====================================================================
     print("\n--- Logboek van de dynamische gebeurtenissen ---")
-    
+
     # Haal de geschiedenis op via de ingebouwde Pandas functie
     logboek_df = mijn_batterij.geschiedenis_als_dataframe()
-    
+
     # Toon alle geregistreerde wijzigingen in de status van de batterij
     print(logboek_df[['stap', 'actie', 'state_of_charge']])
 

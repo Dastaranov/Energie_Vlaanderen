@@ -407,68 +407,254 @@ marktcurve = sa.Table(
 )
 
 # ---------------------------------------------------------------------------
-# Groep 6 — Toekomstige tabellen (scaffold, leeg)
+# Groep 6 — Gebruikersbasis
 # ---------------------------------------------------------------------------
+#
+# Deze groep verving in migratie 0017 een leeg scaffold (`gebruiker`,
+# `meterinterval`, `simulatie`) dat sinds 0001 bestond maar door geen enkele
+# importer aangeraakt werd. Het oude `gebruiker` was één platte spiegel van
+# `domain.Profile`: één metertype, één contract als drie tekstkolommen, geen
+# EAN en geen tweede energiedrager. Wat daar niet in paste:
+#
+# - Een EAN identificeert één toegangspunt voor één energiedrager. Elektriciteit
+#   en gas zijn aparte EAN's, dus aparte rijen in `aansluitingspunt`. Injectie is
+#   géén aparte EAN maar een aparte registerlezing.
+# - Een leveringscontract heeft een geldigheidsperiode, en er zijn er meerdere na
+#   elkaar. Drie kolommen op de gebruiker kunnen dat niet dragen.
+# - Persoonsgegevens horen apart van rekenkundige gegevens (Manifest §4.3/§5.1),
+#   omdat login en API het doel zijn en achteraf scheiden veel duurder is.
+#
+# Geldigheidsperiodes zijn half-open [geldig_van, geldig_tot); `geldig_tot IS
+# NULL` betekent "nog lopend". Half-open omdat contracten en tariefregimes op
+# dezelfde dag opvolgen — een inclusieve einddatum zou die dag dubbel tellen.
 
 gebruiker = sa.Table(
     "gebruiker",
     metadata,
-    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
-    sa.Column("naam", sa.Text, nullable=True),
-    sa.Column("postcode", sa.String(10), sa.ForeignKey("gemeente.postcode"), nullable=True),
+    # UUID en geen autoincrement: het id verlaat straks dit systeem (API, export)
+    # en mag dan niet verraden hoeveel gebruikers er zijn of wie eerder kwam.
+    sa.Column("id", sa.Uuid, primary_key=True),
     sa.Column("segment", sa.Text, nullable=False, server_default="Woning"),
-    sa.Column("meter_type", sa.Text, nullable=False, server_default="digitaal"),
-    sa.Column("zonnepanelen", sa.Boolean, nullable=False, server_default="false"),
-    sa.Column("omvormer_kva", sa.Numeric(6, 2), nullable=True),
-    sa.Column("afname_dag_kwh", sa.Numeric(10, 2), server_default="0"),
-    sa.Column("afname_nacht_kwh", sa.Numeric(10, 2), server_default="0"),
-    sa.Column("injectie_dag_kwh", sa.Numeric(10, 2), server_default="0"),
-    sa.Column("injectie_nacht_kwh", sa.Numeric(10, 2), server_default="0"),
-    # Numeric(7, 3), niet (6, 2): de vtest-standaardpiek is 4,218 kW en zou op
-    # twee decimalen stil 4,22 worden. Drie decimalen is ook wat een digitale
-    # meter zelf rapporteert.
-    sa.Column("geschatte_maandpiek_kw", sa.Numeric(7, 3), server_default="4.218"),
-    # De wettelijke ondergrens van het capaciteitstarief, apart van de
-    # schatting hierboven. Zolang ze één kolom deelden, rekende elk profiel
-    # zonder eigen meetdata op de bodem.
-    sa.Column("minimum_maandpiek_kw", sa.Numeric(7, 3), server_default="2.5"),
-    sa.Column("huidig_leverancier", sa.Text, nullable=True),
-    sa.Column("huidig_product", sa.Text, nullable=True),
-    sa.Column("contract_startdatum", sa.Date, nullable=True),
+    sa.Column("land", sa.String(2), nullable=False, server_default="BE"),
+    sa.Column("toestemming_referentie", sa.Text, nullable=True),
     sa.Column("aangemaakt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
     sa.Column("bijgewerkt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
+)
+
+# Apart van `gebruiker`, niet als extra kolommen erop: zo kan een rapport of een
+# API-antwoord over verbruik en kosten gebouwd worden zonder deze tabel ooit aan
+# te raken, en is "verwijder mijn persoonsgegevens" één DELETE.
+gebruiker_persoonsgegeven = sa.Table(
+    "gebruiker_persoonsgegeven",
+    metadata,
+    sa.Column("gebruiker_id", sa.Uuid, sa.ForeignKey("gebruiker.id", ondelete="CASCADE"), primary_key=True),
+    sa.Column("naam", sa.Text, nullable=False, server_default=""),
+    sa.Column("email", sa.Text, nullable=False, server_default=""),
+    sa.Column("straat", sa.Text, nullable=False, server_default=""),
+    sa.Column("huisnummer", sa.Text, nullable=False, server_default=""),
+    sa.Column("postcode", sa.String(10), nullable=False, server_default=""),
+    sa.Column("gemeente", sa.Text, nullable=False, server_default=""),
+    sa.Column("bijgewerkt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
+)
+
+aansluitingspunt = sa.Table(
+    "aansluitingspunt",
+    metadata,
+    sa.Column("id", sa.Uuid, primary_key=True),
+    sa.Column("gebruiker_id", sa.Uuid, sa.ForeignKey("gebruiker.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("energie_type", sa.Text, nullable=False),
+    # Manifest §5.2: gevoelig. Nullable omdat veel gebruikers hun EAN niet kennen
+    # en de berekening hem niet nodig heeft — postcode volstaat voor
+    # tariefselectie. Uniek zodat hetzelfde toegangspunt niet twee keer
+    # geregistreerd raakt.
+    sa.Column("ean_code", sa.String(18), nullable=True, unique=True),
+    sa.Column("postcode", sa.String(10), sa.ForeignKey("gemeente.postcode"), nullable=False),
+    sa.Column("gemeente_naam", sa.Text, nullable=False, server_default=""),
+    sa.Column("netbeheerder_code", sa.String(40), sa.ForeignKey("netbeheerder.code"), nullable=True),
+    sa.Column("spanningsniveau", sa.Text, nullable=False, server_default="laag"),
+    # Het fysieke aansluitingsvermogen — niet te verwarren met de AC-limiet van
+    # de omvormer (`installatie_asset.omvormer_kva`) of met de maandpiek van het
+    # capaciteitstarief (`meter`). Drie verschillende getallen.
+    sa.Column("aansluitingsvermogen_kva", sa.Numeric(9, 3), nullable=True),
+    sa.Column("aantal_fasen", sa.SmallInteger, nullable=True),
+    sa.Column("geldig_van", sa.Date, nullable=True),
+    sa.Column("geldig_tot", sa.Date, nullable=True),
+    sa.Column("aangemaakt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
+    sa.Index("ix_aansluitingspunt_gebruiker", "gebruiker_id", "energie_type"),
+)
+
+meter = sa.Table(
+    "meter",
+    metadata,
+    sa.Column("id", sa.Uuid, primary_key=True),
+    sa.Column("aansluitingspunt_id", sa.Uuid, sa.ForeignKey("aansluitingspunt.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("meterregime", sa.Text, nullable=False, server_default="digitaal"),
+    # Apart van het meterregime: een digitale meter kan enkelvoudig of tweevoudig
+    # geregistreerd zijn, en 'exclusief nacht' is een derde register met een
+    # eigen nettarief.
+    sa.Column("registerschema", sa.Text, nullable=False, server_default="enkelvoudig"),
+    # Alleen een klassieke terugdraaiende meter mét PV valt onder het
+    # prosumententarief; een digitale meter met PV niet. Dat verschil loopt in de
+    # honderden euro's per jaar, dus het is een eigen kolom en geen afleiding.
+    sa.Column("terugdraaiend", sa.Boolean, nullable=False, server_default="false"),
+    # Numeric(7, 3), niet (6, 2): de vtest-standaardpiek is 4,218 kW en zou op
+    # twee decimalen stil 4,22 worden. Deze twee stonden in migratie 0015 op
+    # `gebruiker`; ze horen bij de meter, want de ondergrens van 2,5 kW hangt aan
+    # het meetregime en niet aan hoeveel er verbruikt is.
+    sa.Column("geschatte_maandpiek_kw", sa.Numeric(7, 3), nullable=False, server_default="4.218"),
+    sa.Column("minimum_maandpiek_kw", sa.Numeric(7, 3), nullable=False, server_default="2.5"),
+    sa.Column("geldig_van", sa.Date, nullable=True),
+    sa.Column("geldig_tot", sa.Date, nullable=True),
+    sa.Index("ix_meter_aansluitingspunt", "aansluitingspunt_id"),
+)
+
+installatie_asset = sa.Table(
+    "installatie_asset",
+    metadata,
+    sa.Column("id", sa.Uuid, primary_key=True),
+    sa.Column("aansluitingspunt_id", sa.Uuid, sa.ForeignKey("aansluitingspunt.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("type", sa.Text, nullable=False),
+    # merk/model sluiten aan op de sleutel (merk, model) van
+    # hardware.BatterijRepository en hardware.OmvormerRepository, zodat een asset
+    # naar een nameplate-specificatie mét bronvermelding wijst.
+    sa.Column("merk", sa.Text, nullable=False, server_default=""),
+    sa.Column("model", sa.Text, nullable=False, server_default=""),
+    sa.Column("kwp", sa.Numeric(9, 3), nullable=True),
+    sa.Column("omvormer_merk", sa.Text, nullable=False, server_default=""),
+    sa.Column("omvormer_model", sa.Text, nullable=False, server_default=""),
+    sa.Column("omvormer_kva", sa.Numeric(9, 3), nullable=True),
+    # AC- of DC-gekoppeld bepaalt of PV de batterij kan laden zonder de meter te
+    # passeren — een modeldimensie, geen detail.
+    sa.Column("topologie", sa.Text, nullable=True),
+    sa.Column("geldig_van", sa.Date, nullable=True),
+    sa.Column("geldig_tot", sa.Date, nullable=True),
+    sa.Index("ix_installatie_asset_aansluitingspunt", "aansluitingspunt_id", "type"),
+)
+
+leveringscontract = sa.Table(
+    "leveringscontract",
+    metadata,
+    sa.Column("id", sa.Uuid, primary_key=True),
+    sa.Column("aansluitingspunt_id", sa.Uuid, sa.ForeignKey("aansluitingspunt.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("leverancier", sa.Text, nullable=False),
+    sa.Column("product", sa.Text, nullable=False, server_default=""),
+    sa.Column("vreg_id", sa.Text, nullable=True),
+    # "vast" | "variabel" | "dynamisch" | "tou". Niet te verwarren met
+    # `netbeheerder_tarief.contract_richting`, dat "Afname"/"Injectie" bevat.
+    sa.Column("contracttype", sa.Text, nullable=False),
+    sa.Column("geldig_van", sa.Date, nullable=False),
+    sa.Column("geldig_tot", sa.Date, nullable=True),
+    # De kern van een correcte historische kost: een vast contract volgt de
+    # actuele tariefkaart niet, de prijs bevriest bij ondertekening. Zonder deze
+    # datum koppelt een terugblik het contract aan de tariefrij van vandaag.
+    sa.Column("tariefkaart_geldig_van", sa.Date, nullable=True),
+    sa.Column("bron", sa.Text, nullable=False, server_default=""),
+    sa.Index("ix_leveringscontract_lookup", "aansluitingspunt_id", "geldig_van", "geldig_tot"),
+)
+
+verbruiksopgave = sa.Table(
+    "verbruiksopgave",
+    metadata,
+    sa.Column("id", sa.Uuid, primary_key=True),
+    sa.Column("aansluitingspunt_id", sa.Uuid, sa.ForeignKey("aansluitingspunt.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("periode_van", sa.Date, nullable=False),
+    sa.Column("periode_tot", sa.Date, nullable=False),
+    sa.Column("afname_dag_kwh", sa.Numeric(12, 3), nullable=False, server_default="0"),
+    sa.Column("afname_nacht_kwh", sa.Numeric(12, 3), nullable=False, server_default="0"),
+    sa.Column("afname_exclusief_nacht_kwh", sa.Numeric(12, 3), nullable=False, server_default="0"),
+    sa.Column("injectie_dag_kwh", sa.Numeric(12, 3), nullable=False, server_default="0"),
+    sa.Column("injectie_nacht_kwh", sa.Numeric(12, 3), nullable=False, server_default="0"),
+    # "meting" | "factuur" | "manueel" | "schatting" — bepaalt mee de
+    # exactheidsklasse van elk bedrag dat hierop steunt.
+    sa.Column("bron", sa.Text, nullable=False, server_default="manueel"),
+    sa.Column("dekkingsgraad", sa.Numeric(5, 4), nullable=False, server_default="1"),
+    sa.Column("aannames", sa.JSON, nullable=False, server_default="[]"),
+    sa.UniqueConstraint(
+        "aansluitingspunt_id", "periode_van", "periode_tot", "bron",
+        name="uq_verbruiksopgave_periode",
+    ),
+)
+
+toestemming = sa.Table(
+    "toestemming",
+    metadata,
+    sa.Column("id", sa.Uuid, primary_key=True),
+    sa.Column("gebruiker_id", sa.Uuid, sa.ForeignKey("gebruiker.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("doel", sa.Text, nullable=False),
+    sa.Column("verleend_op", sa.Date, nullable=False),
+    sa.Column("ingetrokken_op", sa.Date, nullable=True),
+    sa.Column("bron", sa.Text, nullable=False, server_default=""),
+    sa.Index("ix_toestemming_gebruiker", "gebruiker_id", "doel"),
 )
 
 meterinterval = sa.Table(
     "meterinterval",
     metadata,
     sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
-    sa.Column("gebruiker_id", sa.Integer, sa.ForeignKey("gebruiker.id"), nullable=False),
+    # Hing aan `gebruiker_id`; een meting hoort bij een toegangspunt (EAN), niet
+    # bij een persoon. Een gebruiker met elektriciteit én gas had anders twee
+    # reeksen in dezelfde tabel zonder onderscheid.
+    sa.Column("aansluitingspunt_id", sa.Uuid, sa.ForeignKey("aansluitingspunt.id", ondelete="CASCADE"), nullable=False),
     sa.Column("tijdstip", sa.TIMESTAMP(timezone=True), nullable=False),
-    sa.Column("afname_kwh", sa.Numeric(8, 4), nullable=False, server_default="0"),
-    sa.Column("injectie_kwh", sa.Numeric(8, 4), nullable=False, server_default="0"),
+    sa.Column("afname_kwh", sa.Numeric(12, 4), nullable=False, server_default="0"),
+    sa.Column("injectie_kwh", sa.Numeric(12, 4), nullable=False, server_default="0"),
+    # Manifest §5.4 `quality_code`: NOT NULL DEFAULT '' en niet nullable, zodat de
+    # kolom in een ON CONFLICT-sleutel kan (NULL is in Postgres niet gelijk aan
+    # NULL — zelfde reden als netbeheerder_tarief.tariefnotering).
+    sa.Column("kwaliteitscode", sa.Text, nullable=False, server_default=""),
     sa.Column("bron_bestand", sa.Text, nullable=True),
     sa.Column("aangemaakt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
-    sa.UniqueConstraint("gebruiker_id", "tijdstip", name="uq_meterinterval_gebruiker_tijdstip"),
+    sa.UniqueConstraint("aansluitingspunt_id", "tijdstip", name="uq_meterinterval_punt_tijdstip"),
 )
 
 simulatie = sa.Table(
     "simulatie",
     metadata,
-    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
-    sa.Column("gebruiker_id", sa.Integer, sa.ForeignKey("gebruiker.id"), nullable=False),
+    sa.Column("id", sa.Uuid, primary_key=True),
+    sa.Column("gebruiker_id", sa.Uuid, sa.ForeignKey("gebruiker.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("aansluitingspunt_id", sa.Uuid, sa.ForeignKey("aansluitingspunt.id", ondelete="CASCADE"), nullable=True),
     sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=True),
     sa.Column("vreg_id", sa.Text, nullable=True),
     sa.Column("leverancier", sa.Text, nullable=True),
     sa.Column("product", sa.Text, nullable=True),
     sa.Column("periode_van", sa.Date, nullable=True),
     sa.Column("periode_tot", sa.Date, nullable=True),
-    sa.Column("supplier_eur", sa.Numeric(10, 2), nullable=False, server_default="0"),
-    sa.Column("grid_eur", sa.Numeric(10, 2), nullable=False, server_default="0"),
-    sa.Column("levies_eur", sa.Numeric(10, 2), nullable=False, server_default="0"),
-    sa.Column("injection_credit_eur", sa.Numeric(10, 2), nullable=False, server_default="0"),
-    sa.Column("vat_eur", sa.Numeric(10, 2), nullable=False, server_default="0"),
-    sa.Column("totaal_eur", sa.Numeric(10, 2), nullable=False, server_default="0"),
+    sa.Column("supplier_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("grid_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("levies_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("injection_credit_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("vat_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("totaal_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    # Manifest §5.8: zonder deze drie is een bedrag niet te beoordelen — was het
+    # gemeten, gereconstrueerd of geschat, waarop steunde het, en wat is er
+    # ingevuld dat de gebruiker niet aangeleverd heeft.
+    sa.Column("exactheidsklasse", sa.Text, nullable=False, server_default="geschat"),
+    sa.Column("bronversies", sa.JSON, nullable=False, server_default="{}"),
+    sa.Column("aannames", sa.JSON, nullable=False, server_default="[]"),
     sa.Column("warnings", sa.JSON, nullable=False, server_default="[]"),
     sa.Column("aangemaakt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
+)
+
+# Eén rij per deelperiode uit `gebruikers.periodes.snijd()`. Bestaat omdat een
+# jaartotaal niet uitlegt waarom het zo hoog is: een contractwissel op 01/08 en
+# een accijnswissel op diezelfde dag zijn twee verschillende oorzaken, en
+# `redenen` bewaart welke van beide deze knip veroorzaakte.
+simulatie_regel = sa.Table(
+    "simulatie_regel",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+    sa.Column("simulatie_id", sa.Uuid, sa.ForeignKey("simulatie.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("periode_van", sa.Date, nullable=False),
+    sa.Column("periode_tot", sa.Date, nullable=False),
+    sa.Column("leverancier", sa.Text, nullable=False, server_default=""),
+    sa.Column("product", sa.Text, nullable=False, server_default=""),
+    sa.Column("supplier_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("grid_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("levies_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("injection_credit_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("vat_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("totaal_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
+    sa.Column("exactheidsklasse", sa.Text, nullable=False, server_default="geschat"),
+    sa.Column("redenen", sa.JSON, nullable=False, server_default="[]"),
+    sa.Index("ix_simulatie_regel_simulatie", "simulatie_id", "periode_van"),
 )

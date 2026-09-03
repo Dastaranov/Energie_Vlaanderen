@@ -237,6 +237,23 @@ data/current.txt
 data/market/
 data/*.json
 
+# Persoonlijke referentiedocumenten: facturen, afrekeningen, meterexports.
+# Die dragen naam, adres, EAN en klantnummer — persoonsgegevens die volgens
+# docs/manifest.md §4.3 doelgebonden en minimaal verwerkt worden en zeker niet
+# in een repository horen. Alleen de toelichting wordt bijgehouden; de
+# documenten zelf blijven lokaal, en wat er als testmateriaal uit komt is een
+# geanonimiseerde fixture met enkel bedragen en tarieven.
+data/referentie/*
+!data/referentie/LEESMIJ.md
+
+# Datasheets en homologatielijsten: fabrikants-PDF's en het Synergrid
+# C10/26-werkboek. Samen tientallen MB binair, en de PDF's zijn
+# auteursrechtelijk beschermd materiaal van derden. Net als de rest van `data/`
+# blijven ze lokaal; wat eruit overgenomen wordt, staat met bronvermelding in
+# `config/hardware/*.toml`.
+data/datasheets/*
+!data/datasheets/LEESMIJ.md
+
 # Simulatie-uitvoer
 output/
 

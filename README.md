@@ -105,6 +105,32 @@ Verdeel stap 4 bij voorkeur over meerdere sessies met `--segment` en
 `--energy` in plaats van in één keer `--matrix` te draaien: de scrapetool
 werkt tegen een publieke website, geen API.
 
+### Verbruiksprofielen: een apart traject
+
+De stappen hierboven verwerken de vier VREG-bronnen (`vtest`, `tariffs`,
+`curves` en de live scrape). De Synergrid-verbruiksprofielen (SLP-EX, RLP0N,
+SPP) volgen een eigen download en een eigen `--only profielen`-run, met een
+eigen versie-id voor de Synergrid-bron zelf:
+
+```bash
+# a. Profielbestanden ophalen bij Synergrid — levert een eigen versie-id terug
+energievergelijker synergrid download --year 2026
+
+# b. Inlezen naar staging/<id>/profielen/
+energievergelijker staging parse --version <id> --only profielen \
+    --synergrid-version <synergrid-id> --jaar 2026
+
+# c. Rechtstreeks naar de databank
+energievergelijker db import --version <id>
+```
+
+Stap c gaat hier bewust via `db import` en niet via `version publish`: die
+laatste vereist nog altijd een `vtest/`-submap in de stagingmap, dus een
+versie die uitsluitend `--only profielen` verwerkt publiceert niet. Bevat
+`<id>` ook een vtest/tariffs/curves-run (dezelfde `--version` als hierboven,
+gewoon aangevuld met de profielenstap), dan werkt `version publish` gewoon en
+is deze losse `db import`-stap overbodig.
+
 ## Gebruik
 
 **Interactieve shell** — zonder argumenten start een dashboard en een prompt:
@@ -130,6 +156,41 @@ Energie_vlaanderen >> exit
 | `version` | `publish --version [--keep-staging] [--force] [--skip-db] [--db-overwrite]` |
 | `db` | `init`, `import --version [--overwrite] [--gemeente]`, `verify`, `status` |
 | `paths` | *(geen actie)* |
+
+Toelichting per groep:
+
+- **`source`** — haalt de vier VREG-werkboeken op (V-test, tarieven, curves)
+  van vlaamsenutsregulator.be en levert een versie-id terug; `list` toont
+  wat er voor een jaar beschikbaar staat zonder iets te downloaden.
+- **`raw`** — controleert of een gedownloade versie compleet en geldig is
+  (`verify`) en toont welke raw-versies lokaal staan (`status`).
+- **`staging`** — de eigenlijke verwerking, met drie afzonderlijke acties:
+  `parse` leest de ruwe werkboeken in tot CSV (`--only` kiest een deelverzameling: `vtest`, `tariffs`, `curves`, `profielen` of `all` —
+  `profielen` zit bewust niet in `all`, zie de sectie hieronder); `refine`
+  scrapet de live vergelijkingstool op vtest.be voor de echte productlijst en
+  kostenopbouw (`--matrix` doorloopt alle segment/energie/postcode-
+  combinaties, `--browser` is standaard Firefox); `calibrate` rekent de
+  heffingen- en nettariefstructuur terug uit diezelfde website.
+- **`synergrid`** — het downloadtraject voor de verbruiksprofielen
+  (SLP-EX/RLP0N/SPP), los van `source`/`raw` omdat het een ander ritme en
+  bestandsformaat heeft; zelfde vorm (`list`, `download`, `verify`,
+  `status`) als de `source`/`raw`-groepen hierboven.
+- **`market`** — synchroniseert de day-ahead marktprijzen (ENTSO-E, met
+  automatische terugval op energy-charts.info) naar de lokale cache.
+- **`audit`** — de controles vóór publicatie: `sanity` (plausibiliteit),
+  `golden` (cel-voor-cel tegen het bron-XLSX), `sample` (steekproef),
+  `status`/`approve` (goedkeuringsstatus zetten/tonen), `set-golden`
+  (nieuwe referentie vastleggen) en `heffingen` (structuur van
+  `config/heffingen/` toetsen, heeft geen `--version` nodig).
+- **`version`** — `publish` is de enige actie: kopieert een goedgekeurde
+  versie naar `versions/`, importeert ze in de databank en activeert ze,
+  als één samenhangende operatie (zie
+  [Dataversies en de databank](#dataversies-en-de-databank)).
+- **`db`** — databankbeheer: schema aanleggen (`init`), een versie
+  importeren (`import`), en controleren of bestanden en databank nog
+  overeenkomen (`verify`, `status`).
+- **`paths`** — toont de actieve databankpaden (raw/staging/versions/
+  current.txt), zonder subactie.
 
 `staging refine` haalt per contract, naast de metadata, ook de volledige
 kostenopbouw op zoals vtest.be die zelf berekent — inclusief de eigen
@@ -207,9 +268,12 @@ netbeheerder) sommeren tot 1 — zie `docs/manifest.md` §4.4. SPP is daarvan
 uitgezonderd: dat is productie per kWp geïnstalleerd vermogen, geen
 verdeling.
 
-`energievergelijker db import`/`version publish` nemen een `profielen/`-
-stagingmap automatisch mee naar de `verbruiksprofiel_waarde`-tabel; ontbreekt
-die map, dan wordt er gewoon niets geïmporteerd (geen fout).
+`energievergelijker db import` neemt een `profielen/`-stagingmap automatisch
+mee naar de `verbruiksprofiel_waarde`-tabel; ontbreekt die map, dan wordt er
+gewoon niets geïmporteerd (geen fout). `version publish` doet dat niet voor
+een versie die uitsluitend `--only profielen` verwerkt — zie
+[Verbruiksprofielen: een apart traject](#verbruiksprofielen-een-apart-traject)
+hierboven voor het volledige onderscheid.
 
 ## Testen
 

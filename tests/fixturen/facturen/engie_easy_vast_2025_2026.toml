@@ -1,0 +1,213 @@
+# Referentiefactuur: eindafrekening ENGIE, elektriciteit + aardgas.
+#
+# Geanonimiseerd. Naam, adres, EAN, klant- en meternummer staan hier bewust
+# niet in; het brondocument blijft lokaal in `data/referentie/` en valt buiten
+# git (zie `data/referentie/LEESMIJ.md`). Wat hier staat zijn uitsluitend
+# bedragen, tarieven en volumes.
+#
+# Dit is de eerste echte referentiecase van het project — ROADMAP fase 5 vraagt
+# er uiteindelijk tien. Ze bevestigt drie dingen en legt twee fouten bloot; die
+# staan bij de betrokken secties.
+
+[factuur]
+bron = "Eindafrekening ENGIE (Electrabel nv), factuurdatum 2026-05-27"
+soort = "afrekening"
+periode_van = "2025-05-28"
+periode_tot = "2026-05-27"
+leverancier = "ENGIE"
+juridische_entiteit = "Electrabel nv"
+netbeheerder = "Fluvius Midden-Vlaanderen"
+netbeheerder_code = "FMV"
+totaal_excl_btw = "584.42"
+btw = "40.08"
+totaal_incl_btw = "624.50"
+
+# --------------------------------------------------------------------------
+# Btw — het antwoord op de openstaande validatie uit docs/manifest.md §14
+# --------------------------------------------------------------------------
+#
+# De factuur splitst de btw-basis in drie, en dat beslecht de vraag hoe een
+# injectievergoeding behandeld wordt. Géén van de twee kandidaten uit
+# `docs/price_model_low_voltage.md` §9.1 en uit de rekenengine klopte:
+#
+#   - de engine deed `btw = (leverancier + net + heffingen - injectie) x 6%`,
+#     wat de btw-basis verlaagt;
+#   - het prijsmodel schreef `T - injectieprijs x kWh x 1,06`, wat het krediet
+#     zelf met btw verhoogt.
+#
+# De werkelijkheid: de injectievergoeding is **vrijgesteld van btw** en valt
+# volledig buiten de btw-basis. Ze wordt van het totaal afgetrokken zonder
+# btw-effect. Juiste vorm:
+#
+#   btw    = (leverancier + net + heffingen) x 6%
+#   totaal = leverancier + net + heffingen + btw - injectievergoeding
+#
+# Het bedrag van 71,20 in de vrijstellingsregel is exact de som van de vier
+# injectieregels hieronder.
+[btw]
+basis_6pct = "668.57"
+btw_6pct = "40.08"
+vrijgesteld_injectie = "-71.20"
+vrijgesteld_injectie_grond = "Beslissing ET 131.616/2 van 25-10-2019"
+vrijgesteld_art28 = "-12.95"
+vrijgesteld_art28_grond = "artikel 28 btw-wetboek"
+# Nog niet thuisgebracht: welke factuurregels samen die 12,95 vormen. Geen van
+# de zichtbare componenten telt tot dat bedrag. Uit te zoeken op de resterende
+# detailpagina's of bij de leverancier.
+art28_verklaard = false
+
+# --------------------------------------------------------------------------
+# Elektriciteit
+# --------------------------------------------------------------------------
+[elektriciteit]
+meterregime = "digitaal"
+registerschema = "tweevoudig"          # piekuren/daluren, plus injectieregisters
+gemeten_over_dagen = 310
+afname_piek_kwh = "2599"
+afname_dal_kwh = "4218"
+afname_totaal_kwh = "6817"
+injectie_piek_kwh = "2788"
+injectie_dal_kwh = "1003"
+injectie_totaal_kwh = "3791"
+
+# De werkelijk gemeten maandpiek waarop het capaciteitstarief rekent.
+#
+# Dit is het cijfer om te onthouden: 7,409 kW tegenover de 4,218 kW die dit
+# project als standaardschatting gebruikt (teruggerekend uit vtest.be). Deze
+# huishouding piekt 76% hoger dan de standaardwoning van de vergelijkingstool.
+# Een schatting is hier dus geen kleine onnauwkeurigheid maar het verschil
+# tussen 311 en 177 EUR capaciteitstarief.
+gemeten_maandpiek_kw = "7.409"
+capaciteitstarief_eur = "311.23"
+
+# Drie tariefkaartversies binnen één "vast" contract van één jaar. Precies wat
+# `Leveringscontract.tariefkaart_geldig_van` en `periodes.snijd()` modelleren:
+# een vast contract bevriest zijn prijs, maar bij hernieuwing begint een nieuwe
+# versie met eigen prijzen, en de factuur splitst de periode daarop.
+[[elektriciteit.tariefkaart]]
+versie = "2025-05-20"
+van = "2025-06-25"
+tot = "2025-10-27"
+dagen = 125
+vaste_vergoeding_eur = "22.29"          # 22,29 / 125 x 365 = 65,09 EUR/jaar
+prijs_piek_eur_kwh = "0.1663900"
+prijs_dal_eur_kwh = "0.1319400"
+injectie_eur_kwh = "0.0182400"
+
+[[elektriciteit.tariefkaart]]
+versie = "2025-10-28"
+van = "2025-10-28"
+tot = "2026-04-30"
+dagen = 185
+vaste_vergoeding_eur = "32.99"          # 32,99 / 185 x 365 = 65,09 EUR/jaar
+prijs_piek_eur_kwh = "0.1619300"
+prijs_dal_eur_kwh = "0.1300900"
+injectie_eur_kwh = "0.0195900"
+
+# De vaste vergoeding wordt pro rata per dag aangerekend, en beide versies
+# komen op dezelfde jaarwaarde uit. Dat bevestigt de aanpak in
+# `gebruikers/berekening.py::_leverancierskost`, die de vaste vergoeding uit
+# het periodebedrag haalt en naar dagen schaalt.
+[elektriciteit.controle]
+vaste_vergoeding_per_jaar_eur = "65.09"
+
+[elektriciteit.componenten]
+energie_afname_eur = "1030.64"
+energie_injectie_eur = "-71.20"
+groene_stroom_eur = "74.99"
+wkk_eur = "26.73"
+kortingen_eur = "-380.70"
+netwerkkosten_eur = "678.09"
+toeslagen_eur = "336.81"
+# Geschat bedrag voor de dagen tussen de meteropname en de factuurdatum. Een
+# facturatiemechanisme dat dit project niet modelleert.
+periode_meteropname_tot_factuur_eur = "112.66"
+
+# Groene stroom en WKK als aparte kWh-componenten, beide aan 6% btw.
+[elektriciteit.eenheidsprijzen]
+groene_stroom_eur_mwh = "11.00"          # 23,36/2124 en 51,63/4693 kWh
+wkk_eur_mwh = "3.92"                     # 8,32/2124 en 18,41/4693 kWh
+
+# --------------------------------------------------------------------------
+# Heffingen elektriciteit — hier zit de tweede vondst
+# --------------------------------------------------------------------------
+#
+# De bijzondere accijns komt exact overeen met
+# `config/heffingen/bijzondere_accijns_elektriciteit.toml`: 47,4811 EUR/MWh
+# voor het regime dat op 2023-07-01 inging. Dat cijfer is hiermee door een
+# echte factuur bevestigd, niet alleen door een kalibratie.
+#
+# De **bijdrage op de energie** klopt níet. De masterdata zet
+# `energiebijdrage_eur_mwh = "0"` voor klantcategorie `niet_zakelijk`; deze
+# factuur rekent 1,9261 EUR/MWh aan een huishouden — dezelfde waarde die de
+# masterdata wél voor `zakelijk_laagspanning` draagt.
+#
+# vtest.be toont die post niet: in het kalibratierapport van 2026-08-31 bestaat
+# alleen "Heffingen | Bijzondere accijns", en de fit sloot op 0,00 EUR residu.
+# De vergelijkingstool laat de bijdrage dus weg, een echte factuur niet.
+#
+# Gevolg zolang de masterdata op 0 staat: 13,13 EUR per jaar te laag op dit
+# verbruik (6.817 kWh). Dit is een openstaande beslissing — zie de toelichting
+# in CLAUDE.md.
+[elektriciteit.heffingen]
+bijzondere_accijns_eur = "323.68"        # 100,85 + 222,83
+bijzondere_accijns_eur_mwh = "47.4811"
+bijdrage_op_de_energie_eur = "13.13"     # 4,09 + 9,04
+bijdrage_op_de_energie_eur_mwh = "1.9261"
+masterdata_bevestigt_accijns = true
+masterdata_bevestigt_energiebijdrage = false
+
+# --------------------------------------------------------------------------
+# Aardgas
+# --------------------------------------------------------------------------
+[aardgas]
+verbruik_m3 = "1068"
+omrekenfactor_kwh_per_m3 = "11.4054"
+verbruik_kwh = "12181"
+gemeten_over_dagen = 365
+
+[[aardgas.tariefkaart]]
+versie = "2024-05-01"
+van = "2025-05-01"
+tot = "2025-05-19"
+dagen = 19
+vaste_vergoeding_eur = "2.00"
+prijs_eur_kwh = "0.0549300"
+
+[[aardgas.tariefkaart]]
+versie = "2025-05-20"
+van = "2025-05-20"
+tot = "2025-10-27"
+dagen = 161
+vaste_vergoeding_eur = "22.89"
+prijs_eur_kwh = "0.0539200"
+
+[[aardgas.tariefkaart]]
+versie = "2025-10-28"
+van = "2025-10-28"
+tot = "2026-04-30"
+dagen = 185
+vaste_vergoeding_eur = "26.30"
+prijs_eur_kwh = "0.0496100"
+
+[aardgas.componenten]
+energie_eur = "662.11"
+kortingen_eur = "-190.10"
+netwerkkosten_eur = "215.24"
+toeslagen_eur = "112.54"
+periode_meteropname_tot_factuur_eur = "-6.86"
+
+# Het vervoerstarief van Fluxys, dat in geen enkel VREG-werkboek staat en
+# waarvoor `config/nettarieven/transport_aardgas.toml` bestaat. De factuur
+# noemt het "Transportkosten (geschat door Fluxys)" en bevestigt de orde van
+# grootte: 19,00 EUR op 12.181 kWh.
+[aardgas.netwerk]
+distributiekosten_eur = "196.24"         # 190,73 + 5,51
+transportkosten_eur = "19.00"            # 18,85 + 0,15
+transportkosten_eur_mwh = "1.5599"
+
+[aardgas.heffingen]
+bijzondere_accijns_eur = "100.39"        # 99,61 + 0,78
+bijzondere_accijns_eur_mwh = "8.2415"
+bijdrage_op_de_energie_eur = "12.15"     # 12,06 + 0,09
+bijdrage_op_de_energie_eur_mwh = "0.9975"

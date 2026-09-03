@@ -1,0 +1,97 @@
+# Voorbeeldprofiel dat de volledige vorm toont die `energievergelijker
+# gebruiker` inleest. Kopieer wat je nodig hebt naar je eigen gebruiker.toml.
+#
+# Het absolute minimum om te kunnen rekenen is: een postcode en één
+# jaarverbruik. Al de rest is optioneel — wat je weglaat wordt ingevuld met een
+# aanname die `gebruiker toon` en `gebruiker controleer` je tonen, en die
+# meereist tot in het eindbedrag.
+
+[gebruiker]
+postcode = "9300"
+gemeente = "Aalst"        # nodig zodra één postcode meerdere netbeheerders kent
+segment = "Woning"        # Woning of Onderneming
+
+[aansluiting]
+elektriciteit = true
+gas = false
+
+# De EAN is niet nodig om te rekenen — de postcode stuurt de tariefselectie —
+# maar wel om later meetdata bij Fluvius of je leverancier op te vragen.
+# Elektriciteit en gas hebben elk hun eigen EAN; injectie heeft er géén, dat
+# zijn aparte registers op dezelfde meter.
+# ean_elektriciteit = "541448000000000000"
+# ean_gas = "541448000000000001"
+
+# Drie verschillende vermogens, bewust niet één veld:
+#   aansluitingsvermogen_kva  het fysieke net (1x230 V of 3x400 V + zekering)
+#   omvormer_kva              de AC-limiet, gedeeld door PV en batterij
+#   maandpiek                 een tariefconstruct, geen fysieke grens
+aansluitingsvermogen_kva = 9.2
+aantal_fasen = 1
+omvormer_kva = 5.0
+
+# "digitaal" of "analoog" (= klassieke Ferrarismeter).
+meter = "digitaal"
+# "enkelvoudig", "tweevoudig" of "exclusief_nacht" — een apart register met een
+# eigen nettarief, niet hetzelfde als het metertype.
+registerschema = "enkelvoudig"
+# Alleen een klassieke terugdraaiende meter mét zonnepanelen valt onder het
+# prosumententarief. Bij een digitale meter niet.
+terugdraaiend = false
+
+zonnepanelen = true
+pv_kwp = 4.6              # paneelvermogen; SPP geeft opbrengst *per kWp*
+
+[aansluiting.batterij]
+merk = "Marstek"
+model = "Venus E"
+# ac_gekoppeld, dc_gekoppeld of hybride. Bepaalt of PV de batterij kan laden
+# zonder de meter te passeren. Zonder opgave wordt ac_gekoppeld aangenomen —
+# de voorzichtige keuze, want die telt het omvormerverlies mee.
+topologie = "ac_gekoppeld"
+
+[aansluiting.omvormer]
+merk = ""
+model = ""
+
+[verbruik]
+# Handmatig doorgegeven jaarverbruik. Wordt als "manueel" geboekt en dus
+# gereconstrueerd, niet exact: het is de beste beschikbare opgave, maar niet
+# tegen een factuur gelegd.
+jaar = 2026
+afname_dag_kwh = 2000
+afname_nacht_kwh = 1000
+injectie_dag_kwh = 0
+injectie_nacht_kwh = 0
+
+# Kwartiermetingen (Fluvius-export). Laat weg zolang je ze niet hebt: een pad
+# naar een ontbrekend bestand leest als "er is meetdata" terwijl die er niet is.
+# fluvius_csv = "data/input/fluvius.csv"
+resolutie = "kwartier"
+ontbrekende_data = "waarschuwen"
+
+# Contracten met een geldigheidsperiode. Dit is wat een terugblik mogelijk
+# maakt: een vast contract volgt de actuele tariefkaart niet, zijn prijs
+# bevriest bij ondertekening. `tariefkaart_van` legt vast wélke kaart geldt.
+[[contract.elektriciteit]]
+leverancier = "Bolt"
+product = "Bolt Vast"
+type = "vast"
+van = "2026-01-01"
+tot = "2026-08-01"
+tariefkaart_van = "2026-01-01"
+
+[[contract.elektriciteit]]
+leverancier = "Aspiravi Energy"
+product = "Eco Plus flex"
+type = "variabel"
+van = "2026-08-01"
+
+[analyse]
+historiek_vanaf = "2026-01-01"
+vergelijkingsperiode_maanden = 12
+
+[uitvoer]
+map = "output"
+top_aantal = 20
+csv = true

@@ -15,6 +15,7 @@ from energie_vlaanderen.cli.helpers import (
     relative_or_absolute,
     require_valid_raw_version,
     resolve_artifact,
+    tariefjaar_uit_manifest,
 )
 from energie_vlaanderen.cli.output import emit, print_json
 from energie_vlaanderen.data.paths import DataPaths, DataPathsError
@@ -352,7 +353,16 @@ def run_parse_tariffs(args: argparse.Namespace, settings: Settings) -> int:
             LOG.warning("%s, overgeslagen.", exc)
             continue
 
-        LOG.info("Verwerken van %s tarieven ...", energy_type)
+        try:
+            tarief_jaar = tariefjaar_uit_manifest(manifest_data, artifact_key)
+        except RawVersionError as exc:
+            return fail(
+                "Tariefjaar niet bepaalbaar voor %s: %s. Zonder jaar zou de "
+                "databankimport het uit het versie-id afleiden, en dat is de "
+                "downloaddatum.", energy_type, exc,
+            )
+
+        LOG.info("Verwerken van %s tarieven (tariefjaar %d) ...", energy_type, tarief_jaar)
         try:
             result = pipeline.process(
                 source_path=source_path,
@@ -360,6 +370,7 @@ def run_parse_tariffs(args: argparse.Namespace, settings: Settings) -> int:
                 version_id=args.version,
                 energy_type=energy_type,
                 overwrite=args.overwrite,
+                tarief_jaar=tarief_jaar,
             )
         except TariffPipelineError as exc:
             return fail("Tarievenpipeline [%s] geweigerd: %s", energy_type, exc)

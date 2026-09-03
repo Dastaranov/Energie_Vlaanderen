@@ -1,7 +1,7 @@
 """Tests voor de heffingen-koppeling in Calculator.calculate() (Fase 2).
 
-`grid_cost()` gebruikt een lege DNB-DataFrame zodat de nettarief-component
-op 0 uitkomt — dat isoleert de heffingen-berekening, die hier het
+`grid_cost()` gebruikt een minimale DNB-tabel waarin elk tarief expliciet 0 is,
+zodat de nettarief-component op 0 uitkomt — dat isoleert de heffingen-berekening, die hier het
 daadwerkelijke onderwerp is. `DataRepository.dnb_for()`/`.dnb` bestaan
 vandaag nog niet op de echte repository (die koppeling is een latere,
 losstaande stap); deze fake volstaat om enkel `grid_cost()` bruikbaar te
@@ -29,12 +29,42 @@ DNB_COLUMNS = [
 
 
 class FakeGridRepository:
-    """Levert een lege DNB-tabel: grid_cost() geeft dan altijd 0 terug."""
+    """Een minimale, geldige DNB-tabel waarin elk tarief expliciet 0 is.
+
+    Vroeger was dit een lege DataFrame. Dat kan niet meer: `grid_cost()` stopt
+    sinds kort wanneer er voor deze netbeheerder en dit klanttype géén rijen
+    bestaan, want dan gaf elke lookup stil D("0") terug en kwam er een netkost
+    van 0,00 EUR uit — een bedrag dat er plausibel uitziet en nergens op slaat.
+    Dat gebeurde echt met het VREG-werkboek van 2024.
+
+    Een tarief dat er *is* en 0 bedraagt is iets anders dan een tarief dat
+    ontbreekt. Deze fake kiest bewust het eerste, zodat `cost.grid` nul blijft
+    en de heffingen geïsoleerd getoetst kunnen worden.
+    """
+
+    _RIJEN = [
+        ("FA", "ELEK_LS_DIGI", "Afname", "Tarieven voor het netgebruik",
+         "Gemiddelde maandpiek", "EUR/kW/jaar", 0.0),
+        ("FA", "ELEK_LS_DIGI", "Afname", "Tarieven voor het netgebruik",
+         "kWh-tarief", "EUR/kWh", 0.0),
+        ("FA", "ELEK_LS_DIGI", "Afname", "Tarieven voor het databeheer",
+         "Laagspanningnet", "EUR/jaar", 0.0),
+    ]
 
     def __init__(self) -> None:
-        self.dnb = pd.DataFrame(columns=DNB_COLUMNS)
+        self.dnb = pd.DataFrame(
+            [
+                dict(zip(
+                    ["Netbeheerder", "Klanttype", "Contracttype", "Tarieftype",
+                     "Tariefdetail", "Tariefnotering", "Prijs_num"],
+                    rij,
+                ))
+                for rij in self._RIJEN
+            ],
+            columns=DNB_COLUMNS,
+        )
 
-    def dnb_for(self, postcode, gemeente):
+    def dnb_for(self, postcode, gemeente, energie_type="elektriciteit"):
         return gemeente, "FA"
 
 

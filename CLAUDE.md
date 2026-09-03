@@ -64,11 +64,14 @@ The CLI is grouped as `<groep> <actie> [opties]`; every action also accepts `--j
 `audit golden` vergelijkt de gestagede CSV's cel voor cel met het bron-XLSX. Voor elektriciteit dekt dat drie bestanden — afname, injectie én hoogspanning. Dat laatste ontbrak: de audit liep enkel over afname en injectie, waardoor 528 van de 776 elektriciteitsrijen nooit tegen het werkboek gelegd werden. Bovendien vergeleek ze de volledige verse normalisatie met alleen het afname-bestand, wat 108 verschillen meldde die geen van alle echt waren.
 | `version` | `publish --version [--keep-staging] [--force] [--skip-db] [--db-overwrite]` |
 | `db` | `init`, `import --version [--overwrite] [--gemeente]`, `verify`, `status` |
+| `gebruiker` | `toon [--toml]`, `controleer [--toml] [--hardware]`, `bereken --van --tot [--toml] [--version]` |
 | `paths` | *(no action)* |
 
 Running `energievergelijker` with no arguments starts the interactive shell instead of erroring; `energievergelijker <groep> <actie>` keeps working exactly as a normal one-shot CLI call for scripts.
 
 `staging refine` scrapes the live vtest.be comparison tool via Selenium (requires `pip install -e ".[scrape]"` and a local Chrome or Firefox). `--segment`/`--energy` pick one of the four categories (woning/onderneming × elektriciteit/gas); `--matrix` runs all 4 × the 8 DNB-representative postcodes (32 combinations, one courtesy pause between each) and merges the results. Output per combination: `vtest_products_<segment>_<energy>_<postcode>.csv` (contract metadata) and `vtest_product_components_<segment>_<energy>_<postcode>.csv` (the full per-contract cost breakdown extracted from vtest.be's own `data-productinvoicestring`, incl. its own Nettarieven/Heffingen calculation — a useful cross-check against the tariffs/heffingen pipelines).
+
+**`--browser` is standaard `firefox`, niet chrome.** Op 2026-09-02 bleek een volledige `--matrix`-run onder headless Chrome het onderneming-segment structureel af te kappen — telkens exact 20 producten (elektriciteit) of 10 (gas) op alle 8 postcodes, reproduceerbaar over twee onafhankelijke runs, ook na meer geduld bij het scrollen. Vier losse runs met Firefox (headless én zichtbaar) haalden telkens de volle lijst binnen (82/54). Geen timingprobleem dus, maar een renderverschil tussen de twee browsers bij vtest.be's lui-ladende resultatenlijst. Zie de toelichting in `ingest/vtest/html_downloader.py` bij het scroll-blok. `--browser chrome` blijft een keuze (`choices=("chrome", "firefox")`), maar gebruik die enkel bewust en controleer nadien de "Mogelijk onvolledig"-meldingen van `--matrix`.
 
 `staging parse --only profielen` heeft, anders dan de andere drie doelen, een eigen `--synergrid-version` nodig naast de gewone `--version`: Synergrid heeft een eigen raw-store (`SynergridRawStore`, `data/raw/synergrid/<versie>/`) los van de VREG-raw-store, met een eigen jaarlijkse cadans. `--version` bepaalt enkel wáár de output landt (`staging/<versie>/profielen/`); `--synergrid-version` + `--jaar` bepalen wélke Synergrid-download verwerkt wordt. Daarom zit `profielen` bewust niet in `--only all` — de andere drie doelen hebben geen tweede versie-id nodig, `profielen` wel, en dat zou `all` een stille extra vereiste geven.
 
@@ -190,6 +193,366 @@ jaarbestanden meeslepen. `SynergridDownloader`/`SynergridRawStore`
 eigen manifestvorm en een `.xlsb`-tak in de containervalidatie
 (`xl/workbook.bin` i.p.v. `xl/workbook.xml`).
 
+### Gebruikersbasis
+
+`gebruiker.toml` beschrijft één gebruiker; `src/energie_vlaanderen/gebruikers/`
+maakt daar een domeinmodel van dat meerdere gebruikers, adressen, EAN's, meters,
+installaties en contracten-met-periode aankan. Migratie 0017 verving daarvoor het
+lege scaffold uit 0001 (`gebruiker`, `meterinterval`, `simulatie`) door
+`gebruiker`, `gebruiker_persoonsgegeven`, `aansluitingspunt`, `meter`,
+`installatie_asset`, `leveringscontract`, `verbruiksopgave`, `toestemming`,
+`meterinterval` (nu aan het aansluitingspunt), `simulatie` en `simulatie_regel`.
+
+```bash
+energievergelijker gebruiker toon --toml gebruiker.toml
+energievergelijker gebruiker controleer --hardware      # exitcode 2 bij een fout
+energievergelijker gebruiker bereken --van 2026-01-01 --tot 2027-01-01
+```
+
+Zie `gebruiker.voorbeeld.toml` voor de volledige bestandsvorm. Het bestaande
+formaat blijft geldig; alles wat erbij komt is optioneel. `toml_io.py` is de
+**enige** lezer van `gebruiker.toml` — `hardware/installatie.py` en
+`experiments/park/` zijn verwijderd, en `calculation/simulator_battery.py` haalt
+zijn batterijkeuze nu uit het dossier.
+
+**Een EAN hoort bij een aansluitingspunt, niet bij een gebruiker.** Eén EAN18
+identificeert één toegangspunt voor één energiedrager; elektriciteit en gas
+hebben elk hun eigen EAN, en injectie is géén aparte EAN maar een aparte
+registerlezing. Er is daarom geen veld "heeft gas" — het bestaan van een
+gasaansluitingspunt ís dat antwoord.
+
+**Drie vermogensbegrippen die niet samenvallen**: het aansluitingsvermogen
+(fysiek, kVA), de AC-limiet van de omvormer, en de maandpiek (een tariefconstruct).
+Dezelfde soort fout als de `geschatte_maandpiek_kw`/`minimum_maandpiek_kw`-splitsing
+uit migratie 0015.
+
+**Drie tijdassen, en ze schuiven onafhankelijk.** `periodes.snijd()` knipt een
+venster op elke contractwissel, elke bevroren tariefkaart, elk heffingenregime en
+elke jaarwissel. Een *vast* contract volgt de actuele tariefkaart niet: de prijs
+bevriest bij ondertekening (`tariefkaart_geldig_van`), terwijl de heffingen het
+regime van de deelperiode volgen — de bijzondere accijns wijzigde op 01/08/2026
+midden in elk lopend contract.
+
+**Een variabel of dynamisch contract wordt per maand geknipt**
+(`periodes.indexatiegrenzen`). De indexatieformule neemt per periode een andere
+waarde aan, en de V-test-export levert die als maandsnapshot — 20 maanden,
+januari 2025 tot en met augustus 2026. Zonder die knip krijgt een variabel
+contract dat in januari begint en tot september loopt acht maanden lang de
+januari-index: op Aspiravi "Eco Plus flex" met 3 MWh scheelde dat 30,31 EUR op
+een leverancierskost van 328,96 (~10%). Een *vast* contract wordt niet per maand
+geknipt — daar ligt de prijs juist stil. Loopt een variabel contract voorbij de
+laatste maand in de export, dan stopt `zoek_product()` met een fout in plaats van
+de laatst bekende index door te rekenen.
+
+**Reken op jaarbasis en schaal daarna naar dagen** (`berekening.schaal_kost`).
+Bijna elke component van een energiefactuur is een jaargrootheid: het
+capaciteitstarief heeft een jaarlijkse ondergrens én een maximumtarief over het
+jaarverbruik, databeheer en de vaste vergoeding zijn EUR/jaar, de accijnsschijven
+zijn progressief over het *jaar*verbruik, en het energiefonds is een vast bedrag
+per maand. Wie de deelperiodevolumes rechtstreeks door `Calculator` haalt,
+betaalt die vaste componenten één keer per deelperiode: een contractwissel in
+2026 gaf zo 603,24 EUR netkost waar één jaar er 373,96 kost. Het invariant dat
+dit bewaakt staat in `tests/test_gebruikers_berekening.py`: **knippen mag het
+totaal niet veranderen.**
+
+**Exactheidsklasse en aannames zijn types, geen rapportage.** `Exactheidsklasse`
+(exact / gereconstrueerd / geschat / scenario, Manifest §5.8) en `Aanname`
+(veld, waarde, bron, geverifieerd, beinvloedt_bedrag) reizen mee tot in het
+eindbedrag. De zwakste schakel bepaalt de klasse: één geschatte invoer die het
+bedrag raakt maakt het hele resultaat geschat, ook als elke tariefopzoeking exact
+was. `beinvloedt_bedrag=False` bestaat voor administratieve aannames zoals een
+onbekende EAN: die raken geen euro, en ze wél laten meetellen zou bijna elk
+resultaat "geschat" maken en die klasse betekenisloos. Een `Aanname` zonder `bron`
+bestaat niet — dat zou een gok zijn die zich als gegeven voordoet.
+
+**SPP is vermogen, geen energie.** Het werkboek zegt het zelf op "Read Me First":
+*"SPP-value expressed in mW/mWp"*. Over 2026 sommeren de kwartierwaarden tot
+4.119,94; als energie gelezen zou dat 4.120 kWh/kWp/jaar zijn, vier keer de
+werkelijke Vlaamse opbrengst. `schatting.productie_uit_kwp()` vermenigvuldigt
+daarom met de intervalduur (0,25 uur) en komt op 1.030 kWh/kWp/jaar. SLP-EX en
+RLP0N sommeren wél tot 1 en zijn verdelingen.
+
+**Uit een genormaliseerd profiel komt geen maandpiek.** De piek van een profiel
+is die van een gemiddelde over duizenden aansluitingen.
+`schatting.maandpieken_uit_profiel()` bestaat alleen om te weigeren; Manifest §12
+laat enkel een *gedocumenteerde* schatting toe, en dat is de 4,218 kW uit vtest.be.
+
+**Postcode alleen volstaat niet altijd voor de netbeheerder.** Postcode 2387 dekt
+zowel Zondereigen (gas: Fluvius Kempen) als Baarle-Hertog (gas: Enexis Netbeheer).
+`NetbeheerderRegister.dnb_for()` eist daar de gemeentenaam en weigert te gokken;
+`dnb_met_tarieven()` stopt bovendien op Enexis, dat geen tarieven in deze dataset
+heeft.
+
+### Het tariefjaar komt uit het werkboek, niet uit het versie-id
+
+`cli/db.py` leidde het tariefjaar af met `jaar = int(version_id[:4])`. Dat is de
+*downloaddatum*: wie in september 2026 het werkboek van 2025 ophaalt, krijgt een
+versie-id dat met 2026 begint, en de SCD2-import stempelt dan
+`geldig_van = 2026-01-01` op tarieven van 2025. Twee tariefjaren botsen zo in
+dezelfde unieke sleutel.
+
+Het jaar staat betrouwbaar in `original_filename` van het raw-manifest
+("Distributienettarieven elektriciteit 2025.xlsx").
+`cli/helpers.py::tariefjaar_uit_manifest()` haalt het daaruit, de tariefpipeline
+schrijft het als `tarief_jaar` in `tariffs_*_report.json`, en zowel `cli/db.py`
+als `DataRepository.tariefjaar` lezen het daar. Staat er meer dan één jaartal in
+de naam, dan volgt een fout — raden zou een heel tariefjaar verkeerd dateren.
+Oudere staging-versies dragen het veld niet en vallen luidruchtig terug op het
+versie-id.
+
+`Kostberekening` toetst per deelperiode dat het geladen tariefjaar overeenkomt.
+De tariefrijen dragen zelf geen datum, dus aan de data is niet te zien of ze bij
+2025 of 2026 horen: zonder die toets geeft een berekening over 2025 met het
+werkboek van 2026 een plausibel ogend en verkeerd bedrag.
+
+**Alle drie de jaargangen staan op de VREG-pagina.** `source list --year 2024` en
+`--year 2025` vinden ze; ze hoeven niet manueel geplaatst te worden. Netkost voor
+3.000 kWh bij Fluvius Midden-Vlaanderen, digitale meter: 374,75 EUR in 2025
+tegenover 373,96 in 2026.
+
+**Het werkboek van 2024 parseert nog niet correct.** De huidige parser haalt er
+116 in plaats van 200 afnamerijen uit, kent maar 4 van de 8 netbeheerders
+(FA, FI, FL, FW) en géén `ELEK_LS_DIGI` — de bladindeling verschilt van 2025/2026.
+Dat is apart werk; wat wél opgelost is, is dat het geen stille nul meer oplevert.
+
+### Een ontbrekend nettarief is een fout, geen nul
+
+`grid_cost()` gaf op de 2024-data 0,00 EUR terug: elke lookup vond niets en
+leverde stil `D("0")`. Een digitale meter in Aalst zat daarmee gratis op het net.
+Er zijn nu twee controles, en ze gaan bewust over de *afwezigheid van de rij* en
+niet over de waarde — een tarief dat er is en 0 bedraagt is iets anders dan een
+tarief dat ontbreekt:
+
+- geen enkele rij voor deze netbeheerder en dit klanttype → fout, met de wél
+  beschikbare klanttypes of netbeheerders in de melding;
+- `val(..., verplicht=True)` voor het capaciteitstarief (digitale meter) en de
+  vaste term (analoge meter), de twee grootste posten.
+
+### Het werkboek van 2024 leest een andere kolomindeling
+
+De VREG-werkboeken van 2025 en 2026 zetten de laagspanningskolommen
+(piekmeting / analoge meter / prosument) op kolomindex 13/14/15. Dat van 2024
+heeft **één kolom méér** — de hoogspanning is er anders ingedeeld, met
+"TRANS HS" en "AV ≥ 5 MVA"/"AV < 5 MVA" in plaats van de post/net-splitsing —
+en schuift ze naar 14/15/16.
+
+Met de vaste indeling die `ingest/tariffs/normalizer.py` gebruikte, werd de
+*piekmeting* van 2024 als "analoge meter" gelabeld en de klassieke meter als
+"prosument". Geen ontbrekende data dus, maar verkeerd gelabelde data. En omdat
+er op kolom 13 niets stond, kende de 2024-export helemaal geen `ELEK_LS_DIGI`
+— waarna `grid_cost()` er 0,00 EUR voor teruggaf.
+
+`TariffWorkbookParser` leidt de laagspanningskolommen nu af uit de koprijen:
+Excel-rij 4 draagt de spanningsgroep ("Laagspanningsnet", "LS", "TRANS LS") en
+rij 5 de meetsoort ("piekmeting", "analoge meter", "klassieke meter",
+"prosumenten met terugdraaiende teller"). Die twee samen identificeren een
+kolom; de groep is nodig omdat 2024 twéé kolommen "piekmeting" heeft, één onder
+"TRANS LS" en één onder "LS". De kaart telt alleen wanneer alle drie de
+categorieën gevonden zijn — een halve kaart zou stil rijen laten vallen.
+
+Midden- en hoogspanning worden bij een afwijkende indeling **overgeslagen** met
+een waarschuwing: hun kolommen op een vaste index lezen zou tarieven aan het
+verkeerde spanningsniveau hangen, en Manifest §7.2 verbiedt daar sowieso
+residentiële formules.
+
+Twee dingen blijven open bij 2024:
+
+- **De tien Fluvius-entiteiten van vóór de fusie van 2025** (GW, INT, IVK,
+  IVRLK, PBE, SIB naast FA/FI/FL/FW) staan niet in `DNB_CODES`. Ze worden nu
+  overgeslagen *met een bevinding* in plaats van stil; bruikbaar maken vergt ook
+  een historische postcode→netbeheerder-koppeling, en `DnbPerGemeente.csv` is
+  de huidige.
+- Daardoor levert 2024 alleen tarieven voor FA, FI, FL en FW.
+
+### De C10/26-lijst als controle op de hardware-masterdata
+
+`hardware/homologatie.py` leest de Synergrid C10/26-lijst: de officiële
+Belgische lijst van productie-eenheden die aan C10/11 voldoen en dus op een
+distributienet aangesloten mogen worden. Staat een toestel er niet in, dan mag
+de netbeheerder de aansluiting weigeren — voor een gebruiker die in een
+interface een batterij kiest is dat de eerste vraag die telt.
+
+```bash
+energievergelijker audit hardware --c10-26
+```
+
+De lijst is bovendien de **enige onafhankelijke bron** op deze masterdata; al
+het andere komt uit fabrikantsdatasheets. `BatterijSpec` draagt niet toevallig
+`synergrid_id`, `power_control_system`, `p_active_power_w`,
+`smax_apparent_power_w` en `num_phase`: dat zijn de kolommen van deze lijst.
+Wat ze *niet* zegt: capaciteit in kWh, rendementen, cyclusleven.
+
+Wat de eerste run opleverde (uitgave 2026-08-26, 8.238 eenheden, 319 merken):
+
+- **Marstek Venus E** is gehomologeerd als `GLV265-07-0004`
+  (MST-BIE5-2500). Dat id staat nu in de masterdata.
+- **`smax_apparent_power_w` stond 40% te hoog.** Het veld had 3500 VA, met
+  "3,5 kVA piek (10s)" als verantwoording. Dat cijfer staat in de datasheet,
+  maar onder *Back-up (Off Grid)* — een off-grid piek van tien seconden. Het
+  veld betekent het continu schijnbaar vermogen op het net, en daarvoor noemt de
+  datasheet onder *AC Input/Output (On Grid)* "2.5kVA / 800VA". C10/26
+  homologeert het toestel in precies die twee varianten. Twee grootheden door
+  elkaar.
+- **Venus E 4.0 en Venus E Mini staan niet in de lijst**, ook niet bij de
+  vervallen homologaties. Van Marstek staan er alleen Venus-C en Venus-E in. Die
+  twee modellen zijn in België dus niet gehomologeerd; de configbestanden dragen
+  daar nu een waarschuwing over.
+
+Twee valkuilen die in de code vastliggen:
+
+- **Merken staan in wisselende schrijfwijze in de lijst** ("Growatt" naast
+  "Growatt ", "MARSTEK" in hoofdletters), dus vergelijken gebeurt
+  genormaliseerd.
+- **Eén serie heeft meerdere vermeldingen.** Growatt's SPH 5000 bestaat 1-fasig
+  (4.999 W) en 3-fasig (5.000 W). Op vermogen alleen wint de 3-fasige, terwijl
+  de masterdata 1-fasig zegt. Het aantal fasen weegt daarom zwaarder dan het
+  vermogen bij het kiezen van de variant.
+
+De werkbladen melden Excel's maximum van 1.048.576 rijen omdat er opmaak tot
+onderaan staat; zonder de bovengrens van `MAX_RIJEN` leest pandas een miljoen
+lege rijen en duurt het inlezen minuten.
+
+### Persoonlijke referentiedocumenten
+
+`data/referentie/` is bedoeld voor echte facturen, afrekeningen en
+meterexports — het bewijsmateriaal waartegen de rekenengine getoetst wordt.
+`.gitignore` sluit die map uit behalve `LEESMIJ.md`: ze dragen naam, adres, EAN
+en klantnummer, en `docs/manifest.md` §4.3 vraagt dat persoonsgegevens
+doelgebonden en minimaal verwerkt worden. Let op dat `.gitignore` alleen
+*specifieke* submappen van `data/` negeert, niet `data/` als geheel — een nieuwe
+map eronder gaat zonder regel gewoon mee de repo in.
+
+Uit zo'n document worden alleen de cijfers overgenomen naar een geanonimiseerde
+fixture onder `tests/fixturen/facturen/`. Die gaat wél in git en wordt de
+referentiecase; het document zelf blijft lokaal.
+
+### Injectie
+
+Het injectiekrediet komt uit dezelfde V-test-export als de afnameprijzen, maar
+uit de rijen met `direction = Injectie`: 14 vaste en 136 variabele/dynamische
+injectieproducten voor augustus 2026, inclusief ToU. Injectie hoort bij hetzelfde
+leveringscontract — "Bolt Variabel" bestaat in beide richtingen — dus
+`Kostberekening.zoek_product(contract, periode, richting)` haalt beide op.
+`Leveringscontract.injectie_product` is er alleen voor het geval de leverancier
+voor teruglevering een ándere productnaam hanteert.
+
+**Dezelfde productnaam kan in twee smaken bestaan.** "Bolt Variabel" staat in
+augustus 2026 zowel als `variabel` (maandelijkse indexformule) als `dynamisch`
+(kwartierprijs) in de export. Het contracttype wijst aan welke; zonder dat filter
+weigert de opzoeking te kiezen.
+
+**Geen injectieproduct is geen injectievergoeding van nul.** Het is een onbekend
+bedrag, en de doorgerekende kost staat dan te hoog. Dat levert een waarschuwing
+én een `Aanname` op, niet stil een 0.
+
+**Injectie en een terugdraaiende meter sluiten elkaar uit.** Een klassieke
+terugdraaiende meter registreert geen injectie; daarvoor betaalt de klant het
+prosumententarief. Beide tegelijk telt hetzelfde voordeel twee keer, en dat is
+een harde fout.
+
+**Dynamische injectie moet de injectiereeks krijgen, niet de afnamereeks.**
+`Calculator.calculate()` gaf aan de injectie-tak de kwartierreeks van de afname
+mee. Bij een vast of variabel injectieproduct viel dat niet op — die gebruiken
+enkel de jaartotalen — maar de dynamische tak somt `volume_t x prijs_t` over de
+meegegeven reeks. Zonneproductie piekt rond de middag, wanneer de marktprijs laag
+staat; verbruik piekt 's avonds, wanneer ze hoog staat. Op een testgeval met vier
+uren scheelde dat 0,40 tegenover 8,00 EUR — twintig keer. Er is nu een aparte
+`injectie_intervals`-parameter, en `sta_vlak_profiel=False` weigert bij injectie
+de terugval op een vlak profiel: voor zonneproductie is dat geen benadering maar
+een systematische overschatting.
+
+**De btw-behandeling van de injectievergoeding is nog niet beslist.** De engine
+trekt het krediet van de btw-*basis* af; `docs/price_model_low_voltage.md` §9.1
+schrijft `T - injectieprijs x kWh x 1,06`, dus het krediet zelf verhoogd met btw.
+Manifest §14 noemt dit een openstaande validatie. Het staat in geen werkboek — je
+ziet het alleen aan een factuur mét injectie, en daarvoor is
+`VTestHtmlDownloader.download(injectie_kwh=..., omvormer_kva=...)` gebouwd. Tot
+die kalibratie rond is, legt `tests/test_gebruikers_berekening.py` het huidige
+gedrag vast, niet de eindbeslissing.
+
+### De injectie-index is SPP-gewogen, en die conventie kennen we nog niet
+
+De meest gebruikte index op injectieproducten is
+"M EPEX Spot Belgium/Belpex SPP_BE (kwartier)": het maandgemiddelde Belpex
+**gewogen met het zonneproductieprofiel**. Dat is niet het rekenkundig
+gemiddelde — de zon schijnt op de goedkope uren. Op juni 2026: rekenkundig
+113,98 EUR/MWh, SPP-gewogen 73,84 — ruim 35% lager. Wie injectie tegen de
+gemiddelde marktprijs waardeert, overschat de opbrengst fors.
+
+`scripts/check_injectie_index.py` rekent de index na onder zes conventies
+(kwartier/uur, gewogen/rekenkundig, met en zonder maandverschuiving) en legt ze
+naast `index_value_A` uit de export. Stand op 2026-09-03: **geen enkele
+conventie reproduceert de gepubliceerde waarde.** De SPP-weging zit duidelijk in
+de goede richting (rekenkundig zit er 84-115% naast, SPP-gewogen in de beste
+maanden 6,7%), maar de afwijking is grillig — 126% in januari, 7% in maart, 60%
+in april. Nog niet uitgesloten: ex-post in plaats van ex-ante SPP, een ander
+perimeter dan `SPP_BE`, en de betekenis van de TH/HI/LO-varianten.
+
+Zolang dat niet rond is, rekent `formula_ct()` met de door VREG *meegeleverde*
+indexwaarde en nooit met een zelf berekende. Dat is trouwens ook een bevestiging
+dat die tak nu klopt: voor "Bolt Variabel" injectie augustus 2026 geeft
+`0,094 x 70,54139 - 1,133 = 5,49789 ct/kWh`, tegenover de 5,5 die VREG zelf als
+berekende prijs meelevert.
+
+### De marktprijscache was niet herbruikbaar
+
+`EntsoeMarketData.load()` zocht alleen op een sleutel die de volledige
+periodestring bevat, dus een ander datumbereik miste de cache altijd — ook
+wanneer de gevraagde dagen er allang in zaten. Wie in januari een halfjaar
+ophaalde en daarna één maand opvroeg, kreeg een lege reeks of haalde alles
+opnieuw op. `_uit_cache()` voegt nu alle opgeslagen periodes samen en bedient het
+venster daaruit, met een waarschuwing over ontbrekende intervallen.
+
+Weigeren doet die laag níet meer bij gaten binnenin: dat gebeurt waar het telt.
+`supplier_cost()` vergelijkt sinds deze wijziging het gekoppelde volume met het
+aangeboden volume en stopt wanneer er energie zonder prijs overblijft — een
+inner join liet die intervallen anders stil vallen, en dan is dat verbruik
+gratis. Op de huidige cache (juni 2026, afkomstig van energy-charts.info na een
+ENTSO-E-terugval) betekent dat: 59 van 2.880 kwartieren zonder prijs, dus de
+berekening stopt tot `market sync` de gaten vult. Negatieve prijzen blijven wél
+bewaard — 1.076 stuks, tot -499,29 EUR/MWh.
+
+### De vtest-scraper kan nu injectie invullen
+
+`download(injectie_kwh=..., omvormer_kva=...)` vinkt `HasSolarPanels` aan en vult
+`InjectionDay` en `InverterPower`. Drie dingen die daarbij tegenvielen en nu
+vastliggen in de code:
+
+- `InverterPower` is **verplicht** zodra er zonnepanelen aangevinkt zijn. Zonder
+  waarde weigert vtest.be te submitten en verschijnen er simpelweg geen
+  resultaten — een foutbeeld dat er uitziet als een onbereikbare site. Daarom
+  eist de downloader nu een `omvormer_kva` zodra er injectie gevraagd wordt.
+- `KnowsInverterPower` aanklikken **verbergt** dat veld in plaats van het te
+  tonen. Niet aanraken dus.
+- `KnowsCapacityElectricity` moet uitgevinkt worden *vóór* `HasSolarPanels`
+  aangaat: andersom hertekent het paneel nadat de zonnepaneelvelden verschenen
+  zijn.
+
+Bovendien zijn klikken en wachten samengevoegd tot één lus. vtest.be hertekent
+het formulierpaneel nadat de laatste waarde ingevuld is; een knopreferentie van
+vóór dat hertekenen is daarna stale, en de klik gaat verloren zonder dat er ooit
+een resultaat komt. De lus zoekt de knop opnieuw en klikt opnieuw binnen hetzelfde
+`timeout`-budget, en een uitblijvend resultaat citeert nu de validatiemeldingen
+van de pagina in plaats van "controleer of vtest.be bereikbaar is".
+
+### Twee stille nullen in de rekenengine, nu weg
+
+Beide kwamen aan het licht toen `DataRepository.dnb_for()` er eindelijk was en
+`grid_cost()` voor het eerst tegen echte tariefdata draaide.
+
+- **Het volumetrische distributienettarief viel weg.** `grid_cost()` zocht op
+  notering `EUR/kW` en tarieftype `"Tarieven voor netgebruik"`, terwijl het
+  werkboek `EUR/kWh` en `"Tarieven voor het netgebruik"` schrijft. Beide filters
+  misten, dus stond de term stil op nul: bij FMV 2026 en 3.000 kWh scheelde dat
+  74,62 EUR per jaar. Idem voor de vaste term van de analoge klantcategorie
+  (125,31 EUR/jaar). De lookup matcht nu op de deelstring `netgebruik`.
+- **Elk variabel product viel terug op de meegeleverde prijs.**
+  `DataRepository.products()` schrijft `formula["index_A"] = {"name", "value"}`;
+  `Calculator.formula_ct()` las `f.get("A")` en `f.get("name_A")`. Die sleutels
+  bestonden niet, dus zag de guard nooit een indexwaarde. Van de 61 variabele
+  producten van augustus 2026 rekenen er nu 58 uit hun eigen formule. De test die
+  dit afdekte legde de kapotte vorm vast — een vorm die niets produceert.
+
 ## Architecture
 
 The package lives in `src/energie_vlaanderen/`. `energievergelijker.py` at the root is the entry point; it delegates to `src/energie_vlaanderen/cli/` (a package, not a single module).
@@ -274,7 +637,17 @@ heffingen/
                  # op de tarieven die op een peildatum gelden; raises HeffingenError instead of
                  # silently defaulting to 0 for missing data
   validation.py  # Structurele controle (gaten/overlappingen/ontbrekende jaren) — `audit heffingen`
+gebruikers/       # De gebruikersbasis: models.py (Gebruiker, Aansluitingspunt, Meter,
+                  #   InstallatieAsset, Leveringscontract, Verbruiksopgave, Aanname,
+                  #   Exactheidsklasse) -> toml_io.py (gebruiker.toml -> domein) ->
+                  #   periodes.py (snijdt een venster op elke tijdasgrens) ->
+                  #   berekening.py (per deelperiode een Profile, dan Calculator) ->
+                  #   schatting.py (Synergrid-profielen) -> repository.py (PostgreSQL)
+                  #   + validation.py (audit-achtige Bevindingen)
 nettarieven/
+  netbeheerder.py # NetbeheerderRegister: postcode (+ gemeente) -> netbeheerder, per
+                 # energiedrager. Voedt DataRepository.dnb_for(), dat Calculator.grid_cost()
+                 # aanriep zonder dat het bestond.
   transport.py   # TransportTariefRepository: het vervoerstarief dat de netbeheerder doorrekent
                  # maar niet vaststelt (Fluxys voor aardgas). Zelfde vorm als heffingen/repository.py:
                  # tijdsas, geverifieerd-vlag, harde fout in plaats van een stille 0. Elektriciteit

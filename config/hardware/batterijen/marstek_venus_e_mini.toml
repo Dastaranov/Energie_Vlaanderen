@@ -1,0 +1,69 @@
+# MARSTEK VENUS E Mini (1,5 kW / 2,0096 kWh) — de kleinste van de drie
+# geleverde Marstek-datasheets.
+#
+# Bron: data/datasheets/battery/plug_and_play/VENUS_E_Mini.pdf
+# (specificatietabel, pagina 2, "SPECIFICATIONS").
+#
+# Rechtstreeks van de datasheet overgenomen: max_capacity_kwh (2009,6 Wh,
+# 314 Ah x 2S), max_cycle (">10000"), max_depth_of_discharge_pct (DoD 90%),
+# max_charge_w en max_discharge_w (Rated Input Power / Rated Output Power
+# on-grid, 1,5 kVA), smax_apparent_power_w (Peak Output Power backup,
+# 1,8 kVA/60s), round_trip_efficiency_pct (Battery Side – AC Side Maximum
+# Efficiency, ">88%").
+#
+# NIET op de datasheet, dus modelaannames (niet geverifieerd) — zelfde
+# redenering als bij de andere twee Venus E-bestanden:
+# - standby_power_w: schatting, 15 W.
+# - rte_ac_dc_pct/rte_dc_ac_pct/rte_storage_pct: ontbonden uit het ene
+#   gecombineerde cijfer (>88%) als 99% opslagverlies x twee gelijke
+#   conversiefactoren (0,99 x 0,943 x 0,943 ≈ 0,88) — gemodelleerd, niet
+#   apart gepubliceerd.
+# - ramp_up_time_s: schatting, 0,5 s.
+# - eol_criteria_pct: 80%, industrieconventie, geen Marstek-specifiek cijfer.
+# - c_rate: afgeleid uit de datasheet (1500 W / 2009,6 Wh ≈ 0,75C).
+bron = "data/datasheets/battery/plug_and_play/VENUS_E_Mini.pdf"
+
+[batterij]
+# NIET GEHOMOLOGEERD IN BELGIE (stand 2026-09-03).
+#
+# Dit model komt niet voor in de Synergrid C10/26-lijst (uitgave 2026-08-26),
+# ook niet bij de vervallen homologaties. Van Marstek staan daar alleen de
+# Venus-C (MST-BIE2.5-0800 en -2500) en de Venus-E (MST-BIE5-0800 en -2500) in.
+#
+# Zonder C10/26-homologatie mag de netbeheerder de aansluiting weigeren. Een
+# simulatie met dit model beschrijft dus een installatie die in Vlaanderen
+# vandaag niet zomaar aangesloten kan worden. `energievergelijker audit
+# hardware --c10-26` meldt dat als fout.
+#
+# Mogelijke verklaringen, geen van beide bevestigd: het model is nieuwer dan de
+# lijstuitgave, of het wordt onder een andere modelreferentie gehomologeerd.
+
+merk = "Marstek"
+model = "Venus E Mini"
+synergrid_id = ""
+power_control_system = "Hybride"
+p_active_power_w = 1500.0
+smax_apparent_power_w = 1800.0
+num_phase = 1
+
+max_charge_w = 1500.0
+max_discharge_w = 1500.0
+max_capacity_kwh = 2.0096
+minimum_capacity_pct = 10.0
+standby_power_w = 15.0
+
+round_trip_efficiency_pct = 88.0
+rte_ac_dc_pct = 94.3
+rte_dc_ac_pct = 94.3
+rte_storage_pct = 99.0
+ramp_up_time_s = 0.5
+
+max_cycle = 10000
+max_depth_of_discharge_pct = 90.0
+c_rate = 0.75
+eol_criteria_pct = 80.0
+
+geverifieerd = false
+datasheet_versie = ""
+datasheet_datum = ""
+opgehaald_op = "2026-09-02"

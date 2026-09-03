@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from pathlib import Path
 
 from energie_vlaanderen.data.paths import DataPaths
@@ -80,6 +81,40 @@ def resolve_artifact(
         raise RawVersionError(f"Werkboek niet gevonden: {source_path}")
 
     return source_path
+
+
+_JAAR_IN_NAAM = re.compile(r"\b(20\d{2})\b")
+
+
+def tariefjaar_uit_manifest(manifest_data: dict, artifact_key: str) -> int:
+    """Het tariefjaar van een werkboek, uit zijn oorspronkelijke bestandsnaam.
+
+    Bewust *niet* uit het versie-id afgeleid. Een versie-id draagt het moment van
+    downloaden, niet het jaar waarvoor de tarieven gelden: wie in september 2026
+    het werkboek van 2025 ophaalt, krijgt een versie-id dat met 2026 begint. De
+    databankimport stempelde daar `geldig_van = 2026-01-01` mee, waardoor twee
+    tariefjaren in dezelfde SCD2-sleutel belanden en elkaar overschrijven.
+
+    De VREG noemt haar werkboeken "Distributienettarieven elektriciteit
+    2026.xlsx"; het manifest bewaart die naam in `original_filename`. Staan er
+    meerdere jaartallen in, dan is de naam niet eenduidig en volgt een fout —
+    raden zou hier een heel tariefjaar verkeerd dateren.
+    """
+    try:
+        naam = manifest_data["artifacts"][artifact_key]["original_filename"]
+    except (KeyError, TypeError) as exc:
+        raise RawVersionError(
+            f"Artifact {artifact_key!r} heeft geen original_filename in het "
+            "manifest; het tariefjaar is niet te bepalen."
+        ) from exc
+
+    jaren = {int(j) for j in _JAAR_IN_NAAM.findall(str(naam))}
+    if len(jaren) != 1:
+        raise RawVersionError(
+            f"Uit bestandsnaam {naam!r} is geen eenduidig tariefjaar af te "
+            f"leiden (gevonden: {sorted(jaren) or 'geen'})."
+        )
+    return jaren.pop()
 
 
 def relative_or_absolute(path: Path, project_root: Path) -> Path:

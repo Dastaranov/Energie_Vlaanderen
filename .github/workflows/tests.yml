@@ -57,3 +57,10 @@ jobs:
       # geplande bronbewaking maakt er wel een issue van.
       - name: Controleer heffingen-masterdata
         run: python -m energie_vlaanderen.cli audit heffingen
+
+      # Zelfde redenering als hierboven: config/hardware/ is handgeschreven
+      # (geen scrapebare bron voor batterij-/omvormerspecificaties), en elk
+      # model start ongeverifieerd totdat het tegen een datasheet gelegd is
+      # — vandaar ook hier zonder --streng.
+      - name: Controleer hardware-masterdata
+        run: python -m energie_vlaanderen.cli audit hardware

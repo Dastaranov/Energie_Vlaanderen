@@ -205,3 +205,95 @@ class TestInjectieFanOut:
         result = _normalizer().normalize(pd.DataFrame(), _make_frame(rows))
         assert len(result.injectie) == 1
         assert result.injectie.iloc[0]["Klanttype"] == "GAS_INJ"
+
+
+class TestKolomkaartUitDeKoppen:
+    """De laagspanningskolommen staan niet elk jaar op dezelfde plaats.
+
+    Het VREG-werkboek van 2025 en 2026 zet piekmeting/analoog/prosument op
+    kolom 13/14/15. Dat van 2024 heeft één kolom méér — de hoogspanning is er
+    anders ingedeeld — en schuift ze naar 14/15/16.
+
+    Met de vaste indeling werd de *piekmeting* van 2024 als "analoge meter"
+    gelabeld en de klassieke meter als "prosument": geen ontbrekende data maar
+    verkeerd gelabelde data. En omdat er op kolom 13 niets stond, kende de
+    2024-export helemaal geen `ELEK_LS_DIGI`, waarna `grid_cost()` stilzwijgend
+    0,00 EUR teruggaf voor een digitale meter.
+    """
+
+    SHEET = "FA ELEK Afname"
+    KAART_2024 = {14: "ELEK_LS_DIGI", 15: "ELEK_LS_ANA", 16: "ELEK_LS_ANA_PRO"}
+
+    @staticmethod
+    def _rij_2024(waarden, sheet="FA ELEK Afname"):
+        """Een rij met de kolomindeling van 2024: 17 kolommen, LS op 14/15/16."""
+        rij = {i: None for i in range(17)}
+        rij[1] = "Gemiddelde maandpiek"
+        rij[3] = "EUR/kW/jaar"
+        rij.update(waarden)
+        rij["source_sheet"] = sheet
+        rij["source_row"] = 15
+        return rij
+
+    def test_de_kaart_uit_de_koppen_krijgt_voorrang(self):
+        """Kolom 14 is in 2024 de piekmeting, niet de analoge meter.
+
+        De waarden komen uit het werkboek zelf: Fluvius Antwerpen 2024,
+        capaciteitstarief 37,9640234 EUR/kW/jaar en een vaste term van 94,91
+        EUR/jaar voor de klassieke meter en de prosument.
+        """
+        frame = _make_frame([self._rij_2024({14: 37.9640234, 15: 94.91, 16: 94.91})])
+
+        resultaat = _normalizer().normalize(
+            frame, pd.DataFrame(), {self.SHEET: self.KAART_2024}
+        )
+        per_type = dict(zip(resultaat.afname.Klanttype, resultaat.afname.Prijs_num))
+
+        assert per_type["ELEK_LS_DIGI"] == pytest.approx(37.9640234)
+        assert per_type["ELEK_LS_ANA"] == pytest.approx(94.91)
+        assert per_type["ELEK_LS_ANA_PRO"] == pytest.approx(94.91)
+
+    def test_zonder_kaart_geldt_de_vaste_indeling(self):
+        """De jaargangen 2025 en 2026 blijven werken zoals voorheen.
+
+        49,042629 EUR/kW/jaar is het capaciteitstarief van Fluvius
+        Midden-Vlaanderen in 2025.
+        """
+        frame = _make_frame([_elek_row("1.2", "Gemiddelde maandpiek", digi=49.042629)])
+
+        resultaat = _normalizer().normalize(frame, pd.DataFrame())
+        per_type = dict(zip(resultaat.afname.Klanttype, resultaat.afname.Prijs_num))
+
+        assert per_type["ELEK_LS_DIGI"] == pytest.approx(49.042629)
+
+    def test_een_afwijkende_indeling_slaat_midden_en_hoogspanning_over(self):
+        """Ze op een vaste index lezen zou ze aan het verkeerde niveau hangen.
+
+        Het werkboek van 2024 kent geen "26-36 kV-post"/"26-36 kV-net" maar
+        "TRANS HS" en "AV >= 5 MVA"/"AV < 5 MVA". Manifest §7.2 verbiedt sowieso
+        residentiële formules op midden- en hoogspanning, dus overslaan is hier
+        veiliger dan gokken.
+        """
+        frame = _make_frame([
+            self._rij_2024({5: 12.3852936, 14: 37.9640234, 15: 94.91, 16: 94.91})
+        ])
+
+        resultaat = _normalizer().normalize(
+            frame, pd.DataFrame(), {self.SHEET: self.KAART_2024}
+        )
+
+        assert set(resultaat.afname.Klanttype) == {
+            "ELEK_LS_DIGI", "ELEK_LS_ANA", "ELEK_LS_ANA_PRO",
+        }
+
+    def test_een_onbekende_netbeheerder_wordt_gemeld(self):
+        """De tien Fluvius-entiteiten van vóór de fusie van 2025 staan niet in
+        DNB_CODES. Ze overslaan is juist, ze stil overslaan niet."""
+        frame = _make_frame([
+            self._rij_2024({14: 1.0}, sheet="IVRLK ELEK Afname")
+        ])
+
+        resultaat = _normalizer().normalize(frame, pd.DataFrame())
+
+        assert resultaat.afname.empty
+        assert any("IVRLK" in issue.message for issue in resultaat.issues)

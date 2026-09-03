@@ -137,7 +137,7 @@ class VTestCalibrator:
         postcode: str,
         energy: str,
         segment: str = "woning",
-        browser: str = "chrome",
+        browser: str = "firefox",
         headless: bool = True,
     ) -> Meting:
         """Vraag vtest.be één keer op met `kwh` jaarverbruik en vat de
@@ -206,7 +206,7 @@ class VTestCalibrator:
         postcode: str,
         energy: str,
         segment: str = "woning",
-        browser: str = "chrome",
+        browser: str = "firefox",
         headless: bool = True,
     ) -> list[Meting]:
         metingen: list[Meting] = []
@@ -368,7 +368,7 @@ class VTestCalibrator:
         staging_dir: Path,
         postcode: str = "9120",
         segment: str = "woning",
-        browser: str = "chrome",
+        browser: str = "firefox",
         headless: bool = True,
         elektriciteit_punten: tuple[int, ...] = ELEKTRICITEIT_PUNTEN,
         gas_punten: tuple[int, ...] = GAS_PUNTEN,

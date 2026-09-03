@@ -79,7 +79,7 @@ class VTestRefineMatrix:
         kwh_elektriciteit: int = 15000,
         kwh_gas: int = 10000,
         headless: bool = True,
-        browser: str = "chrome",
+        browser: str = "firefox",
         timeout: int = 60,
         pause_seconds: float = DEFAULT_PAUZE_SECONDEN,
         met_contractdetails: bool = False,

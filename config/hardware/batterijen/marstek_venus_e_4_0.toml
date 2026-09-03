@@ -1,0 +1,71 @@
+# MARSTEK VENUS E 4.0 (3 kW / 5,024 kWh). Ondanks de "4.0" in de naam is de
+# werkelijke capaciteit 5024 Wh (314 Ah x 5S) — een marketing-/SKU-nummer,
+# geen kWh-aanduiding; rechtstreeks van de datasheet-tabel overgenomen, geen
+# tegenstrijdigheid.
+#
+# Bron: data/datasheets/battery/plug_and_play/MARSTEK_VENUS-4.0.pdf
+# (specificatietabel, pagina 2, "SPECIFICATIONS").
+#
+# Rechtstreeks van de datasheet overgenomen: max_capacity_kwh (5024 Wh),
+# max_cycle (">10000"), max_depth_of_discharge_pct (DOD 88%), max_charge_w
+# en max_discharge_w (Rated Input Power / Rated Output Power on-grid,
+# 3 kVA), smax_apparent_power_w (Peak Input/Output Power backup, 3,6 kVA/10s),
+# round_trip_efficiency_pct (Maximum Efficiency, Battery Side and AC Side
+# Cycle, ">90%").
+#
+# NIET op de datasheet, dus modelaannames (niet geverifieerd) — zelfde
+# redenering als bij marstek_venus_e.toml:
+# - standby_power_w: schatting, 15 W.
+# - rte_ac_dc_pct/rte_dc_ac_pct/rte_storage_pct: ontbonden uit het ene
+#   gecombineerde cijfer (>90%) als 99% opslagverlies x twee gelijke
+#   conversiefactoren (0,99 x 0,953 x 0,953 ≈ 0,90) — gemodelleerd, niet
+#   apart gepubliceerd.
+# - ramp_up_time_s: schatting, 0,5 s.
+# - eol_criteria_pct: 80%, industrieconventie, geen Marstek-specifiek cijfer.
+# - c_rate: afgeleid uit de datasheet (3000 W / 5024 Wh ≈ 0,60C).
+bron = "data/datasheets/battery/plug_and_play/MARSTEK_VENUS-4.0.pdf"
+
+[batterij]
+# NIET GEHOMOLOGEERD IN BELGIE (stand 2026-09-03).
+#
+# Dit model komt niet voor in de Synergrid C10/26-lijst (uitgave 2026-08-26),
+# ook niet bij de vervallen homologaties. Van Marstek staan daar alleen de
+# Venus-C (MST-BIE2.5-0800 en -2500) en de Venus-E (MST-BIE5-0800 en -2500) in.
+#
+# Zonder C10/26-homologatie mag de netbeheerder de aansluiting weigeren. Een
+# simulatie met dit model beschrijft dus een installatie die in Vlaanderen
+# vandaag niet zomaar aangesloten kan worden. `energievergelijker audit
+# hardware --c10-26` meldt dat als fout.
+#
+# Mogelijke verklaringen, geen van beide bevestigd: het model is nieuwer dan de
+# lijstuitgave, of het wordt onder een andere modelreferentie gehomologeerd.
+
+merk = "Marstek"
+model = "Venus E 4.0"
+synergrid_id = ""
+power_control_system = "Hybride"
+p_active_power_w = 3000.0
+smax_apparent_power_w = 3600.0
+num_phase = 1
+
+max_charge_w = 3000.0
+max_discharge_w = 3000.0
+max_capacity_kwh = 5.024
+minimum_capacity_pct = 12.0
+standby_power_w = 15.0
+
+round_trip_efficiency_pct = 90.0
+rte_ac_dc_pct = 95.3
+rte_dc_ac_pct = 95.3
+rte_storage_pct = 99.0
+ramp_up_time_s = 0.5
+
+max_cycle = 10000
+max_depth_of_discharge_pct = 88.0
+c_rate = 0.6
+eol_criteria_pct = 80.0
+
+geverifieerd = false
+datasheet_versie = ""
+datasheet_datum = ""
+opgehaald_op = "2026-09-02"

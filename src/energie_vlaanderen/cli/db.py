@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -59,6 +60,46 @@ def run_db_init(args: argparse.Namespace, settings: Settings) -> int:
 # ---------------------------------------------------------
 # db-import
 # ---------------------------------------------------------
+
+def _tarief_jaar(tariff_dir: Path, version_id: str) -> int:
+    """Het jaar waarvoor de tarieven in deze map gelden.
+
+    Uit `tariffs_*_report.json`, dat het jaar overneemt uit de oorspronkelijke
+    bestandsnaam van het VREG-werkboek. Het versie-id is hier géén betrouwbare
+    bron: dat draagt het moment van downloaden. Wie in september 2026 het
+    werkboek van 2025 ophaalt, zou zijn tarieven als 2026 gestempeld krijgen —
+    en dan botsen twee tariefjaren in dezelfde SCD2-sleutel.
+
+    Oudere staging-versies dragen het veld nog niet; die vallen terug op het
+    versie-id, met een waarschuwing zodat de aanname zichtbaar blijft.
+    """
+    jaren: set[int] = set()
+    for rapport in sorted(tariff_dir.glob("tariffs_*_report.json")):
+        try:
+            data = json.loads(rapport.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        jaar = data.get("tarief_jaar")
+        if isinstance(jaar, int):
+            jaren.add(jaar)
+
+    if len(jaren) == 1:
+        return jaren.pop()
+    if len(jaren) > 1:
+        raise RuntimeError(
+            f"De tariefbestanden in {tariff_dir} horen bij meerdere tariefjaren "
+            f"({sorted(jaren)}). Eén versie draagt één tariefjaar; splits ze op."
+        )
+
+    terugval = int(version_id[:4])
+    LOG.warning(
+        "Geen tarief_jaar in de rapporten van %s; teruggevallen op %d uit het "
+        "versie-id. Dat is de downloaddatum, niet noodzakelijk het tariefjaar — "
+        "draai `staging parse --only tariffs` opnieuw om het vast te leggen.",
+        tariff_dir, terugval,
+    )
+    return terugval
+
 
 def import_version_into_db(
     *,
@@ -181,7 +222,7 @@ def import_version_into_db(
             LOG.warning("vtest_products.csv niet gevonden, overgeslagen")
 
         LOG.info("Importeren van netbeheerder-tarieven (SCD2) ...")
-        jaar = int(version_id[:4])
+        jaar = _tarief_jaar(bron_dir / "tariffs", version_id)
         results.append(imp.import_netbeheerder_tarieven(conn, bron_dir / "tariffs", jaar))
 
         LOG.info("Importeren van vervoerstarieven ...")

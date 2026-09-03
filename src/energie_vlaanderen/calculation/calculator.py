@@ -17,17 +17,64 @@ class Calculator:
         _,code=self.repo.dnb_for(p.postcode,p.gemeente)
         kind="ELEK_LS_DIGI" if p.meter=="digitaal" else ("ELEK_LS_ANA_PRO" if p.omvormer_kva>0 else "ELEK_LS_ANA")
         rows=self.repo.dnb[(self.repo.dnb.Netbeheerder==code)&(self.repo.dnb.Klanttype==kind)&(self.repo.dnb.Contracttype=="Afname")]
-        def val(detail,unit=None,tarifftype=None):
+        # Manifest §12: een ontbrekend verplicht tarief stopt de berekening. Zonder
+        # deze controle geeft elke lookup hieronder D("0") terug en komt er een
+        # netkost van 0,00 EUR uit — een bedrag dat er plausibel uitziet en
+        # nergens op slaat. Dat gebeurde echt: het VREG-werkboek van 2024 parseert
+        # met de huidige parser maar 4 van de 8 netbeheerders en kent geen
+        # ELEK_LS_DIGI, waardoor een digitale meter in Aalst stilzwijgend gratis
+        # op het net zat.
+        if rows.empty:
+            beschikbaar_type = sorted(
+                self.repo.dnb[self.repo.dnb.Netbeheerder==code].Klanttype.dropna().unique()
+            )
+            beschikbaar_nb = sorted(self.repo.dnb.Netbeheerder.dropna().unique())
+            raise ValueError(
+                f"Geen nettarieven voor netbeheerder {code} en klanttype {kind}. "
+                + (
+                    f"Voor {code} bestaan wel: {', '.join(beschikbaar_type)}."
+                    if beschikbaar_type
+                    else f"Netbeheerder {code} komt niet voor; wel: {', '.join(beschikbaar_nb)}."
+                )
+            )
+        def val(detail,unit=None,tarifftype=None,bevat=None,verplicht=False):
             q=rows[rows.Tariefdetail.str.casefold().eq(detail.casefold())]
             if unit:q=q[q.Tariefnotering==unit]
             if tarifftype:q=q[q.Tarieftype.str.casefold().eq(tarifftype.casefold())]
-            return D(str(q.iloc[0].Prijs_num)) if not q.empty else D("0")
-        normal=val("kWh-tarief","EUR/kW","Tarieven voor netgebruik") or val("Vaste term","EUR/kWh","Tarieven voor netgebruik")
+            # `bevat` matcht op een deelstring van het tarieftype. Het werkboek
+            # schrijft "Tarieven voor het netgebruik"; een exacte match op
+            # "Tarieven voor netgebruik" mist dat, en een gemiste match geeft
+            # hier stil D("0") in plaats van een fout.
+            if bevat:q=q[q.Tarieftype.str.casefold().str.contains(bevat.casefold(),na=False)]
+            if q.empty:
+                # Manifest §12: een ontbrekend verplicht tarief stopt de
+                # berekening. Een tarief dat er *is* en 0 bedraagt is iets
+                # anders dan een tarief dat ontbreekt — vandaar dat hier op de
+                # afwezigheid van de rij getoetst wordt en niet op de waarde.
+                if verplicht:
+                    raise ValueError(
+                        f"Nettarief ontbreekt voor {code}/{kind}: {detail!r}"
+                        + (f" ({unit})" if unit else "")
+                        + ". Zonder dat tarief zou de netkost stil te laag "
+                        "uitvallen."
+                    )
+                return D("0")
+            return D(str(q.iloc[0].Prijs_num))
+        # Het volumetrische distributienettarief. Deze lookup zocht op notering
+        # "EUR/kW" en tarieftype "Tarieven voor netgebruik", terwijl het
+        # werkboek "EUR/kWh" en "Tarieven voor het netgebruik" schrijft — beide
+        # filters misten, dus stond de term stil op nul. Bij FMV 2026 en
+        # 3.000 kWh scheelde dat 74,62 EUR per jaar op de netkost, zonder
+        # foutmelding. Eén lookup volstaat voor digitaal (0,024864 EUR/kWh) en
+        # analoog (0,057772 EUR/kWh): `rows` is al op klanttype gefilterd.
+        normal=val("kWh-tarief","EUR/kWh",bevat="netgebruik")
         odv_n=val("kWh-tarief normaal","EUR/kWh"); odv_x=val("kWh-tarief exclusief nacht","EUR/kWh")
         toe=val("Tarieven voor de toeslagen","EUR/kWh"); data=val("Laagspanningnet","EUR/jaar")
         volume=p.afname_dag_kwh*(normal+odv_n+toe)+p.afname_nacht_kwh*(normal+odv_x+toe)
         if p.meter=="digitaal":
-            rate=val("Gemiddelde maandpiek","EUR/kW/jaar")
+            # Bij een digitale meter is het capaciteitstarief de grootste post
+            # van de netkost; ontbreekt het, dan klopt er niets van het bedrag.
+            rate=val("Gemiddelde maandpiek","EUR/kW/jaar",verplicht=True)
             peaks=p.maandpieken_kw or tuple([p.geschatte_maandpiek_kw]*12)
             floor=p.minimum_maandpiek_kw
             capacity=sum((max(x,floor)*rate/D("12") for x in peaks),D("0"))
@@ -36,21 +83,59 @@ class Calculator:
             minimum=floor*rate
             grid=max(capacity_plus_volume,minimum)+data
         else:
-            fixed=val("Vaste term","EUR/jaar","Tarieven voor netgebruik")
+            # Zelfde tarieftype-mismatch als hierboven: de vaste term van de
+            # analoge klantcategorie (125,31 EUR/jaar bij FMV 2026) viel weg.
+            fixed=val("Vaste term","EUR/jaar",bevat="netgebruik",verplicht=True)
             pros=val("Aanvullend capaciteitstarief voor prosumenten met terugdraaiende teller","EUR/kW/jaar")*p.omvormer_kva
             grid=fixed+volume+data+pros
         return grid
 
     @staticmethod
-    def formula_ct(f: dict[str,Any], overrides: Optional[dict[str,Decimal]]=None) -> Decimal:
-        
+    def _index(f: dict[str,Any], letter: str) -> dict[str,Any]:
+        """De indexparameter `letter` uit een formule, of een leeg record.
+
+        `DataRepository.products()` schrijft `formula["index_A"] = {"name": ...,
+        "value": ...}`; deze klasse las eerder `f.get("A")` en `f.get("name_A")`.
+        Die sleutels bestonden niet, dus zag de guard in `supplier_cost()` nooit
+        een indexwaarde en viel *elk* variabel product terug op de door VREG
+        meegeleverde berekende prijs — met waarschuwing, maar zonder dat de
+        formule ooit gerekend heeft.
+        """
+        waarde=f.get(f"index_{letter}")
+        return waarde if isinstance(waarde,dict) else {}
+
+    @classmethod
+    def heeft_indexwaarde(cls, f: dict[str,Any]) -> bool:
+        """Is deze formule met haar eigen indexwaarden door te rekenen?"""
+        return any(
+            cls._index(f,letter).get("value") is not None
+            and (f.get(coeff) or D("0")) != 0
+            for coeff,letter in zip("abcd","ABCD")
+        )
+
+    @classmethod
+    def formula_ct(cls, f: dict[str,Any], overrides: Optional[dict[str,Decimal]]=None) -> Decimal:
         overrides=overrides or {}; total=f.get("z") or D("0")
         for coeff,letter in zip("abcd","ABCD"):
-            x=overrides.get(f.get(f"name_{letter}")) or f.get(letter)
+            index=cls._index(f,letter)
+            if not index: continue
+            x=overrides.get(index.get("name")) or index.get("value")
             if x is not None: total += (f.get(coeff) or D("0"))*x
         return total
 
-    def supplier_cost(self, product:Product,p:Profile, market:Optional[pd.DataFrame]=None, intervals:Optional[pd.DataFrame]=None)->tuple[Decimal,list[str]]:
+    def supplier_cost(self, product:Product,p:Profile, market:Optional[pd.DataFrame]=None,
+                      intervals:Optional[pd.DataFrame]=None, *,
+                      sta_vlak_profiel:bool=True)->tuple[Decimal,list[str]]:
+        """De leverancierskost van één product voor dit profiel.
+
+        `sta_vlak_profiel=False` weigert de terugval op een vlak lastprofiel bij
+        een dynamisch product. Voor afname is dat vlakke profiel een grove maar
+        bruikbare benadering (Manifest §9: "uitsluitend voor demonstratie"); voor
+        *injectie* is het onzin. Zonneproductie is nul bij nacht en piekt rond de
+        middag, precies wanneer de marktprijs het laagst is — een vlakke spreiding
+        waardeert die kWh tegen het daggemiddelde en overschat de opbrengst
+        systematisch. Liever stoppen dan een plausibel ogend, te hoog bedrag.
+        """
         warnings=[]; total=p.afname_kwh; fixed=product.components.get("fixed_fee",D("0"))
         extras=(product.components.get("green",D("0"))+product.components.get("wkk",D("0")))/D("100")*total
         if product.kind.startswith("vast"):
@@ -62,11 +147,11 @@ class Calculator:
             if not fd: raise ValueError("Variabel product mist formule")
             # supplied VNR/laatst gekende indexwaarden zijn authoritative; ENTSO-E raw gemiddelde is niet gelijk aan RLP-gewogen indices
             d=self.formula_ct(fd); n=self.formula_ct(fn or fd)
-            if not any(fd.get(letter) is not None and (fd.get(coeff) or D("0")) != 0 for coeff, letter in zip("abcd", "ABCD")):
+            if not self.heeft_indexwaarde(fd):
                 fallback=product.components.get("day",product.components.get("single"))
                 if fallback is None: raise ValueError("Variabele formule mist indexwaarde en berekende prijs")
                 d=fallback; warnings.append("Variabele prijs gebruikt de aangeleverde berekende Prijs omdat de indexwaarde ontbreekt.")
-            if fn and not any(fn.get(letter) is not None and (fn.get(coeff) or D("0")) != 0 for coeff, letter in zip("abcd", "ABCD")):
+            if fn and not self.heeft_indexwaarde(fn):
                 n=product.components.get("night",d)
             return p.afname_dag_kwh*d/D("100")+p.afname_nacht_kwh*n/D("100")+fixed+extras,warnings
         if product.kind.startswith("dynamisch"):
@@ -74,6 +159,12 @@ class Calculator:
             if not f: raise ValueError("Dynamisch product mist formule")
             if market is None or market.empty: raise ValueError("Geen ENTSO-E marktprijzen voor dynamisch product")
             if intervals is None or intervals.empty:
+                if not sta_vlak_profiel:
+                    raise ValueError(
+                        "Een dynamisch product vereist hier een echte "
+                        "kwartierreeks; een vlak profiel is geen benadering "
+                        "maar een systematische afwijking."
+                    )
                 warnings.append("Dynamisch tarief benaderd met vlak verbruiksprofiel; laad kwartierdata voor een exacte berekening.")
                 w=total/D(str(len(market))); usage=pd.DataFrame({"timestamp":market.timestamp,"afname_kwh":float(w)})
             else:
@@ -87,11 +178,35 @@ class Calculator:
             else:u["market_ts"]=u.timestamp.dt.floor("15min")
             merged=u.merge(m,left_on="market_ts",right_on="timestamp",how="inner",suffixes=("_usage","_market"))
             if merged.empty: raise ValueError("Verbruik en marktprijzen overlappen niet")
+            # Een inner join laat elk interval vallen waarvoor geen prijs bestaat.
+            # Dat is stil gratis verbruik: Manifest §12 zegt dat een ontbrekende
+            # marktprijs een interval niet stilzwijgend mag laten verdwijnen.
+            # We meten daarom het volume vóór en na de koppeling.
+            aangeboden=D(str(u.afname_kwh.sum())); gekoppeld=D(str(merged.afname_kwh.sum()))
+            if aangeboden>0 and (aangeboden-gekoppeld)/aangeboden>D("0.0001"):
+                ontbreekt=len(u)-len(merged)
+                raise ValueError(
+                    f"Voor {ontbreekt} van de {len(u)} intervallen is er geen "
+                    f"marktprijs ({gekoppeld:.3f} van {aangeboden:.3f} kWh gedekt). "
+                    "Die energie zou anders gratis zijn; vul de prijsreeks aan "
+                    "met `energievergelijker market sync --start --end`."
+                )
             a=f.get("a") or D("0"); z=f.get("z") or D("0")
             # a * EUR/MWh + z geeft ct/kWh volgens de VNR-formules in de masterdata.
             energy=sum((D(str(r.afname_kwh))*((a*D(str(r.price_eur_mwh))+z)/D("100")) for r in merged.itertuples()),D("0"))
             return energy+fixed+extras,warnings
         raise ValueError(f"Onbekend tarieftype: {product.kind}")
+
+    def levies(self,p:Profile,jaar:int,maand:int)->Decimal:
+        """Publieke ingang op de heffingenberekening.
+
+        Bestaat omdat een oproeper die per deelperiode rekent de heffingen apart
+        nodig heeft: ze zijn een *jaar*grootheid (progressieve schijven over het
+        jaarverbruik, energiefonds per maand) en worden naar dagen geschaald,
+        terwijl de energiekost bij een dynamisch product per interval berekend
+        wordt. `calculate()` kan die twee niet uit elkaar houden.
+        """
+        return self._levies(p,jaar,maand)
 
     def _levies(self,p:Profile,jaar:int,maand:int)->Decimal:
         # Manifest §12: "Ontbrekend verplicht tarief: berekening stoppen" —
@@ -117,7 +232,8 @@ class Calculator:
         energiefonds=self.heffingen.energiefonds_per_jaar("laag",fonds_categorie,jaar)
         return bijzondere_accijns+energiebijdrage+energiefonds
 
-    def calculate(self,product:Product,p:Profile,market=None,intervals=None,inject_product:Optional[Product]=None)->Cost:
+    def calculate(self,product:Product,p:Profile,market=None,intervals=None,
+                  inject_product:Optional[Product]=None,injectie_intervals=None)->Cost:
         if product.energy.lower() not in ("elektriciteit","electricity"):
             # De heffingen op aardgas staan sinds de kalibratie van
             # 2026-08-31 wél in config/heffingen/. Wat nog ontbreekt is de
@@ -137,8 +253,23 @@ class Calculator:
             if inject_product is None: warnings.append("Injectie niet verrekend: geen terugleveringsproduct gekoppeld.")
             else:
                 # vaste/variabele injectie op dezelfde componentlogica, zonder nettarieven
-                ip=Profile(p.postcode,p.gemeente,p.segment,p.meter,p.injectie_dag_kwh,p.injectie_nacht_kwh)
-                credit,_=self.supplier_cost(inject_product,ip,market,intervals)
+                # Keyword-argumenten, niet positioneel: de injectievolumes gaan
+                # bewust in de afname-slots (injectieprijzen volgen dezelfde
+                # componentlogica), maar positioneel zou een nieuw veld vóór
+                # `afname_dag_kwh` dat stil verkeerd binden.
+                ip=Profile(postcode=p.postcode,gemeente=p.gemeente,segment=p.segment,
+                           meter=p.meter,afname_dag_kwh=p.injectie_dag_kwh,
+                           afname_nacht_kwh=p.injectie_nacht_kwh)
+                # `injectie_intervals`, niet `intervals`. Hier stond de
+                # afnamereeks, waardoor een dynamisch injectieproduct het
+                # *verbruik* tegen de injectieprijs waardeerde. Voor een vast of
+                # variabel product viel dat niet op (die gebruiken enkel de
+                # jaartotalen uit `ip`), maar verbruik en injectie hebben
+                # tegengestelde dagprofielen: 's nachts verbruik en geen zon,
+                # 's middags zon en weinig verbruik.
+                credit,inj_warnings=self.supplier_cost(
+                    inject_product,ip,market,injectie_intervals,sta_vlak_profiel=False)
+                warnings.extend(inj_warnings)
         taxable=supplier+grid+levies-credit
         vat=max(taxable,D("0"))*self.vat
         return Cost(supplier,grid,levies,credit,vat,warnings)

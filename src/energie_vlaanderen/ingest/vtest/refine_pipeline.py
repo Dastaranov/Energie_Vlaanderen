@@ -75,7 +75,7 @@ class VTestRefinePipeline:
         kwh_elektriciteit: int = 15000,
         kwh_gas: int = 10000,
         headless: bool = True,
-        browser: str = "chrome",
+        browser: str = "firefox",
         timeout: int = 60,
         skip_download: bool = False,
         contractdetails: dict[str, dict[str, str]] | None = None,

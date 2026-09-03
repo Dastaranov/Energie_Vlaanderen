@@ -1,9 +1,12 @@
 from __future__ import annotations
+import logging
 from dataclasses import dataclass
 from typing import Any
 import pandas as pd
 from energie_vlaanderen.utility.constants import DNB_CODES
 from energie_vlaanderen.utility.normalizer import clean_text
+
+LOG = logging.getLogger(__name__)
 
 class TariffNormalizationError(RuntimeError):
     pass
@@ -27,6 +30,11 @@ GAS_AFNAME_COLS = [
 
 # Elektriciteit afname: (column_index, klanttype_label). Kolommen 7, 10, 12
 # zijn altijd-lege scheidingskolommen in de bron en komen hier niet in voor.
+# De laagspanningskolommen staan hier op 13/14/15; dat klopt voor de jaargangen
+# 2025 en 2026. Het werkboek van 2024 heeft één kolom méér en schuift ze naar
+# 14/15/16. Daarom leidt `TariffWorkbookParser` ze per blad af uit de koppen en
+# krijgt die kaart voorrang; deze lijst is de terugval en levert daarnaast de
+# midden- en hoogspanningskolommen.
 ELEK_AFNAME_COLS = [
     (5, "ELEK_HS1"),
     (6, "ELEK_HS2"),
@@ -37,6 +45,12 @@ ELEK_AFNAME_COLS = [
     (14, "ELEK_LS_ANA"),
     (15, "ELEK_LS_ANA_PRO"),
 ]
+
+# De niet-laagspanningskolommen uit die lijst. Ze worden alleen gebruikt wanneer
+# de bladindeling overeenkomt met de bekende; bij een afwijkende indeling (2024)
+# zou een vaste index ze aan het verkeerde spanningsniveau hangen.
+ELEK_AFNAME_NIET_LS = [(i, k) for i, k in ELEK_AFNAME_COLS if not k.startswith("ELEK_LS_")]
+ELEK_LS_STANDAARDKAART = {i: k for i, k in ELEK_AFNAME_COLS if k.startswith("ELEK_LS_") and k != "ELEK_LS_DC"}
 
 # Elektriciteit injectie: Tariefdetail-tekst -> klanttypes waarop de prijs van
 # toepassing is (fan-out). Eerste match wint.
@@ -74,17 +88,39 @@ class NormalizedTariffData:
         return tuple(i for i in self.issues if i.severity == "warning")
 
 class TariffDataNormalizer:
-    def normalize(self, afname: pd.DataFrame, injectie: pd.DataFrame) -> NormalizedTariffData:
+    def normalize(
+        self,
+        afname: pd.DataFrame,
+        injectie: pd.DataFrame,
+        kolomkaarten: dict[str, dict[int, str]] | None = None,
+    ) -> NormalizedTariffData:
+        """`kolomkaarten` geeft per werkblad de laagspanningskolommen uit de koppen.
+
+        Ontbreekt de kaart voor een blad, dan valt de normalisatie terug op de
+        vaste kolomindices. Die kloppen voor 2025 en 2026 maar niet voor 2024.
+        """
         issues: list[RowIssue] = []
-        norm_afname = self._normalize_frame(afname, direction="Afname", issues=issues)
-        norm_injectie = self._normalize_frame(injectie, direction="Injectie", issues=issues)
+        norm_afname = self._normalize_frame(
+            afname, direction="Afname", issues=issues, kolomkaarten=kolomkaarten or {}
+        )
+        norm_injectie = self._normalize_frame(
+            injectie, direction="Injectie", issues=issues, kolomkaarten=kolomkaarten or {}
+        )
         return NormalizedTariffData(afname=norm_afname, injectie=norm_injectie, issues=tuple(issues))
 
-    def _normalize_frame(self, frame: pd.DataFrame, direction: str, issues: list[RowIssue]) -> pd.DataFrame:
+    def _normalize_frame(
+        self,
+        frame: pd.DataFrame,
+        direction: str,
+        issues: list[RowIssue],
+        kolomkaarten: dict[str, dict[int, str]] | None = None,
+    ) -> pd.DataFrame:
         if frame.empty:
             return pd.DataFrame()
 
         out = []
+        # Eén waarschuwing per blad, niet één per rij.
+        gemeld: set[str] = set()
         current_hoofdgroep = ""
         # Naam van de vorige tariefregel, om "of"-vervolgregels aan te hangen.
         vorige_desc = ""
@@ -103,6 +139,26 @@ class TariffDataNormalizer:
             dnb_mapped = dnb_code if dnb_code in VALID_DNB_ABBREVIATIONS else None
 
             if not dnb_mapped:
+                # Stil overslaan verbergt hoeveel er wegvalt. Het werkboek van
+                # 2024 draagt de tien Fluvius-entiteiten van vóór de fusie
+                # (GW, INT, IVK, IVRLK, PBE, SIB naast FA/FI/FL/FW); die zes
+                # bestaan sinds 2025 niet meer en staan niet in DNB_CODES. Hun
+                # tarieven zijn nu niet bruikbaar, want er is ook geen
+                # postcode->netbeheerder-koppeling voor die periode — maar dat
+                # hoort een zichtbare bevinding te zijn, geen stilte.
+                if dnb_code and dnb_code not in gemeld:
+                    gemeld.add(dnb_code)
+                    issues.append(RowIssue(
+                        source_sheet=source_sheet,
+                        severity="warning",
+                        message=(
+                            f"Netbeheerder {dnb_code!r} staat niet in DNB_CODES en "
+                            "wordt overgeslagen. Bij oudere jaargangen zijn dit de "
+                            "entiteiten van vóór de Fluvius-fusie van 2025; hun "
+                            "tarieven zijn zonder historische postcodekoppeling "
+                            "niet toe te wijzen."
+                        ),
+                    ))
                 continue
 
             source_row_raw = row.get("source_row")
@@ -167,9 +223,13 @@ class TariffDataNormalizer:
                             if val is not None:
                                 out.append({**base_data, "Tariefnotering": unit, "Klanttype": klanttype, "Prijs_num": val})
                 else:
-                    if len(row) > 15:
+                    kolommen = self._elek_afname_kolommen(
+                        source_sheet, (kolomkaarten or {}).get(source_sheet), gemeld
+                    )
+                    benodigd = max(i for i, _ in kolommen) if kolommen else 15
+                    if len(row) > benodigd:
                         unit = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
-                        for col_idx, klanttype in ELEK_AFNAME_COLS:
+                        for col_idx, klanttype in kolommen:
                             val = self._safe_price(row.iloc[col_idx])
                             if val is not None:
                                 out.append({**base_data, "Tariefnotering": unit, "Klanttype": klanttype, "Prijs_num": val})
@@ -217,3 +277,40 @@ class TariffDataNormalizer:
             return float(val)
         except (ValueError, TypeError):
             return None
+
+    @staticmethod
+    def _elek_afname_kolommen(
+        source_sheet: str,
+        kaart: dict[int, str] | None,
+        gemeld: set[str],
+    ) -> list[tuple[int, str]]:
+        """De te lezen kolommen voor dit afnameblad.
+
+        Is er een uit de koppen afgeleide kaart, dan bepaalt die de
+        laagspanningskolommen. De midden- en hoogspanningskolommen komen uit de
+        vaste lijst, maar alleen wanneer de bladindeling overeenkomt met de
+        bekende — herkenbaar aan de laagspanningskolommen die dan op 13/14/15
+        staan. Wijkt de indeling af (het werkboek van 2024 heeft één kolom meer
+        en een heel andere hoogspanningsindeling), dan worden MS/HS
+        overgeslagen: ze op een vaste index lezen zou tarieven aan het
+        verkeerde spanningsniveau hangen, en dat is erger dan ze weglaten.
+        Manifest §7.2 verbiedt residentiële formules op MS/HS hoe dan ook.
+        """
+        if not kaart:
+            return list(ELEK_AFNAME_COLS)
+
+        kolommen = sorted(kaart.items())
+        if kaart == ELEK_LS_STANDAARDKAART:
+            return sorted(ELEK_AFNAME_NIET_LS + kolommen)
+
+        if source_sheet not in gemeld:
+            gemeld.add(source_sheet)
+            LOG.warning(
+                "Werkblad %s heeft een afwijkende kolomindeling "
+                "(laagspanning op %s in plaats van %s). De laagspannings"
+                "tarieven worden uit de koppen gelezen; midden- en "
+                "hoogspanning worden overgeslagen omdat hun indeling niet "
+                "te herkennen is.",
+                source_sheet, sorted(kaart), sorted(ELEK_LS_STANDAARDKAART),
+            )
+        return kolommen

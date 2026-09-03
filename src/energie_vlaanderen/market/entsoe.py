@@ -57,6 +57,15 @@ class EntsoeMarketData:
         cache_key = f"period:{BE_DOMAIN}:{s_utc.isoformat()}:{e_utc.isoformat()}"
         rows = store.get(cache_key)
 
+        if rows is None:
+            # De cachesleutel is de volledige periodestring, dus een ander
+            # datumbereik miste hem altijd — ook wanneer de gevraagde dagen er
+            # allang in zaten. Wie in januari een halfjaar ophaalde en daarna
+            # één maand opvroeg, kreeg een lege reeks terug of haalde alles
+            # opnieuw op. Daarom eerst kijken of de al opgeslagen periodes het
+            # gevraagde venster dekken.
+            rows = self._uit_cache(store, s_utc, e_utc)
+
         if rows is None and allow_api:
             if not self.api_key:
                 raise ValueError(
@@ -80,6 +89,69 @@ class EntsoeMarketData:
             df["price_eur_mwh"] = df["price"]
 
         return df[(df.timestamp >= s_utc) & (df.timestamp < e_utc)].sort_values("timestamp").drop_duplicates("timestamp")
+
+    @staticmethod
+    def _uit_cache(store: dict, start_utc: datetime, end_utc: datetime):
+        """Bedien het venster uit al opgeslagen periodes, of geef niets terug.
+
+        Alle gecachte rijen worden samengevoegd en ontdubbeld op tijdstip. Het
+        venster geldt als gedekt wanneer er een punt op of vóór de start staat,
+        een punt binnen de laatste stap vóór het einde, en er nergens een gat
+        groter dan die stap zit.
+
+        Die laatste voorwaarde is het punt: een deels gevulde cache stil
+        aanvaarden zou bij een dynamisch contract de ontbrekende kwartieren
+        gratis maken. Manifest §12 — een ontbrekende marktprijs mag geen
+        interval stilzwijgend laten verdwijnen. Bij twijfel dus liever niets
+        teruggeven en de oproeper laten beslissen.
+        """
+        samen: dict[str, dict] = {}
+        for sleutel, rijen in store.items():
+            if not sleutel.startswith("period:") or not isinstance(rijen, list):
+                continue
+            for rij in rijen:
+                tijdstip = rij.get("timestamp")
+                if tijdstip:
+                    samen[tijdstip] = rij
+        if not samen:
+            return None
+
+        df = pd.DataFrame(list(samen.values()))
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        df = df.sort_values("timestamp")
+        binnen = df[(df.timestamp >= start_utc) & (df.timestamp < end_utc)]
+        if binnen.empty:
+            return None
+
+        stap = binnen["timestamp"].diff().dropna().median()
+        if pd.isna(stap) or stap <= pd.Timedelta(0):
+            return None
+        dekt_start = binnen["timestamp"].iloc[0] <= start_utc + stap
+        dekt_einde = binnen["timestamp"].iloc[-1] >= end_utc - stap
+        if not (dekt_start and dekt_einde):
+            LOG.warning(
+                "Marktprijscache begint op %s en eindigt op %s; dat dekt "
+                "%s..%s niet. De cache wordt niet gebruikt.",
+                binnen["timestamp"].iloc[0], binnen["timestamp"].iloc[-1],
+                start_utc.date(), end_utc.date(),
+            )
+            return None
+
+        # Gaten *binnen* het venster worden hier gemeld maar niet geweigerd. Wie
+        # de reeks gebruikt voor een dynamische berekening merkt ze zelf:
+        # `Calculator.supplier_cost()` vergelijkt het gekoppelde volume met het
+        # aangeboden volume en stopt wanneer er energie zonder prijs overblijft.
+        # Hier weigeren zou ook de gevallen blokkeren waar de gaten buiten de
+        # gebruikte uren vallen.
+        grootste_gat = binnen["timestamp"].diff().max()
+        if grootste_gat > stap:
+            ontbrekend = int((binnen["timestamp"].diff().dropna() / stap - 1).clip(lower=0).sum())
+            LOG.warning(
+                "Marktprijscache mist ongeveer %d intervallen tussen %s en %s "
+                "(grootste gat %s bij een resolutie van %s).",
+                ontbrekend, start_utc.date(), end_utc.date(), grootste_gat, stap,
+            )
+        return binnen.to_dict("records")
 
     @staticmethod
     def _aware(x: datetime) -> datetime:

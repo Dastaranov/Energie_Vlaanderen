@@ -49,9 +49,11 @@ class VTestHtmlDownloader:
         kwh_elektriciteit: int = 15000,
         kwh_gas: int = 10000,
         headless: bool = True,
-        browser: str = "chrome",
+        browser: str = "firefox",
         timeout: int = 60,
         force_eigen_verbruik: bool = False,
+        injectie_kwh: int = 0,
+        omvormer_kva: float | None = None,
         contractdetails: dict[str, dict[str, str]] | None = None,
         reeds_gekend: set[str] | None = None,
     ) -> str:
@@ -77,6 +79,13 @@ class VTestHtmlDownloader:
         `reeds_gekend` slaat contracten over die al opgehaald zijn; over een
         volledige matrix scheelt dat honderden kliks, want dezelfde contracten
         komen bij elke postcode terug.
+
+        `injectie_kwh`/`omvormer_kva`: jaarlijkse teruglevering en
+        omvormervermogen. Groter dan nul zet `HasSolarPanels` aan, waardoor
+        vtest.be de injectievelden toont en een injectievergoeding meerekent.
+        Nul (standaard) houdt het formulier zoals het voor de tariefkalibratie
+        nodig is: geen zonnepanelen, zodat de factuur enkel van het verbruik
+        afhangt.
 
         `force_eigen_verbruik`: forceer tab2 ("Ik ken mijn verbruik") ook voor
         segment "woning". Nodig voor de kalibratieruns
@@ -240,24 +249,76 @@ class VTestHtmlDownloader:
                                 driver.execute_script("arguments[0].click();", el)
                         except NoSuchElementException:
                             pass
-                    for check_id in ("HasSolarPanels", "KnowsCapacityElectricity"):
+                    # `HasSolarPanels` blijft standaard uit: dan hangt de
+                    # factuur enkel van UsageDay/UsageGas af, wat de kalibratie
+                    # van de heffingen- en nettariefformules isoleert. Wordt er
+                    # wél een injectievolume gevraagd, dan moet het vinkje juist
+                    # aan — pas dan toont vtest.be de velden InjectionDay,
+                    # KnowsInverterPower en InverterPower, en pas dan rekent hij
+                    # een injectievergoeding mee.
+                    wil_injectie = injectie_kwh > 0 and energy == "elektriciteit"
+                    # Volgorde telt: `KnowsCapacityElectricity` eerst, dan pas
+                    # `HasSolarPanels`. Andersom hertekent het uitvinken het
+                    # paneel nádat de zonnepaneelvelden verschenen zijn, waardoor
+                    # `InverterPower` kortstondig onzichtbaar is. De invulcode
+                    # slaat onzichtbare velden over, het verplichte veld bleef
+                    # leeg, en vtest.be gaf dan gewoon geen resultaten terug.
+                    for check_id, gewenst in (
+                        ("KnowsCapacityElectricity", False),
+                        ("HasSolarPanels", wil_injectie),
+                    ):
                         try:
                             el = driver.find_element(By.ID, check_id)
-                            if el.is_selected():
+                            if el.is_selected() != gewenst:
                                 driver.execute_script("arguments[0].click();", el)
                         except NoSuchElementException:
                             pass
                     time.sleep(0.3)
+
+                    if wil_injectie:
+                        # Wachten tot het paneel klaar is met hertekenen in
+                        # plaats van een vaste sleep: een te korte pauze laat
+                        # `InverterPower` leeg en dat faalt pas veel later, bij
+                        # het uitblijven van resultaten.
+                        for _ in range(20):
+                            try:
+                                if driver.find_element(By.ID, "InverterPower").is_displayed():
+                                    break
+                            except NoSuchElementException:
+                                pass
+                            time.sleep(0.25)
+                        else:
+                            LOG.warning(
+                                "InverterPower werd niet zichtbaar; vtest.be zal "
+                                "de submit weigeren."
+                            )
+
+                    if wil_injectie and not omvormer_kva:
+                        # `InverterPower` verschijnt zodra HasSolarPanels aan
+                        # staat en is dan verplicht. Zonder waarde weigert
+                        # vtest.be te submitten met "Dit is een verplicht veld!"
+                        # en verschijnen er simpelweg geen resultaten — een
+                        # foutbeeld dat er uitziet als een onbereikbare site.
+                        raise VTestDownloadError(
+                            "Een injectievolume opgeven vereist ook een "
+                            "omvormervermogen (omvormer_kva): vtest.be maakt "
+                            "het veld InverterPower verplicht zodra er "
+                            "zonnepanelen aangevinkt zijn."
+                        )
                     # De verbruikvelden hangen aan een invoermasker dat de
                     # duizendtalpunten zet ("1.000"). Dat masker slikt
                     # send_keys-toetsaanslagen: het veld blijft leeg en
                     # vtest.be weigert dan te submitten met "Dit is een
                     # verplicht veld!". Waarde rechtstreeks zetten en de
                     # input/change/blur-events zelf vuren werkt wel.
-                    for veld_id, waarde in (
-                        ("UsageDay", kwh_elektriciteit),
-                        ("UsageGas", kwh_gas),
-                    ):
+                    velden = [("UsageDay", kwh_elektriciteit), ("UsageGas", kwh_gas)]
+                    if wil_injectie:
+                        # `KnowsInverterPower` wordt bewust niet aangeklikt: dat
+                        # vinkje verbergt het invoerveld in plaats van het te
+                        # tonen, en dan blijft de verplichte waarde leeg.
+                        velden.append(("InjectionDay", injectie_kwh))
+                        velden.append(("InverterPower", omvormer_kva))
+                    for veld_id, waarde in velden:
                         try:
                             veld = driver.find_element(By.ID, veld_id)
                         except NoSuchElementException as exc:
@@ -280,58 +341,131 @@ class VTestHtmlDownloader:
                                 "vtest.be zal de submit weigeren.",
                                 veld_id, waarde,
                             )
+                    # Wat er werkelijk ingediend wordt. Zonder deze regel is een
+                    # geweigerd formulier alleen zichtbaar als "geen resultaten".
+                    # Defensief: het paneel kan al aan het hertekenen zijn.
+                    ingevuld = driver.execute_script(
+                        "return Array.from(document.querySelectorAll('input[type=text]'))"
+                        ".filter(e => e.offsetParent !== null)"
+                        ".map(e => e.id + '=' + e.value).join(', ');"
+                    )
+                    LOG.info("Ingevulde velden: %s", ingevuld or "(geen zichtbare)")
                 elif not tab1.is_selected():
                     driver.execute_script("arguments[0].click();", tab1)
             except NoSuchElementException as exc:
                 LOG.warning("Verbruik-stap mislukt: %s", exc)
             time.sleep(0.5)
 
-            # Submit-knop zoeken en klikken
-            btn = None
-            invisible = None
-            for candidate in driver.find_elements(
-                By.CSS_SELECTOR, "button, input[type='submit'], a.btn, [role='button']"
-            ):
-                text = (
-                    (candidate.get_attribute("textContent") or "")
-                    + " "
-                    + (candidate.get_attribute("value") or "")
-                ).strip().lower()
-                if any(kw in text for kw in _SUBMIT_EXCLUDE_KEYWORDS):
-                    continue
-                if any(kw in text for kw in _SUBMIT_KEYWORDS):
-                    if candidate.is_displayed() and candidate.is_enabled():
-                        btn = candidate
-                        break
-                    elif not invisible:
-                        invisible = candidate
+            # Submit-knop zoeken, klikken en wachten — in één lus.
+            #
+            # vtest.be hertekent het formulierpaneel nadat de laatste waarde
+            # ingevuld is (het klapt dicht). Een knopreferentie die vóór dat
+            # hertekenen gevonden werd is daarna stale: de klik gooit dan een
+            # `StaleElementReferenceException`, of erger, hij "lukt" maar gaat
+            # verloren omdat het element niet meer in de DOM zit. Er verschijnt
+            # dan nooit een resultaat, en dat foutbeeld is niet te onderscheiden
+            # van een onbereikbare site.
+            #
+            # Klikken en wachten zijn daarom niet gescheiden: na elke klik
+            # wachten we een stuk, en verschijnt er niets, dan zoeken we de knop
+            # opnieuw op en klikken we nog eens. Het totale geduld blijft
+            # `timeout`.
+            from selenium.common.exceptions import StaleElementReferenceException
 
-            if not btn:
-                btn = invisible
+            def _zoek_startknop():
+                zichtbaar = None
+                onzichtbaar = None
+                for kandidaat in driver.find_elements(
+                    By.CSS_SELECTOR, "button, input[type='submit'], a.btn, [role='button']"
+                ):
+                    tekst = (
+                        (kandidaat.get_attribute("textContent") or "")
+                        + " "
+                        + (kandidaat.get_attribute("value") or "")
+                    ).strip().lower()
+                    if any(kw in tekst for kw in _SUBMIT_EXCLUDE_KEYWORDS):
+                        continue
+                    if any(kw in tekst for kw in _SUBMIT_KEYWORDS):
+                        if kandidaat.is_displayed() and kandidaat.is_enabled():
+                            return kandidaat
+                        if onzichtbaar is None:
+                            onzichtbaar = kandidaat
+                return zichtbaar or onzichtbaar
 
-            if btn:
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-                time.sleep(0.5)
+            LOG.info("Startknop zoeken en op resultaten wachten (max %ds) ...", timeout)
+            # Hoogstens drie klikken, en pas opnieuw na een ruime wachttijd.
+            # Blijven klikken is geen betere strategie: de startknop hoort bij
+            # een paneel dat open- en dichtklapt, dus een tweede klik kan het
+            # formulier juist weer sluiten. Drie pogingen dekt het geval waarin
+            # de eerste klik in een hertekening verloren ging.
+            MAX_KLIKKEN = 3
+            gestart = time.monotonic()
+            gevonden = False
+            pogingen = 0
+            while time.monotonic() - gestart < timeout and pogingen < MAX_KLIKKEN:
                 try:
-                    btn.click()
-                except Exception:
-                    driver.execute_script("arguments[0].click();", btn)
-                LOG.info("Startknop geklikt.")
-            else:
-                LOG.warning("Geen startknop gevonden.")
+                    btn = _zoek_startknop()
+                    if btn is not None:
+                        pogingen += 1
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center'});", btn
+                        )
+                        time.sleep(0.3)
+                        try:
+                            btn.click()
+                        except Exception:
+                            driver.execute_script("arguments[0].click();", btn)
+                        LOG.debug("Startknop geklikt (poging %d).", pogingen)
+                except StaleElementReferenceException:
+                    # Het paneel hertekende juist nu; volgende ronde opnieuw.
+                    pass
+                except Exception as exc:
+                    LOG.debug("Startknop klikken mislukte: %s", exc)
 
-            # Wachten op resultaten
-            LOG.info("Wachten op resultaten (max %ds) ...", timeout)
-            try:
-                WebDriverWait(driver, timeout).until(
-                    EC.presence_of_element_located((By.CLASS_NAME, "resultitem"))
-                )
-                LOG.info("Resultaten geladen.")
-            except Exception as exc:
+                # Ruim wachten voordat we een tweede keer klikken: de
+                # resultatenlijst laadt lui en heeft op een trage verbinding
+                # tientallen seconden nodig.
+                geduld = max(10.0, (timeout - (time.monotonic() - gestart)) / 2)
+                verstreken = 0.0
+                while verstreken < geduld:
+                    if driver.find_elements(By.CLASS_NAME, "resultitem"):
+                        gevonden = True
+                        break
+                    time.sleep(0.5)
+                    verstreken += 0.5
+                if gevonden:
+                    break
+
+            if not gevonden:
+                # vtest.be weigert stil te submitten wanneer een veld ontbreekt
+                # of ongeldig is: er verschijnt dan een validatiemelding in de
+                # pagina en verder niets. Zonder die tekst mee te geven ziet elk
+                # formulierprobleem eruit als "site onbereikbaar".
+                meldingen: list[str] = []
+                try:
+                    tekst = driver.execute_script("return document.body.innerText") or ""
+                    for regel in tekst.split("\n"):
+                        regel = regel.strip()
+                        if regel and any(
+                            woord in regel.lower()
+                            for woord in ("verplicht", "ongeldig", "gelieve", "moet je")
+                        ):
+                            meldingen.append(regel[:160])
+                except Exception:
+                    pass
+                if meldingen:
+                    raise VTestDownloadError(
+                        f"vtest.be toonde geen resultaten na {timeout}s ondanks "
+                        f"{pogingen} klik(ken); het formulier is waarschijnlijk "
+                        "geweigerd. Meldingen op de pagina: "
+                        + " | ".join(dict.fromkeys(meldingen))[:600]
+                    )
                 raise VTestDownloadError(
-                    f"Geen resultaten verschenen na {timeout}s. "
-                    "Controleer of vtest.be bereikbaar is."
-                ) from exc
+                    f"Geen resultaten verschenen na {timeout}s ({pogingen} "
+                    "klik(ken) op de startknop). Controleer of vtest.be "
+                    "bereikbaar is."
+                )
+            LOG.info("Resultaten geladen na %d klik(ken).", pogingen)
 
             # Alle resultaten in beeld scrollen.
             #
@@ -341,6 +475,16 @@ class VTestHtmlDownloader:
             # onderneming/elektriciteit-combinaties er precies 20 op, tegenover
             # 97 bij de combinatie die los gedraaid was. Het aantal
             # combinaties dat "geslaagd" heette bleef 32.
+            #
+            # Meer geduld (60 rondes van 1,5s i.p.v. 50×1s) loste dit niet op:
+            # een volledige matrixrun op 2026-09-02 met dezelfde code gaf
+            # opnieuw exact 20 (elektriciteit) resp. 10 (gas) producten op
+            # alle onderneming-combinaties, headless Chrome. Vier onafhankelijke
+            # losse runs met Firefox — headless én zichtbaar, verschillende
+            # postcodes — haalden telkens de volle lijst binnen (82/54). Geen
+            # timingprobleem dus, maar headless Chrome die de lazy-load voor
+            # segment onderneming structureel niet volledig triggert. Vandaar
+            # firefox als standaard `--browser` (cli/groups.py), niet chrome.
             last_count = 0
             stable_rounds = 0
             for _ in range(60):

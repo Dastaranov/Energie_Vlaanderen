@@ -1,0 +1,26 @@
+# PLACEHOLDER — geen datasheet geraadpleegd. Growatt SPH 5000 is gekozen als
+# representatief voorbeeld van een gangbaar hybride omvormermodel, niet omdat
+# de gebruiker dit model bezit. Elk getal hieronder is een educated guess ter
+# illustratie van het schema en MOET vervangen worden vóór gebruik in een
+# echte berekening.
+#
+# data/datasheets/hybrid/ en data/datasheets/solar/ staan klaar om een echte
+# omvormer-/paneeldatasheet in te bewaren zodra die er is (zie de aanpak in
+# config/hardware/batterijen/ voor de drie Marstek-modellen: dit bestand
+# hoort te verdwijnen of vervangen te worden zodra dat gebeurt).
+bron = "GEEN — placeholder, nog geen datasheet geraadpleegd"
+
+[omvormer]
+merk = "Growatt"
+model = "SPH 5000"
+product_type = "hybride"
+nominaal_ac_vermogen_w = 5000.0
+max_ac_vermogen_w = 5000.0
+max_dc_vermogen_w = 6500.0
+num_phase = 1
+europees_rendement_pct = 97.0
+
+geverifieerd = false
+datasheet_versie = ""
+datasheet_datum = ""
+opgehaald_op = ""

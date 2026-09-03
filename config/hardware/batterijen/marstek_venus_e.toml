@@ -1,0 +1,84 @@
+# MARSTEK VENUS-E (basismodel, 2,5 kW / 5,12 kWh) — dit is het model dat het
+# oude demo-script (calculation/simulator_battery.py) informeel "Venus 5.12"
+# noemde. De officiële modelnaam op de datasheet zelf is "MARSTEK VENUS-E".
+#
+# Bron: data/datasheets/battery/plug_and_play/VENUS-E-3.0-datasheet.pdf
+# (specificatietabel, pagina 2, "SPECIFICATIONS").
+#
+# Rechtstreeks van de datasheet overgenomen: max_capacity_kwh (5120 Wh),
+# max_cycle (">6000"), max_depth_of_discharge_pct (90%), max_charge_w en
+# max_discharge_w (Rated Input/Output Power on-grid, 2,5 kVA),
+# smax_apparent_power_w (Max. Apparent Output Power backup, 3,5 kVA/10s),
+# round_trip_efficiency_pct (Battery-AC Side Max. Efficiency, ">93,5%").
+#
+# NIET op de datasheet, dus modelaannames (niet geverifieerd):
+# - standby_power_w: sluimerverbruik wordt nergens vermeld; 15 W is een
+#   ordegrootte-schatting, overgenomen uit het oude demo-script.
+# - rte_ac_dc_pct/rte_dc_ac_pct/rte_storage_pct: de datasheet geeft één
+#   gecombineerd cijfer (>93,5%), geen aparte AC/DC-, DC/AC- en
+#   opslagfactoren. Hier ontbonden als 99% opslagverlies x twee gelijke
+#   conversiefactoren, zodat het product ≈ 93,5% blijft
+#   (0,99 x 0,972 x 0,972 ≈ 0,935) — een gemodelleerde opsplitsing, geen
+#   apart gepubliceerd cijfer.
+# - ramp_up_time_s: niet vermeld, 0,5 s is een schatting.
+# - eol_criteria_pct: 80% is de gangbare industrieconventie voor
+#   levensduurcriterium, geen productspecifiek cijfer van Marstek.
+# - c_rate: wél afgeleid uit de datasheet (2500 W / 5120 Wh ≈ 0,49C, hier
+#   afgerond op 0,5C), geen los gepubliceerd C-rate-cijfer.
+#
+# Daarom: geverifieerd = false. De kerncijfers voor de simulatie (capaciteit,
+# vermogen, cycli, DoD) zijn wél reëel en bronvermeld — alleen niet élk veld
+# in dit bestand komt letterlijk van de fabrikant.
+bron = "data/datasheets/battery/plug_and_play/VENUS-E-3.0-datasheet.pdf + Synergrid C10/26-lijst (uitgave 2026-08-26), regel GLV265-07-0004"
+
+[batterij]
+merk = "Marstek"
+model = "Venus E"
+
+# De volgende vier velden komen uit de Synergrid C10/26-lijst
+# (uitgave 2026-08-26, regel GLV265-07-0004, "MARSTEK Venus-E energy cube",
+# modelreferentie MST-BIE5-2500, firmware V137). Dat is de officiele Belgische
+# homologatielijst: staat een toestel er niet in, dan mag de netbeheerder de
+# aansluiting weigeren. Ze is daarmee een sterkere bron dan de
+# fabrikantsdatasheet, en de enige onafhankelijke controle op deze masterdata.
+#
+# `smax_apparent_power_w` stond hier op 3500 VA, met "3,5 kVA piek (10s)" als
+# verantwoording. Dat cijfer staat wel in de datasheet, maar onder *Back-up
+# (Off Grid)*: "Max. Apparent Output Power 3.5kVA, 10s" — een off-grid piek van
+# tien seconden. Dit veld betekent iets anders: het continu schijnbaar vermogen
+# op het net. De datasheet noemt daarvoor onder *AC Input/Output (On Grid)*
+# "Rated Output Power 2.5kVA / 800VA", en C10/26 homologeert het toestel in
+# precies die twee varianten (GLV265-07-0004 op 2500 VA, GLV265-07-0002 op
+# 800 VA). Twee grootheden door elkaar dus, 40% te hoog.
+#
+# `power_control_system` stond op "Hybride", een beschrijving van de topologie.
+# De lijst bedoelt met deze kolom iets anders: hoe het toestel zijn vermogen
+# stuurt. Voor dit model is dat een externe stroomtransformator met een
+# TPM-100CTW-meter.
+synergrid_id = "GLV265-07-0004"
+power_control_system = "external CT + TPM-100CTW"
+p_active_power_w = 2500.0
+smax_apparent_power_w = 2500.0
+num_phase = 1
+
+max_charge_w = 2500.0
+max_discharge_w = 2500.0
+max_capacity_kwh = 5.12
+minimum_capacity_pct = 10.0
+standby_power_w = 15.0
+
+round_trip_efficiency_pct = 93.5
+rte_ac_dc_pct = 97.2
+rte_dc_ac_pct = 97.2
+rte_storage_pct = 99.0
+ramp_up_time_s = 0.5
+
+max_cycle = 6000
+max_depth_of_discharge_pct = 90.0
+c_rate = 0.5
+eol_criteria_pct = 80.0
+
+geverifieerd = false
+datasheet_versie = ""
+datasheet_datum = ""
+opgehaald_op = "2026-09-02"
