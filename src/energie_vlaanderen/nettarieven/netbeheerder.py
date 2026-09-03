@@ -25,6 +25,7 @@ Twee dingen die de vorm bepalen:
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -105,6 +106,35 @@ class NetbeheerderRegister:
                 )
 
         return cls(bron=pad, _per_postcode=index)
+
+    @classmethod
+    def uit_rijen(
+        cls,
+        rijen: Iterable[tuple[str, str, str | None, str | None]],
+        *,
+        herkomst: str = "databank",
+    ) -> "NetbeheerderRegister":
+        """Bouw het register uit rijen `(postcode, gemeente, dnb_elek, dnb_gas)`.
+
+        Bestaat zodat de databank dezelfde opzoeking krijgt als het CSV, en niet
+        een tweede implementatie ernaast. De regel die postcode 2387
+        (Zondereigen/Baarle-Hertog) niet laat raden, hoort op één plek te staan.
+        """
+        index: dict[tuple[str, str], dict[str, tuple[str, str]]] = {}
+        for postcode_ruw, gemeente_ruw, dnb_elek, dnb_gas in rijen:
+            postcode = clean_text(postcode_ruw)
+            gemeente = clean_text(gemeente_ruw)
+            if not postcode:
+                continue
+            for energie_type, naam_ruw in (("elektriciteit", dnb_elek), ("gas", dnb_gas)):
+                naam = clean_text(naam_ruw or "")
+                if not naam:
+                    continue
+                index.setdefault((postcode, energie_type), {})[gemeente.casefold()] = (
+                    gemeente,
+                    naam,
+                )
+        return cls(bron=Path(herkomst), _per_postcode=index)
 
     def dnb_for(
         self,

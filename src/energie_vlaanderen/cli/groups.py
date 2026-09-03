@@ -523,6 +523,92 @@ def _add_db_group(subparsers: argparse._SubParsersAction) -> None:
     add_json_flag(status_parser)
     status_parser.set_defaults(handler=db.run_db_status)
 
+    # `verify` toetst of de databank dezelfde versie draagt als current.txt.
+    # Dat zegt niets over de inhoud: een tabel kan compleet en toch onbruikbaar
+    # zijn. `audit` stelt de vraag die dat wél dekt — bevat de databank genoeg
+    # om een factuur mee te berekenen?
+    audit_parser = actions.add_parser(
+        "audit",
+        help=(
+            "Toets de inhoud van de databank tegen wat een berekening nodig "
+            "heeft: kolommen die nergens gevuld zijn, product-maanden zonder "
+            "prijs én zonder formule, en een energievorm die in twee "
+            "schrijfwijzen bestaat."
+        ),
+    )
+    dump_parser = actions.add_parser(
+        "dump",
+        help=(
+            "Schrijf een gzip-dump van de referentiedata (geen "
+            "persoonsgegevens: de gebruikersfamilie zit er niet in). Zonder "
+            "--met-zware-tabellen blijft ze onder een megabyte en past ze in "
+            "git; dat is de zaaddump voor de integratietests in CI."
+        ),
+    )
+    dump_parser.add_argument(
+        "--uit", required=True,
+        help="Doelbestand, bijvoorbeeld tests/fixturen/databank/referentie.sql.gz",
+    )
+    dump_parser.add_argument(
+        "--met-zware-tabellen",
+        action="store_true",
+        help=(
+            "Neem marktcurve (70 MB) en verbruiksprofiel_waarde (374 MB) mee. "
+            "Nodig voor dynamische contracten en verbruiksschatting, niet om "
+            "een gewone factuur te berekenen. Niet committen."
+        ),
+    )
+    add_json_flag(dump_parser)
+    dump_parser.set_defaults(handler=db.run_db_dump)
+
+    restore_parser = actions.add_parser(
+        "restore",
+        help=(
+            "Laad een dump in. Draai eerst `alembic upgrade head`: het schema "
+            "komt uit Alembic, niet uit de dump."
+        ),
+    )
+    restore_parser.add_argument("--uit", required=True, help="Het dumpbestand.")
+    add_json_flag(restore_parser)
+    restore_parser.set_defaults(handler=db.run_db_restore)
+
+    backfill_parser = actions.add_parser(
+        "backfill",
+        help=(
+            "Laad de nettarieven van één tariefjaar bij uit een raw-versie. "
+            "Bewust geen publicatie: die zou de actieve dataset terugzetten "
+            "naar een oudere jaargang, terwijl netbeheerder_tarief juist "
+            "meerdere jaren naast elkaar draagt — dat is wat een factuur over "
+            "de jaarwissel herberekenbaar maakt."
+        ),
+    )
+    add_version_arg(backfill_parser)
+    backfill_parser.add_argument(
+        "--jaar",
+        type=int,
+        default=None,
+        help=(
+            "Tariefjaar. Standaard afgeleid uit het verwerkingsrapport, dat het "
+            "jaar uit de oorspronkelijke bestandsnaam haalt — niet uit het "
+            "versie-id, want dat draagt het moment van downloaden."
+        ),
+    )
+    add_json_flag(backfill_parser)
+    backfill_parser.set_defaults(handler=db.run_db_backfill)
+
+    audit_parser.add_argument(
+        "--streng",
+        action="store_true",
+        help=(
+            "Laat ook waarschuwingen falen. Zonder deze vlag falen alleen "
+            "fouten: een poort die permanent rood staat omdat de bron voor een "
+            "handvol producten geen prijs publiceert, wordt uitgezet — en mist "
+            "dan ook de dag dat er echt iets breekt."
+        ),
+    )
+    add_json_flag(audit_parser)
+    audit_parser.set_defaults(handler=db.run_db_audit)
+
 
 def _add_gebruiker_group(subparsers: argparse._SubParsersAction) -> None:
     gebruiker_parser = subparsers.add_parser(

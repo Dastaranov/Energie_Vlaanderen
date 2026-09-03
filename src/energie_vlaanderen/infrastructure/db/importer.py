@@ -248,6 +248,18 @@ def import_gemeente(conn: sa.Connection, csv_path: Path) -> ImportResult:
 # Component-to-tariff column mapping
 # ---------------------------------------------------------------------------
 
+# Welke meteropstelling bij welke vaste-vergoedingsvariant hoort. Alleen de
+# eenduidige gevallen staan hier: `fixed_fee_double` is de twee-registermeter,
+# dus dag én nacht. Een variant die hier niet in staat wordt niet geraden maar
+# als bevinding gemeld — een verkeerde vaste vergoeding is een stil verkeerd
+# bedrag, en dat is precies wat dit project probeert te vermijden.
+_VASTE_VERGOEDING_PER_METERTYPE: dict[str, tuple[str, ...]] = {
+    "fixed_fee_single": ("single",),
+    "fixed_fee_double": ("day", "night"),
+    "fixed_fee_exclusive_night": ("exclusive_night",),
+}
+
+
 def _map_component_code_to_field(component_code: str) -> str | None:
     """Map een component_code naar zijn tarief-kolom (of None als meter_type/onbekend)."""
     if not component_code:
@@ -267,8 +279,19 @@ def _map_component_code_to_field(component_code: str) -> str | None:
     if "energiebijdrage" in cc or "bijdrage" in cc:
         return "energiebijdrage_kwh"
 
-    # Vaste vergoeding
-    if "vaste vergoeding" in cc or "vast bedrag" in cc or cc.startswith("fixed_fee"):
+    # Vaste vergoeding. Alleen de algemene vorm: `fixed_fee_single`,
+    # `fixed_fee_double` en `fixed_fee_exclusive_night` horen bij één
+    # meteropstelling en worden apart afgehandeld
+    # (`_VASTE_VERGOEDING_PER_METERTYPE`). Ze hier allemaal op dezelfde kolom
+    # laten uitkomen liet de laatst verwerkte variant winnen — en dat voor
+    # élk metertype in de groep. Bij Ebem "Groen B@sic+" kreeg de
+    # single-meter zo 33,06 (het tarief voor exclusief nacht) in plaats van
+    # 70,75.
+    if cc in ("fixed_fee", "vaste vergoeding", "vast bedrag"):
+        return "vaste_vergoeding_jaar"
+    if cc.startswith("fixed_fee_"):
+        return None
+    if "vaste vergoeding" in cc or "vast bedrag" in cc:
         return "vaste_vergoeding_jaar"
 
     # Formule-parameters
@@ -397,7 +420,7 @@ def import_leverancier_en_product(
 
             # Stap 2 — energie_product upsert
             prod_naam = _str(prod) or ""
-            ener_type = _str(energie) or ""
+            ener_type = _energievorm(energie) or ""
             seg = _str(segment) or ""
             if not (prod_naam and ener_type and seg):
                 continue
@@ -449,6 +472,19 @@ def import_leverancier_en_product(
                 if comp_code.lower() in METER_TYPES:
                     meter_types_in_groep.add(comp_code.lower())
 
+            # De componentrij per code. Elk register draagt zijn eigen prijs,
+            # zijn eigen formuleparameters en zijn eigen indexwaarde: bij
+            # "Bolt Variabel" staat de coëfficiënt van `single` in kolom a en
+            # die van `day` in kolom b, op twee verschillende rijen. Ze uit
+            # `groep.iloc[0]` lezen gaf élk metertype de vector van de eerste
+            # rij van de groep — meestal `green` of `fixed_fee`, die geen van
+            # beide een formule dragen.
+            rij_per_component: dict[str, dict[str, Any]] = {}
+            for r in groep_rijen:
+                code = (_str(r.get("component")) or "").lower()
+                if code and code not in rij_per_component:
+                    rij_per_component[code] = r
+
             # Voor elke meter_type, maak een tarief-rij
             for meter_type in meter_types_in_groep:
                 tarief_row = {
@@ -460,35 +496,75 @@ def import_leverancier_en_product(
                     "source_row": _int(groep.iloc[0].get("source_row")),
                 }
 
-                # Voeg parameters en indices toe
-                first_row = groep.iloc[0]
-                for param in ("a", "b", "c", "d", "z"):
-                    val = _dec(first_row.get(param))
-                    if val is not None:
-                        tarief_row[f"param_{param}"] = val
+                # De prijs, de formule en de index van dít register.
+                #
+                # De energieprijs stond nooit in de databank: de code die de
+                # componenten doorloopt slaat de registercodes over (ze dienen
+                # als meter_type), en `_map_component_code_to_field` kende
+                # alleen namen als "energieprijs" die in de brondata niet
+                # voorkomen. Alle 25.937 tariefrijen hadden daardoor een lege
+                # `energieprijs_kwh` — de grootste post van elke factuur.
+                #
+                # Bij een vast product staat de prijs in `price`. Bij een
+                # variabel of dynamisch product is `price` meestal leeg en is
+                # de formule de prijs; beide worden overgenomen wanneer ze er
+                # zijn, zodat de databank hetzelfde draagt als
+                # `DataRepository.products()` uit het CSV haalt.
+                bron_rij = rij_per_component.get(meter_type)
+                if bron_rij is not None:
+                    prijs = _dec(bron_rij.get("price"))
+                    if prijs is not None:
+                        tarief_row["energieprijs_kwh"] = prijs
 
-                for idx in ("a", "b", "c", "d"):
-                    val = _str(first_row.get(f"index_name_{idx}"))
-                    if val:
-                        tarief_row[f"index_naam_{idx}"] = val
-                    val = _dec(first_row.get(f"index_value_{idx}"))
-                    if val is not None:
-                        tarief_row[f"index_waarde_{idx}"] = val
+                    for param in ("a", "b", "c", "d", "z"):
+                        val = _dec(bron_rij.get(param))
+                        if val is not None:
+                            tarief_row[f"param_{param}"] = val
 
-                # Voeg component-waarden toe
+                    # De kolommen heten `index_name_A`..`index_name_D` met een
+                    # hoofdletter; met de kleine letter vond de opzoeking nooit
+                    # iets en bleef ook de indexwaarde leeg. Zonder die waarde
+                    # is een formule als `0,1145 x index + 1,645` onbruikbaar.
+                    for idx in ("a", "b", "c", "d"):
+                        naam = _str(bron_rij.get(f"index_name_{idx.upper()}"))
+                        if naam:
+                            tarief_row[f"index_naam_{idx}"] = naam
+                        waarde = _dec(bron_rij.get(f"index_value_{idx.upper()}"))
+                        if waarde is not None:
+                            tarief_row[f"index_waarde_{idx}"] = waarde
+
+                # De componenten die voor het hele product gelden (groene
+                # stroom, WKK, bijdrage op de energie, vaste vergoeding).
                 for comp_r in groep_rijen:
                     comp_code = _str(comp_r.get("component")) or ""
-                    # Skip meter_type codes
-                    if comp_code.lower() in METER_TYPES:
+                    cc = comp_code.lower()
+                    # De registercodes zijn hierboven al verwerkt, elk op hun
+                    # eigen rij.
+                    if cc in METER_TYPES:
                         continue
 
-                    prijs = _dec(comp_r.get("price"))
+                    comp_prijs = _dec(comp_r.get("price"))
+
+                    # Een vaste vergoeding die bij één meteropstelling hoort,
+                    # geldt alleen op de rijen van die opstelling.
+                    if cc in _VASTE_VERGOEDING_PER_METERTYPE:
+                        if meter_type in _VASTE_VERGOEDING_PER_METERTYPE[cc]:
+                            if comp_prijs is not None:
+                                tarief_row["vaste_vergoeding_jaar"] = comp_prijs
+                        continue
+                    if cc.startswith("fixed_fee_"):
+                        # Een variant waarvan we de meteropstelling niet
+                        # kennen. Raden zou een verkeerd bedrag opleveren dat
+                        # nergens opvalt.
+                        unmapped_components.add(comp_code)
+                        continue
+
                     field = _map_component_code_to_field(comp_code)
                     if not field:
                         unmapped_components.add(comp_code)
                         continue
-                    if prijs is not None:
-                        tarief_row[field] = prijs
+                    if comp_prijs is not None:
+                        tarief_row[field] = comp_prijs
 
                 # Verzamelen in plaats van meteen schrijven: de SCD2-beslissing
                 # is rekenwerk, en per rij naar de databank gaan kostte twee
@@ -1051,7 +1127,7 @@ def import_vtest_contract_en_prijzen(
             "_scrape_datum": gescrapet.date() if gescrapet is not None else None,
             "leverancier_raw": _str(r.get("supplier_raw")) or "",
             "product_raw": _str(r.get("product_raw")) or "",
-            "energie_type": _str(r.get("energy")),
+            "energie_type": _energievorm(r.get("energy")),
             "tarief_type": _str(r.get("tariff_type")),
             "looptijd_tekst": _str(r.get("looptijd_tekst")),
             "looptijd_maanden": _int(r.get("looptijd_maanden")),
@@ -1132,8 +1208,15 @@ def import_netbeheerder_tarieven(
     conn: sa.Connection,
     tariff_dir: Path,
     jaar: int,
+    version_id: str | None = None,
 ) -> ImportResult:
-    """Importeer netbeheerder-tarieven met SCD2."""
+    """Importeer netbeheerder-tarieven met SCD2.
+
+    `version_id` is de bronversie waaruit deze tarieven komen en wordt op elke
+    rij vastgelegd. `source_sheet`/`source_row` zeggen wáár in een werkboek een
+    rij stond, niet uit wélk werkboek — en met meerdere tariefjaren naast elkaar
+    is dat het verschil tussen data die klopt en data die herbouwbaar is.
+    """
     files = [
         ("tariffs_electricity_afname.csv", "elektriciteit", "afname"),
         ("tariffs_electricity_injectie.csv", "elektriciteit", "injectie"),
@@ -1188,6 +1271,7 @@ def import_netbeheerder_tarieven(
                 "geldig_tot": geldig_tot,
                 "source_sheet": _str(r.get("source_sheet")),
                 "source_row": _int(r.get("source_row")),
+                "bron_versie": version_id,
             }
             _scd2_upsert_netbeheerder(conn, row_data)
             total += 1
@@ -1228,55 +1312,61 @@ def _scd2_upsert_netbeheerder(conn: sa.Connection, row_data: dict[str, Any]) -> 
     # 51,54 EUR/kW/jaar als 1,8984501 zonder eenheid). Zonder de notering zou
     # de ene versie als de vorige rij van de andere gelden en die afsluiten —
     # een tariefhistoriek die zichzelf overschrijft.
-    laatste = conn.execute(
-        sa.select(netbeheerder_tarief.c.id, netbeheerder_tarief.c.geldig_van).where(
-            (netbeheerder_tarief.c.netbeheerder_code == netbeheerder_code)
-            & (netbeheerder_tarief.c.energie_type == energie_type)
-            & (netbeheerder_tarief.c.contract_richting == contract_richting)
-            & (netbeheerder_tarief.c.klanttype == klanttype)
-            & (netbeheerder_tarief.c.tarieftype == tarieftype)
-            & (netbeheerder_tarief.c.tariefdetail == tariefdetail)
-            & (netbeheerder_tarief.c.tariefnotering == tariefnotering)
-        )
-        .order_by(netbeheerder_tarief.c.geldig_van.desc())
-        .limit(1)
-    ).fetchone()
+    sleutel = (
+        (netbeheerder_tarief.c.netbeheerder_code == netbeheerder_code)
+        & (netbeheerder_tarief.c.energie_type == energie_type)
+        & (netbeheerder_tarief.c.contract_richting == contract_richting)
+        & (netbeheerder_tarief.c.klanttype == klanttype)
+        & (netbeheerder_tarief.c.tarieftype == tarieftype)
+        & (netbeheerder_tarief.c.tariefdetail == tariefdetail)
+        & (netbeheerder_tarief.c.tariefnotering == tariefnotering)
+    )
+    bestaand = conn.execute(
+        sa.select(
+            netbeheerder_tarief.c.id,
+            netbeheerder_tarief.c.geldig_van,
+            netbeheerder_tarief.c.geldig_tot,
+        ).where(sleutel).order_by(netbeheerder_tarief.c.geldig_van)
+    ).all()
 
-    if laatste:
-        laatste_id, laatste_geldig_van = laatste
-
-        # Zelfde periode: bijwerken in plaats van een nieuwe historiekrij.
-        # Blind afsluiten en invoegen liet een herimport van dezelfde versie
-        # stuklopen op de unieke sleutel.
-        if laatste_geldig_van == geldig_van:
+    # Zelfde periode: bijwerken in plaats van een nieuwe historiekrij. Blind
+    # afsluiten en invoegen liet een herimport van dezelfde versie stuklopen op
+    # de unieke sleutel.
+    for rij_id, rij_van, _ in bestaand:
+        if rij_van == geldig_van:
             conn.execute(
                 sa.update(netbeheerder_tarief)
-                .where(netbeheerder_tarief.c.id == laatste_id)
+                .where(netbeheerder_tarief.c.id == rij_id)
                 .values(**{k: v for k, v in row_data.items() if k != "geldig_van"})
             )
             return
 
-        if laatste_geldig_van > geldig_van:
-            LOG.warning(
-                "Overgeslagen: netbeheerder_tarief %s/%s/%s begint op %s "
-                "terwijl de laatste rij al op %s begint.",
-                netbeheerder_code, klanttype, tariefdetail, geldig_van, laatste_geldig_van,
-            )
-            return
+    # Een oudere jaargang bijladen moet kunnen. De eerste vorm van deze functie
+    # sloeg zo'n rij over ("begint op 2025-01-01 terwijl de laatste rij al op
+    # 2026-01-01 begint"), wat terugwerkend herschrijven voorkwam maar ook
+    # verhinderde om het tariefjaar 2025 alsnog in te laden — en zonder dat jaar
+    # is een factuur die de jaarwissel kruist niet uit de databank te berekenen.
+    #
+    # De rij wordt daarom op haar plaats in de reeks gezet: de voorganger sluit
+    # af op de dag ervóór, en de nieuwe rij loopt tot de dag vóór haar opvolger.
+    vorige = [r for r in bestaand if r[1] < geldig_van]
+    volgende = [r for r in bestaand if r[1] > geldig_van]
 
-        # De voorganger afsluiten op de dag vóór dit tariefjaar. Meestal staat
-        # daar al 31 december van dat jaar; het blijft nodig voor een regime
-        # dat middenin een jaar begint en voor rijen van vóór migratie 0018.
+    if vorige:
+        vorige_id, _, vorige_tot = vorige[-1]
         vorige_dag = date.fromordinal(geldig_van.toordinal() - 1)
-        conn.execute(
-            sa.update(netbeheerder_tarief)
-            .where(netbeheerder_tarief.c.id == laatste_id)
-            .where(
-                netbeheerder_tarief.c.geldig_tot.is_(None)
-                | (netbeheerder_tarief.c.geldig_tot > vorige_dag)
+        if vorige_tot is None or vorige_tot > vorige_dag:
+            conn.execute(
+                sa.update(netbeheerder_tarief)
+                .where(netbeheerder_tarief.c.id == vorige_id)
+                .values(geldig_tot=vorige_dag)
             )
-            .values(geldig_tot=vorige_dag)
-        )
+
+    if volgende:
+        grens = date.fromordinal(volgende[0][1].toordinal() - 1)
+        huidig_tot = row_data.get("geldig_tot")
+        if huidig_tot is None or huidig_tot > grens:
+            row_data = {**row_data, "geldig_tot": grens}
 
     conn.execute(sa.insert(netbeheerder_tarief).values(**row_data))
 
@@ -1465,6 +1555,31 @@ _CURVES_CHUNK_SIZE = 5_000
 # normalisatie belanden die alle vier als aparte energie_type-waarde in de
 # databank en levert een filter op "gas" niets op.
 _ENERGIE_UIT_CURVES = {"e": "elektriciteit", "g": "gas"}
+
+
+# De energievorm wordt in kleine letters opgeslagen. De V-test-export schrijft
+# "Elektriciteit" en "Gas" met hoofdletter, de tarief- en curvebestanden zonder,
+# en zo belandden beide schrijfwijzen in de databank: `energie_product` en
+# `vtest_contract` met hoofdletter, `netbeheerder_tarief`, `marktcurve` en
+# `verbruiksprofiel_waarde` zonder. Een join tussen die twee families op
+# `energie_type` gaf daardoor stil nul rijen — geen fout, geen resultaat.
+#
+# Kleine letters, omdat `EnergieType` in het domeinmodel dat al is
+# ("elektriciteit" / "gas") en omdat drie van de vijf tabellen het al zo deden.
+_ENERGIEVORMEN = {"elektriciteit", "gas"}
+
+
+def _energievorm(waarde: Any) -> str | None:
+    """Normaliseer de energievorm naar de schrijfwijze van het domeinmodel."""
+    tekst = _str(waarde)
+    if tekst is None:
+        return None
+    klein = tekst.casefold()
+    if klein in _ENERGIEVORMEN:
+        return klein
+    # Een onbekende vorm wordt niet geraden maar ruw doorgegeven, zodat ze
+    # opvalt in `db audit` in plaats van stil als elektriciteit door te gaan.
+    return tekst
 
 
 def _curve_energie(waarde: Any) -> str | None:

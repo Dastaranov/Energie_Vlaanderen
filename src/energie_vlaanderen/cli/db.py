@@ -223,7 +223,8 @@ def import_version_into_db(
 
         LOG.info("Importeren van netbeheerder-tarieven (SCD2) ...")
         jaar = _tarief_jaar(bron_dir / "tariffs", version_id)
-        results.append(imp.import_netbeheerder_tarieven(conn, bron_dir / "tariffs", jaar))
+        results.append(imp.import_netbeheerder_tarieven(
+            conn, bron_dir / "tariffs", jaar, version_id=version_id))
 
         LOG.info("Importeren van vervoerstarieven ...")
         results.append(
@@ -250,6 +251,34 @@ def import_version_into_db(
         results.append(imp.import_verbruiksprofielen(conn, bron_dir, version_id))
 
         imp.mark_imported(conn, version_id)
+
+        # De poort staat binnen de transactie, dus een databank die niet
+        # bruikbaar is wordt niet gecommit. Dit hoort hier en niet alleen in
+        # `db audit`: een controle die je apart moet aanroepen, roept niemand
+        # aan. `energieprijs_kwh` stond een week lang op alle 25.937 rijen leeg
+        # terwijl elke import "25.937 tarief-snapshots" meldde.
+        #
+        # Alleen fouten blokkeren. Waarschuwingen gaan over data die de bron
+        # niet levert — een handvol producten waarvoor VREG geen
+        # energiecomponent publiceert — en die horen een gezonde publicatie
+        # niet tegen te houden.
+        from energie_vlaanderen.audit.databank import DatabankAudit
+
+        rapport = DatabankAudit(conn).run()
+        for bevinding in rapport.waarschuwingen:
+            LOG.warning(
+                "Databankaudit [%s] %s: %s",
+                bevinding.tabel, bevinding.regel, bevinding.melding,
+            )
+        if not rapport.geslaagd:
+            regels = "\n".join(
+                f"  [{b.tabel}] {b.regel}: {b.melding}" for b in rapport.fouten
+            )
+            raise RuntimeError(
+                "De databank is na de import niet bruikbaar voor een "
+                f"berekening; de import is teruggerold.\n{regels}\n"
+                "Controleer met: energievergelijker db audit"
+            )
 
     return results
 
@@ -565,3 +594,200 @@ def run_db_verify(args: argparse.Namespace, settings: Settings) -> int:
         },
     )
     return 2 if bevindingen else 0
+
+
+def run_db_audit(args: argparse.Namespace, settings: Settings) -> int:
+    """Toets de inhoud van de databank tegen wat een berekening vraagt.
+
+    Bestaat omdat 681 tests een kolom die op 25.937 rijen leeg was niet vonden:
+    644 ervan raken de databank niet, en de rest toetst zelfgemaakte fixtures
+    van een paar rijen. Deze controle kijkt naar de dataset zoals ze er werkelijk
+    bij staat, en hoort daarom in de pipeline en niet alleen in pytest — een
+    integratietest die in CI overgeslagen wordt kan jarenlang niet draaien.
+    """
+    import sqlalchemy as sa
+
+    from energie_vlaanderen.audit.databank import DatabankAudit
+    from energie_vlaanderen.infrastructure.db.connection import get_engine
+
+    engine = get_engine(settings.project_root)
+    with engine.connect() as conn:
+        rapport = DatabankAudit(conn).run()
+
+    streng = bool(getattr(args, "streng", False))
+
+    def _text() -> None:
+        if not rapport.bevindingen:
+            print("De databank bevat wat een berekening nodig heeft.")
+            return
+        for b in rapport.fouten:
+            print(f"[FOUT] [{b.tabel}] {b.regel}")
+            print(f"       {b.melding}")
+        for b in rapport.waarschuwingen:
+            print(f"[LET OP] [{b.tabel}] {b.regel}")
+            print(f"         {b.melding}")
+        if not rapport.fouten:
+            print("\nGeen fouten. De waarschuwingen gaan over data die de bron "
+                  "niet levert; met --streng tellen ze wel mee.")
+
+    emit(
+        args,
+        text_fn=_text,
+        json_obj={
+            "geslaagd": rapport.geslaagd_streng() if streng else rapport.geslaagd,
+            "fouten": len(rapport.fouten),
+            "waarschuwingen": len(rapport.waarschuwingen),
+            "bevindingen": [
+                {"tabel": b.tabel, "regel": b.regel,
+                 "ernst": b.ernst, "melding": b.melding}
+                for b in rapport.bevindingen
+            ],
+        },
+    )
+    if streng:
+        return 0 if rapport.geslaagd_streng() else 2
+    return 0 if rapport.geslaagd else 2
+
+
+def run_db_backfill(args: argparse.Namespace, settings: Settings) -> int:
+    """Laad de nettarieven van één tariefjaar bij, buiten de publicatieketen om.
+
+    Dit is bewust geen `version publish`. Een publicatie verzet de *actieve*
+    dataset, en die hoort op de recentste V-test-export te staan — niet op een
+    jaargang van vorig jaar. Maar `netbeheerder_tarief` is cumulatief: het draagt
+    meerdere tariefjaren naast elkaar, want dat is wat een factuur over de
+    jaarwissel herberekenbaar maakt. Die twee dingen door elkaar halen zou de
+    actieve versie terugzetten naar 2025 om aan de tarieven van 2025 te komen.
+
+    De 2025-tarieven zaten hier eerder in via een rechtstreekse functieaanroep:
+    de data klopte, maar geen `data_version`-rij en geen herkomst op de rijen, en
+    dus niet reproduceerbaar vanuit de bronnen. Dit commando sluit dat gat.
+
+    Het tariefjaar komt uit de oorspronkelijke bestandsnaam in het raw-manifest,
+    niet uit het versie-id: dat laatste draagt het moment van downloaden.
+    """
+    import sqlalchemy as sa
+
+    from energie_vlaanderen.cli.helpers import require_valid_raw_version
+    from energie_vlaanderen.data.paths import DataPaths
+    from energie_vlaanderen.infrastructure.db import importer as imp
+    from energie_vlaanderen.infrastructure.db.connection import get_engine
+
+    paths = DataPaths.from_settings(settings)
+    version_id = args.version
+
+    try:
+        require_valid_raw_version(paths, version_id)
+    except Exception as exc:
+        return fail("%s", exc)
+
+    # Eerst `versions/`, dan `staging/` — dezelfde volgorde als `db import`.
+    for kandidaat in (paths.version_dir(version_id), paths.staging / version_id):
+        tariff_dir = kandidaat / "tariffs"
+        if tariff_dir.is_dir():
+            break
+    else:
+        return fail(
+            "Geen verwerkte tarieven voor versie %s.\n\nVoer eerst uit:\n"
+            "  energievergelijker staging parse --version %s --only tariffs",
+            version_id, version_id,
+        )
+
+    try:
+        jaar = int(args.jaar) if args.jaar else _tarief_jaar(tariff_dir, version_id)
+    except Exception as exc:
+        return fail("Tariefjaar niet te bepalen: %s", exc)
+
+    engine = get_engine(settings.project_root)
+    with engine.begin() as conn:
+        # De bronversie registreren, met een eigen status: ze is geïmporteerd
+        # maar wordt nooit de actieve dataset. Zonder deze rij zou de
+        # foreign key op `bron_versie` nergens naar wijzen en zou niets
+        # vastleggen dát deze jaargang is bijgeladen.
+        imp.upsert_data_version(conn, version_id, status="tarieven")
+        resultaat = imp.import_netbeheerder_tarieven(
+            conn, tariff_dir, jaar, version_id=version_id
+        )
+
+        jaargangen = conn.execute(sa.text(
+            "select extract(year from geldig_van)::int, count(*) "
+            "from netbeheerder_tarief group by 1 order by 1"
+        )).all()
+
+    def _text() -> None:
+        print(f"Bronversie   : {version_id}")
+        print(f"Tariefjaar   : {jaar}")
+        print(f"Rijen        : {resultaat.rows_inserted}")
+        print("Jaargangen in de databank:")
+        for j, n in jaargangen:
+            print(f"  {j}: {n} rijen")
+
+    emit(
+        args,
+        text_fn=_text,
+        json_obj={
+            "version_id": version_id,
+            "tariefjaar": jaar,
+            "rows": resultaat.rows_inserted,
+            "jaargangen": {int(j): int(n) for j, n in jaargangen},
+        },
+    )
+    return 0
+
+
+def run_db_dump(args: argparse.Namespace, settings: Settings) -> int:
+    """Schrijf een dump van de referentiedata.
+
+    Bewust twee smaken. Zonder `--met-zware-tabellen` blijft de dump onder een
+    megabyte gecomprimeerd en past ze in git; dat is de zaaddump waarmee de
+    integratietests in CI kunnen draaien. Mét curves en profielen wordt het een
+    distributiedump van honderden megabytes — nuttig voor een verse installatie,
+    maar niet iets om te committen.
+    """
+    from energie_vlaanderen.infrastructure.db.connection import get_dsn, get_engine
+    from energie_vlaanderen.infrastructure.db.dump import DumpError, maak_dump
+
+    doel = Path(args.uit)
+    engine = get_engine(settings.project_root)
+    try:
+        with engine.connect() as conn:
+            manifest = maak_dump(
+                conn, get_dsn(settings.project_root), doel,
+                met_zware_tabellen=args.met_zware_tabellen,
+            )
+    except DumpError as exc:
+        return fail("%s", exc)
+
+    def _text() -> None:
+        print(f"Dump          : {doel}")
+        print(f"Omvang        : {manifest['bytes'] / 1024:.0f} kB (gzip)")
+        print(f"Alembic       : {manifest['alembic_revisie']}")
+        print(f"Dataversie    : {manifest['actieve_dataversie']}")
+        print(f"Zware tabellen: {'ja' if manifest['met_zware_tabellen'] else 'nee'}")
+        print("Rijen:")
+        for tabel, aantal in manifest["rijen"].items():
+            print(f"  {tabel:34s} {aantal}")
+
+    emit(args, text_fn=_text, json_obj=manifest)
+    return 0
+
+
+def run_db_restore(args: argparse.Namespace, settings: Settings) -> int:
+    """Laad een dump in. Het schema komt uit Alembic, niet uit de dump.
+
+    Draai dus eerst `alembic upgrade head`. Dat is geen omweg maar een controle:
+    is de dump ouder dan de code, dan moeten de migraties er nog overheen, en
+    dan valt meteen op of ze dat kunnen.
+    """
+    from energie_vlaanderen.infrastructure.db.connection import get_dsn
+    from energie_vlaanderen.infrastructure.db.dump import DumpError, lees_dump
+
+    bron = Path(args.uit)
+    try:
+        lees_dump(get_dsn(settings.project_root), bron)
+    except DumpError as exc:
+        return fail("%s", exc)
+
+    emit(args, text_fn=lambda: print(f"Dump ingelezen: {bron}"),
+         json_obj={"bestand": str(bron), "ingelezen": True})
+    return 0

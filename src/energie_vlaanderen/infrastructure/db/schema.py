@@ -270,6 +270,12 @@ netbeheerder_tarief = sa.Table(
     sa.Column("geldig_tot", sa.Date, nullable=True),
     sa.Column("source_sheet", sa.Text, nullable=True),
     sa.Column("source_row", sa.Integer, nullable=True),
+    # Uit welke bronversie deze rij komt (migratie 0021). `source_sheet`/
+    # `source_row` zeggen wáár in een werkboek, niet uit wélk werkboek. Met
+    # meerdere tariefjaren naast elkaar — en zeker met een jaargang die buiten
+    # de publicatieketen bijgeladen is — is dat het verschil tussen data die
+    # klopt en data die herbouwbaar is.
+    sa.Column("bron_versie", sa.String(26), nullable=True),
     sa.UniqueConstraint(
         "netbeheerder_code", "energie_type", "contract_richting",
         "klanttype", "tarieftype", "tariefdetail", "tariefnotering", "geldig_van",

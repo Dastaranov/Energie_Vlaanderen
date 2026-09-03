@@ -77,3 +77,40 @@ def data_root(project_root: Path) -> Path:
         "Stel ENERGIEVERGELIJKER_DATA_DIR in om "
         "integratietests uit te voeren."
     )
+
+
+# Twee seconden: de databank hangt aan een Tailscale-adres. Is dat er niet,
+# dan moet de suite dat snel vaststellen en overslaan in plaats van per test
+# op een TCP-timeout te wachten.
+DB_CONNECT_TIMEOUT_SECONDS = 2
+
+
+@pytest.fixture()
+def db_conn():
+    """Levert een transactionele DB-connectie; slaat de test over zonder
+    (snel) bereikbare Tailscale-databank. Alle wijzigingen worden aan het
+    einde teruggerold — geen blijvende effecten op de echte databank."""
+    import sqlalchemy as sa
+
+    from energie_vlaanderen.infrastructure.db.connection import get_dsn
+
+    project_root = Path(__file__).resolve().parents[1]
+    dsn = get_dsn(project_root)
+    engine = sa.create_engine(
+        dsn,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": DB_CONNECT_TIMEOUT_SECONDS},
+    )
+
+    try:
+        conn = engine.connect()
+    except Exception as exc:
+        pytest.skip(f"Geen bereikbare databank: {exc}")
+
+    trans = conn.begin()
+    try:
+        yield conn
+    finally:
+        trans.rollback()
+        conn.close()
+        engine.dispose()

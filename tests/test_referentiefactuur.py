@@ -185,7 +185,14 @@ class TestVolledigeSimulatie:
     Wat wél vergeleken wordt, komt uit op 0,033% van het factuurbedrag.
     """
 
-    VERSIE = "20260829T202059Z-853a7046"
+    # Geen vastgepind versie-id. Die stond hier op 20260829T202059Z-853a7046,
+    # waardoor deze test ook slaagde wanneer de *actieve* dataset brak: hij
+    # bewaakte een momentopname van augustus in plaats van wat er vandaag
+    # gepubliceerd is. Precies de schijnzekerheid waar dit project op stukloopt
+    # — een groene test die iets anders toetst dan je denkt.
+    #
+    # `current_version()` leest `current.txt`, dezelfde aanwijzer die
+    # `db verify` tegen de databank legt.
 
     @pytest.fixture
     def resultaat(self, factuur, heffingen):
@@ -207,7 +214,10 @@ class TestVolledigeSimulatie:
             pytest.skip("gebruiker.toml ontbreekt (persoonlijk, staat niet in git).")
 
         settings = Settings.load(project_root=ROOT)
-        vtest_dir = DataPaths.from_settings(settings).versions / self.VERSIE
+        actieve_versie = DataPaths.from_settings(settings).current_version()
+        if not actieve_versie:
+            pytest.skip("Geen actieve dataversie (current.txt ontbreekt).")
+        vtest_dir = DataPaths.from_settings(settings).versions / actieve_versie
         gemeente_csv = standaard_gemeente_csv(settings.data_root)
         if not (vtest_dir / "vtest").is_dir() or not gemeente_csv.is_file():
             pytest.skip("Dataversie of DnbPerGemeente.csv ontbreekt.")
@@ -382,3 +392,94 @@ class TestRestverschilIsVerklaard:
 
         impliciet_volume = D("112.31") / self.TARIEF_2025
         assert D("2123") < impliciet_volume < D("2124")
+
+
+@pytest.mark.integration
+class TestVolledigeSimulatieUitDeDatabank:
+    """Dezelfde factuur, maar met de databank als bron in plaats van de CSV's.
+
+    Dit is de test die er niet was. `energieprijs_kwh` stond een week lang op
+    alle 25.937 tariefrijen leeg terwijl 681 tests groen bleven: geen enkele
+    daarvan rekende iets uit met de databank. De CSV-weg werkte, dus de
+    referentiefactuur klopte — en dat verhulde dat het eindstation leeg was.
+
+    De drempels zijn dezelfde als bij de CSV-weg, en bewust tegen de *factuur*
+    en niet tegen de CSV-uitkomst: zo blijft deze test staan wanneer de CSV-weg
+    verdwijnt (zie `docs/plan databank als bron.md`, fase 3.2).
+    """
+
+    @pytest.fixture
+    def resultaat(self, factuur, heffingen, db_conn):
+        from energie_vlaanderen.data.db_repository import DbDataRepository
+        from energie_vlaanderen.gebruikers.berekening import Kostberekening
+        from energie_vlaanderen.gebruikers.models import EnergieType
+        from energie_vlaanderen.gebruikers.toml_io import lees_dossier
+
+        profiel = ROOT / "gebruiker.toml"
+        if not profiel.is_file():
+            pytest.skip("gebruiker.toml ontbreekt (persoonlijk, staat niet in git).")
+
+        # De verbruiksperiode kruist de jaarwissel, dus beide tariefjaren zijn
+        # nodig. Ze konden aanvankelijk niet naast elkaar bestaan: de
+        # SCD2-upsert weigerde een oudere jaargang na een nieuwere.
+        repos = {jaar: DbDataRepository(db_conn, tariefjaar=jaar) for jaar in (2025, 2026)}
+        for jaar, repo in repos.items():
+            if len(repo.dnb) == 0:
+                pytest.skip(f"Geen nettarieven voor {jaar} in de databank.")
+
+        dossier = lees_dossier(
+            profiel, project_root=ROOT, netbeheerders=repos[2026].netbeheerders
+        )
+        punt = dossier.punt(EnergieType.ELEKTRICITEIT)
+        return Kostberekening(
+            repos[2026], heffingen,
+            segment=str(dossier.gebruiker.segment),
+            nettarieven_per_jaar=repos,
+        ).bereken(
+            punt, dossier.meter_van(punt), dossier.contracten_van(punt),
+            dossier.opgaven_van(punt),
+            date(2025, 6, 25), date(2026, 5, 1),
+            extra_aannames=dossier.aannames,
+        )
+
+    def test_de_heffingen_komen_exact_uit(self, resultaat, factuur):
+        """336,81 EUR — de regel "Toeslagen"."""
+        verwacht = D(factuur["elektriciteit"]["componenten"]["toeslagen_eur"])
+        assert money(resultaat.totalen["levies"]) == verwacht
+
+    def test_de_leverancierskost_komt_uit_de_databank(self, resultaat, factuur):
+        """De post die helemaal ontbrak: zonder `energieprijs_kwh` en zonder
+        indexwaarde is er geen leverancierskost te berekenen."""
+        componenten = factuur["elektriciteit"]["componenten"]
+        verwacht = (
+            D(componenten["energie_afname_eur"])
+            + D(componenten["groene_stroom_eur"])
+            + D(componenten["wkk_eur"])
+        )
+        assert resultaat.totalen["supplier"] > D("0"), (
+            "De leverancierskost is nul. Draagt de databank de energieprijzen? "
+            "Controleer met: energievergelijker db audit"
+        )
+        verschil = abs(resultaat.totalen["supplier"] - verwacht)
+        assert verschil <= D("0.05"), f"leverancierskost wijkt {verschil} af"
+
+    def test_de_netkost_wijkt_minder_dan_een_euro_af(self, resultaat, factuur):
+        """Vereist beide tariefjaren; met alleen 2026 zou de eerste helft van de
+        periode met het verkeerde jaar gerekend worden."""
+        verwacht = D(factuur["elektriciteit"]["componenten"]["netwerkkosten_eur"])
+        verschil = abs(resultaat.totalen["grid"] - verwacht)
+        assert verschil < D("1.00"), f"netkost wijkt {verschil} af"
+
+    def test_het_geheel_blijft_binnen_een_promille(self, resultaat, factuur):
+        componenten = factuur["elektriciteit"]["componenten"]
+        verwacht = (
+            D(componenten["energie_afname_eur"])
+            + D(componenten["groene_stroom_eur"])
+            + D(componenten["wkk_eur"])
+            + D(componenten["energie_injectie_eur"])
+            + D(componenten["netwerkkosten_eur"])
+            + D(componenten["toeslagen_eur"])
+        )
+        t = resultaat.totalen
+        onze = t["supplier"] - t["injection_credit"] + t["grid"] + t["levies"]
+        assert abs(onze - verwacht) / verwacht < D("0.001")

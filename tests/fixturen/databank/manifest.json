@@ -1,0 +1,25 @@
+{
+  "gemaakt_op": "2026-09-03T21:31:03.512158+00:00",
+  "alembic_revisie": "0021",
+  "actieve_dataversie": "20260903T172618Z-f82afd0a",
+  "met_zware_tabellen": false,
+  "rijen": {
+    "data_version": 5,
+    "leverancier": 34,
+    "energie_product": 686,
+    "tarief_afname": 16642,
+    "tarief_injectie": 9295,
+    "netbeheerder": 25,
+    "netbeheerder_tarief": 2096,
+    "gemeente": 519,
+    "nettarief_transport": 2,
+    "overheidsheffing_accijns_schijf": 12,
+    "overheidsheffing_energiefonds": 25,
+    "overheidsheffing_btw": 4,
+    "vtest_contract": 364,
+    "vtest_scrape_run": 3,
+    "vtest_postcode_prijs": 8263
+  },
+  "bestand": "referentie.sql.gz",
+  "bytes": 544366
+}

@@ -1,0 +1,105 @@
+name: Databank
+
+# De 52 integratietests draaiden nooit in CI: ze hebben PostgreSQL nodig en de
+# gewone testworkflow slaat ze over met `-m "not integration"`. Precies die
+# tests zijn de enige die de databank tegen haar doel leggen — en juist daardoor
+# kon `energieprijs_kwh` op alle 25.937 tariefrijen leeg staan terwijl 681
+# tests groen bleven.
+#
+# Deze workflow zet een verse PostgreSQL op, draait de migraties, laadt de
+# zaaddump en draait dan wél de integratietests.
+#
+# Drie dingen worden hier tegelijk getoetst, en dat is met opzet:
+#   1. Passen de migraties op een lege databank? (`alembic upgrade head`)
+#   2. Past de zaaddump op het schema dat die migraties opleveren? Is de dump
+#      ouder dan de code, dan valt dat hier op in plaats van bij een gebruiker.
+#   3. Bevat de databank genoeg om een factuur mee te berekenen? (`db audit`)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  integratietests:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: endsor
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: energie_vlaanderen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U endsor -d energie_vlaanderen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: energie_vlaanderen
+      DB_USER: endsor
+      DB_PASSWORD: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # psql is nodig voor `db restore`; de runner heeft de cliënttools niet
+      # altijd in een versie die bij postgres:16 past.
+      - name: Installeer PostgreSQL-cliënt
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Installeer package
+        run: pip install -e ".[test,db]"
+
+      - name: Migraties
+        run: python -m alembic -c db/alembic.ini upgrade head
+
+      - name: Laad de zaaddump
+        run: |
+          python energievergelijker.py db restore \
+            --uit tests/fixturen/databank/referentie.sql.gz
+
+      # De poort die in de importtransactie zit, hier apart als stap: faalt ze,
+      # dan is de dump onbruikbaar en hoeven de tests niet meer te draaien.
+      - name: Toets of de databank bruikbaar is
+        run: python energievergelijker.py db audit
+
+      - name: Integratietests
+        run: pytest -q -m integration
+
+      # De dump raakt achterop wanneer een migratie een kolom toevoegt die de
+      # importer vult. Dit meldt dat zonder de build rood te maken: het is werk,
+      # geen defect.
+      - name: Meld een verouderde zaaddump
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess
+          manifest = json.loads(
+              pathlib.Path("tests/fixturen/databank/manifest.json").read_text()
+          )
+          huidig = subprocess.run(
+              ["python", "-m", "alembic", "-c", "db/alembic.ini", "current"],
+              capture_output=True, text=True,
+          ).stdout.strip().split()[0]
+          if manifest["alembic_revisie"] != huidig:
+              print(
+                  f"::warning::De zaaddump is gemaakt op Alembic-revisie "
+                  f"{manifest['alembic_revisie']}, de code staat op {huidig}. "
+                  "De migraties zijn erop toegepast, maar nieuwe kolommen zijn "
+                  "leeg. Vernieuwen met: energievergelijker db dump --uit "
+                  "tests/fixturen/databank/referentie.sql.gz"
+              )
+          PY
