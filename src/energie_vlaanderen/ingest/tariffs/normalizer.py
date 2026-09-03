@@ -46,11 +46,32 @@ ELEK_AFNAME_COLS = [
     (15, "ELEK_LS_ANA_PRO"),
 ]
 
-# De niet-laagspanningskolommen uit die lijst. Ze worden alleen gebruikt wanneer
-# de bladindeling overeenkomt met de bekende; bij een afwijkende indeling (2024)
-# zou een vaste index ze aan het verkeerde spanningsniveau hangen.
-ELEK_AFNAME_NIET_LS = [(i, k) for i, k in ELEK_AFNAME_COLS if not k.startswith("ELEK_LS_")]
-ELEK_LS_STANDAARDKAART = {i: k for i, k in ELEK_AFNAME_COLS if k.startswith("ELEK_LS_") and k != "ELEK_LS_DC"}
+# Precies de drie kolommen die `TariffWorkbookParser` uit de koppen afleidt:
+# ze staan onder de kop "Laagspanningsnet" met de meetsoort eronder. Al de
+# rest wordt op vaste index gelezen.
+#
+# Deze splitsing liep vroeger op de naam (`startswith("ELEK_LS_")`), en
+# daardoor viel ELEK_LS_DC tussen twee stoelen: het werd uitgesloten van de
+# vaste kolommen omdat de naam met ELEK_LS_ begint, én expliciet uitgesloten
+# van de kopkaart omdat het geen kopkolom is. Niemand las kolom 11 dus nog, en
+# de 96 afnamerijen van dat klanttype verdwenen stil uit de dataset — voor alle
+# acht netbeheerders, met echte prijzen (toegangsvermogen, maandpiek,
+# databeheer). ELEK_LS_DC is "≤1 kV, distributiecabine": laagspanning in naam,
+# maar met een eigen kolom náást de kop "Laagspanningsnet" en met
+# MS/HS-achtige tarieven. Vandaar dat het bij de vaste kolommen hoort en dat
+# `HS_MS_KLANTTYPES` het ook al naar de hoogspannings-CSV routeert.
+ELEK_AFNAME_KOPKOLOMMEN = frozenset({"ELEK_LS_DIGI", "ELEK_LS_ANA", "ELEK_LS_ANA_PRO"})
+
+# De kolommen op vaste index (HS, MS en LS-distributiecabine). Ze worden alleen
+# gebruikt wanneer de bladindeling overeenkomt met de bekende; bij een
+# afwijkende indeling (2024) zou een vaste index ze aan het verkeerde
+# spanningsniveau hangen.
+ELEK_AFNAME_VASTE_KOLOMMEN = [
+    (i, k) for i, k in ELEK_AFNAME_COLS if k not in ELEK_AFNAME_KOPKOLOMMEN
+]
+ELEK_LS_STANDAARDKAART = {
+    i: k for i, k in ELEK_AFNAME_COLS if k in ELEK_AFNAME_KOPKOLOMMEN
+}
 
 # Elektriciteit injectie: Tariefdetail-tekst -> klanttypes waarop de prijs van
 # toepassing is (fan-out). Eerste match wint.
@@ -301,7 +322,7 @@ class TariffDataNormalizer:
 
         kolommen = sorted(kaart.items())
         if kaart == ELEK_LS_STANDAARDKAART:
-            return sorted(ELEK_AFNAME_NIET_LS + kolommen)
+            return sorted(ELEK_AFNAME_VASTE_KOLOMMEN + kolommen)
 
         if source_sheet not in gemeld:
             gemeld.add(source_sheet)

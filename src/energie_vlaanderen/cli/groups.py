@@ -167,14 +167,36 @@ def _add_staging_group(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Open browser zichtbaar (niet headless).",
     )
+    # Het detailpaneel hoort bij de dataset, niet bij een optie. Zolang het
+    # achter een vlag zat, leverde een gewone refine-run vijftien lege
+    # kolommen op zonder dat er iets faalde — en dat is precies hoe
+    # vtest_contract maandenlang zonder metadata in de databank stond.
+    # Standaard aan dus; --zonder-contractdetails blijft over voor een snelle
+    # prijs-only run. --met-contractdetails blijft geldig (nu de standaard)
+    # zodat bestaande commando's en docs niet breken.
+    refine_parser.add_argument(
+        "--zonder-contractdetails",
+        action="store_true",
+        help=(
+            "Sla het detailpaneel per contract over. Levert een snellere run, "
+            "maar laat intekenperiode, start levering, looptijd, doelgroep, "
+            "prijszekerheid en de links naar de tariefkaart en de algemene "
+            "voorwaarden leeg."
+        ),
+    )
     refine_parser.add_argument(
         "--met-contractdetails",
         action="store_true",
         help=(
-            "Haal per contract ook de tariefkaart- en voorwaardenlinks op. "
-            "Die staan niet op de resultatenpagina maar in het detailpaneel, "
-            "dat pas bij een klik geladen wordt — het kost dus een extra klik "
-            "per uniek contract (~305 over de hele matrix)."
+            "Haal per contract ook het detailpaneel op: intekenperiode, "
+            "start levering, looptijd, doelgroep, prijszekerheid en de links "
+            "naar de tariefkaart en de algemene voorwaarden. Die staan niet "
+            "op de resultatenpagina maar in een paneel dat pas bij een klik "
+            "geladen wordt — het kost dus een extra klik per uniek contract "
+            "(~305 over de hele matrix). De panelen worden bewaard onder "
+            "staging/<versie>/vtest/contractdetails/, zodat een herparse met "
+            "--no-download geen nieuwe scrape nodig heeft. Dit is sinds "
+            "kort het standaardgedrag; de vlag blijft aanvaard."
         ),
     )
     refine_parser.add_argument(

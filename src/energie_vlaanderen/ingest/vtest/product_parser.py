@@ -2,10 +2,22 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from bs4 import BeautifulSoup
+
+
+# vtest.be merkt de drie contractlinks met onclick="matomoLinks('...')". Dat
+# attribuut is stabieler dan de zichtbare ankertekst en houdt ze uit elkaar.
+_MATOMO_RE = re.compile(r"matomoLinks\(\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
+
+_LINKNAAM_PER_MATOMO = {
+    "tariefkaart": "tariefkaart",
+    "algemene voorwaarden": "voorwaarden",
+    "contract afsluiten": "afsluiten",
+}
 
 
 def _clean(text: str | None) -> str:
@@ -56,7 +68,19 @@ class VTestProductParser:
     Neemt HTML als string (i.p.v. bestandspad) en retourneert dataclasses.
     """
 
-    def parse(self, html: str) -> list[RawVTestProduct]:
+    def parse(
+        self,
+        html: str,
+        detail_fragments: Mapping[str, str] | None = None,
+    ) -> list[RawVTestProduct]:
+        """Parseert de resultatendump, optioneel aangevuld met detailpanelen.
+
+        `detail_fragments` beeldt vreg_id af op de HTML van één detailpaneel.
+        vtest.be laadt dat paneel pas na een klik op "Meer details", dus staat
+        het niet in de resultatendump: zonder deze fragmenten blijven de
+        datums, de doelgroep, de looptijd, de prijszekerheid en de links naar
+        de tariefkaart en de algemene voorwaarden leeg.
+        """
         soup = BeautifulSoup(html, "lxml")
         contracts: dict[str, dict[str, Any]] = {}
 
@@ -120,6 +144,14 @@ class VTestProductParser:
             self._parse_properties(block, c)
             self._parse_doelgroep(block, c)
             self._parse_prijszekerheid(block, c)
+
+        # Pass 3: los opgehaalde detailpanelen.
+        for vreg_id, fragment in (detail_fragments or {}).items():
+            if not fragment:
+                continue
+            if vreg_id not in contracts:
+                contracts[vreg_id] = self._empty(vreg_id)
+            self._parse_detail_fragment(fragment, contracts[vreg_id])
 
         results = []
         for c in contracts.values():
@@ -210,6 +242,59 @@ class VTestProductParser:
             c["invoice_raw"] = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             pass
+
+    @classmethod
+    def _parse_detail_fragment(cls, fragment: str, c: dict[str, Any]) -> None:
+        """Leest één detailpaneel — de innerHTML van #contractDetailsModal.
+
+        Het paneel draagt hetzelfde contract twee keer: een verborgen
+        printversie in `#contractdetail-<vreg_id>` en de zichtbare
+        `.contractDetailsContent`. De sectietabellen staan in de zichtbare
+        helft, en de links naar de tariefkaart en de algemene voorwaarden ook
+        — maar buiten het printblok. Op `#contractdetail-<id>` scopen levert
+        daarom wel de datums en de doelgroep op, en geen enkele link. Er wordt
+        dus over het hele fragment gezocht.
+        """
+        soup = BeautifulSoup(fragment, "lxml")
+        root = soup.body or soup
+        cls._parse_dates(root, c)
+        cls._parse_properties(root, c)
+        cls._parse_doelgroep(root, c)
+        cls._parse_prijszekerheid(root, c)
+        cls._collect_detail_links(root, c["links"])
+
+    @staticmethod
+    def _collect_detail_links(root: Any, links: dict[str, str]) -> None:
+        """Haalt de contractlinks uit een detailpaneel.
+
+        De drie contractlinks dragen `onclick="matomoLinks('...')"`; dat
+        attribuut benoemt ze en is stabieler dan de zichtbare ankertekst. De
+        leverancierswebsite draagt het niet en komt uit de "Website"-rij van
+        de leverancierssectie. Op tekst alleen matchen (zoals
+        `_collect_links` doet) pikte daar de consumentenakkoord-link van FOD
+        Economie op als website van de leverancier.
+        """
+        for anker in root.find_all("a"):
+            href = anker.get("href")
+            if not isinstance(href, str) or not href or "javascript" in href:
+                continue
+            match = _MATOMO_RE.search(anker.get("onclick") or "")
+            sleutel = _clean(match.group(1)) if match else _clean(anker.get_text())
+            naam = _LINKNAAM_PER_MATOMO.get(sleutel.lower())
+            if naam:
+                links.setdefault(naam, href)
+
+        for sectie in root.select("[id^='section-supplier-content-']"):
+            for rij in sectie.select("tr"):
+                cellen = rij.select("td")
+                if len(cellen) < 2:
+                    continue
+                if _clean(cellen[0].get_text()).lower() != "website":
+                    continue
+                anker = cellen[1].find("a")
+                href = anker.get("href") if anker else None
+                if isinstance(href, str) and href:
+                    links.setdefault("leverancier", href)
 
     @staticmethod
     def _collect_links(el: Any, links: dict[str, str]) -> None:

@@ -204,9 +204,13 @@ Om te voorkomen dat het volgend jaar alsnog op deze lijst belandt:
 
 ## Nog steeds open, los van de jaarwissel
 
-- `tariefkaart_url` en `bijzondere_voorwaarden_url` zijn nog leeg voor alle
-  producten. De code werkt (`refine --met-contractdetails`); alleen de scrape
-  moet slagen.
+- De contractmetadata (tariefkaart, algemene voorwaarden, intekenperiode,
+  start levering, looptijd, doelgroep, prijszekerheid) komt uit het
+  detailpaneel van vtest.be, dat de site pas na een klik ophaalt. Sinds
+  2026-09-03 haalt `staging refine` dat standaard op, bewaart het onder
+  `staging/<versie>/vtest/contractdetails/` en meldt `audit sanity` het
+  wanneer de kolommen leeg blijven. Zie CLAUDE.md, "De contractmetadata staat
+  niet in de resultatendump".
 - Het segment onderneming en de gascombinaties zijn niet volledig gescrapet.
 - `DataRepository` en `Calculator` worden nog herschreven; gasberekening en
   midden-/hoogspanning wachten daarop.

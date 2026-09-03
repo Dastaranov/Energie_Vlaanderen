@@ -54,7 +54,7 @@ class VTestHtmlDownloader:
         force_eigen_verbruik: bool = False,
         injectie_kwh: int = 0,
         omvormer_kva: float | None = None,
-        contractdetails: dict[str, dict[str, str]] | None = None,
+        contractdetails: dict[str, str] | None = None,
         reeds_gekend: set[str] | None = None,
     ) -> str:
         """Navigeer naar vtest.be, vul het formulier in en retourneer de volledige HTML.
@@ -523,23 +523,28 @@ class VTestHtmlDownloader:
     @staticmethod
     def _verzamel_contractdetails(
         driver: object,
-        verzameling: dict[str, dict[str, str]],
+        verzameling: dict[str, str],
         reeds_gekend: set[str],
     ) -> None:
-        """Open per contract het detailpaneel en lees de links eruit.
+        """Open per contract het detailpaneel en bewaar de ruwe HTML ervan.
 
-        De tariefkaart en de algemene voorwaarden staan niet op de
-        resultatenpagina; die bevat alleen `href="#"` en `javascript:void(0)`.
-        vtest.be haalt het detailpaneel per contract op via een POST naar
-        /VTest/GetContractDetails, en dat endpoint heeft de zoekopdracht in de
-        sessie nodig — losstaand aanroepen geeft een 500. De klik in de
-        lopende sessie is daarmee de enige weg.
+        De datums, de doelgroep, de looptijd, de prijszekerheid en de links
+        naar de tariefkaart en de algemene voorwaarden staan niet op de
+        resultatenpagina; die draagt daarvoor alleen `href="#"` en
+        `javascript:void(0)`. vtest.be haalt het detailpaneel per contract op
+        via een POST naar /VTest/GetContractDetails, en dat endpoint heeft de
+        zoekopdracht in de sessie nodig — losstaand aanroepen geeft een 500.
+        De klik in de lopende sessie is daarmee de enige weg.
+
+        Wat hier bewaard wordt is de **volledige** innerHTML van het paneel,
+        niet een selectie eruit. Ontleden gebeurt achteraf door
+        `VTestProductParser`, zodat een extra veld een herparse kost en geen
+        nieuwe scrape van een half uur.
 
         Contracten die al verzameld zijn worden overgeslagen: de details zijn
         producteigenschappen en verschillen niet per postcode.
         """
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.support.ui import WebDriverWait
 
         knoppen = driver.find_elements(By.CSS_SELECTOR, "button.toContractDetails")
@@ -561,13 +566,16 @@ class VTestHtmlDownloader:
                     "arguments[0].scrollIntoView({block:'center'});", knop
                 )
                 driver.execute_script("arguments[0].click();", knop)
+                # Wachten op het paneel van dít contract, niet op "paneel niet
+                # leeg": bij een klik die niet aankomt blijft de vorige inhoud
+                # staan, en dan zouden de details van het vorige contract stil
+                # aan dit contract gehangen worden.
+                doel = f"#contractDetailsModal #contractdetail-{contract_id}"
                 WebDriverWait(driver, 30).until(
-                    lambda d: d.find_element(
-                        By.ID, "contractDetailsModal"
-                    ).text.strip() != ""
+                    lambda d, sel=doel: d.find_elements(By.CSS_SELECTOR, sel)
                 )
                 modal = driver.find_element(By.ID, "contractDetailsModal")
-                verzameling[contract_id] = VTestHtmlDownloader._links_uit_modal(modal)
+                verzameling[contract_id] = modal.get_attribute("innerHTML") or ""
             except Exception as exc:
                 # Eén onbereikbaar detailpaneel mag de hele run niet kosten;
                 # het ontbrekende contract blijft zichtbaar doordat het niet
@@ -580,26 +588,6 @@ class VTestHtmlDownloader:
 
             if index % 25 == 0:
                 LOG.info("Contractdetails: %d/%d ...", index, len(te_doen))
-
-    @staticmethod
-    def _links_uit_modal(modal: object) -> dict[str, str]:
-        from selenium.webdriver.common.by import By
-
-        links: dict[str, str] = {}
-        for anker in modal.find_elements(By.TAG_NAME, "a"):
-            href = anker.get_attribute("href") or ""
-            if not href or href.endswith("#") or "javascript" in href:
-                continue
-            tekst = (anker.text or "").strip().lower()
-            if "tariefkaart" in tekst:
-                links.setdefault("tariefkaart", href)
-            elif "voorwaarden" in tekst:
-                links.setdefault("voorwaarden", href)
-            elif "contract afsluiten" in tekst:
-                links.setdefault("afsluiten", href)
-            elif "leverancier" not in links and "/nl/" in href:
-                links.setdefault("leverancier", href)
-        return links
 
     @staticmethod
     def _sluit_modal(driver: object) -> None:

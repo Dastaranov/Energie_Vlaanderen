@@ -101,26 +101,68 @@ def test_failed_when_mismatches_present() -> None:
 
 
 # ---------------------------------------------------------------------------
-# VTestGoldenAuditor: missing CSV returns empty pass result
+# Een audit die niets vergeleken heeft, slaagt niet
 # ---------------------------------------------------------------------------
+#
+# Deze test beweerde eerder het omgekeerde: een resultaat met 0 rijen en 0
+# verschillen moest `passed` zijn. Daarmee legde ze een echte fout vast als
+# gewenst gedrag. `version publish` ruimt de stagingmap op, en `audit golden`
+# las alleen daar — op een gepubliceerde versie vond ze dus geen enkel CSV en
+# meldde "OK 0/0 rijen geverifieerd" voor alle zeven domeinen. Een groene
+# audit die niets gecontroleerd had, en juist deze audit is de poort naar
+# publicatie. Precies de foutklasse uit CLAUDE.md: "een sanity-check die zijn
+# bestanden niet vond en toch geslaagd meldde".
 
-def test_missing_staged_csv_returns_empty_result(tmp_path: Path) -> None:
-    xlsx = tmp_path / "dummy.xlsx"
-    xlsx.write_bytes(b"")  # Not a real XLSX — auditor won't open it
 
-    auditor = VTestGoldenAuditor()
-
-    # Patch the auditor to skip XLSX parsing when CSV is missing
+def test_ontbrekend_bestand_laat_de_audit_falen(tmp_path: Path) -> None:
     result = GoldenAuditResult(
         version_id="v1",
         domain="vtest_vast",
-        source_xlsx=xlsx,
+        source_xlsx=tmp_path / "dummy.xlsx",
+        total_rows=0,
+        verified_rows=0,
+        mismatches=(),
+        ontbrekend_bestand=tmp_path / "master_vast.csv",
+    )
+    assert not result.passed
+    assert result.ontbrekend_bestand is not None
+
+
+def test_nul_geverifieerde_rijen_laat_de_audit_falen(tmp_path: Path) -> None:
+    """Ook zonder ontbrekend bestand: nul vergelijkingen is geen bewijs."""
+    result = GoldenAuditResult(
+        version_id="v1",
+        domain="vtest_vast",
+        source_xlsx=tmp_path / "dummy.xlsx",
         total_rows=0,
         verified_rows=0,
         mismatches=(),
     )
-    assert result.passed
-    assert result.total_rows == 0
+    assert not result.passed
+
+
+def test_auditor_meldt_welk_bestand_ontbreekt(tmp_path: Path, monkeypatch) -> None:
+    """De auditor zelf moet het ontbrekende pad teruggeven, niet stil slagen."""
+    import pandas as pd
+
+    from energie_vlaanderen.audit import golden as golden_mod
+
+    class _LeegWerkboek:
+        fixed = pd.DataFrame()
+        variable_dynamic = pd.DataFrame()
+
+    monkeypatch.setattr(
+        golden_mod.VTestWorkbookParser, "parse", lambda self, pad: _LeegWerkboek()
+    )
+    xlsx = tmp_path / "dummy.xlsx"
+    xlsx.write_bytes(b"")
+    ontbreekt = tmp_path / "master_vast.csv"
+
+    result = VTestGoldenAuditor().audit(
+        staged_csv=ontbreekt, source_xlsx=xlsx, domain="vtest_vast", version_id="v1"
+    )
+    assert result.ontbrekend_bestand == ontbreekt
+    assert not result.passed
 
 
 # ---------------------------------------------------------------------------
@@ -248,3 +290,119 @@ def test_audit_detects_price_mismatch(tmp_path: Path, monkeypatch: pytest.Monkey
     assert price_mismatch is not None
     assert price_mismatch.csv_value == "9,99"
     assert "10" in price_mismatch.xlsx_value
+
+
+# ---------------------------------------------------------------------------
+# De hoogspanningskolommen: ELEK_LS_DC hoort erbij
+# ---------------------------------------------------------------------------
+#
+# Kolom 11 van het afnameblad is "≤1 kV / distributiecabine" (ELEK_LS_DC): in
+# naam laagspanning, maar met een eigen kolom náást de kop "Laagspanningsnet"
+# en met MS/HS-achtige tarieven (toegangsvermogen in kVA). De splitsing tussen
+# "uit de koppen afgeleid" en "op vaste index" liep op de naam
+# (startswith("ELEK_LS_")), waardoor dit klanttype uit beide groepen viel en
+# kolom 11 door niemand gelezen werd. 96 afnamerijen met echte prijzen, voor
+# alle acht netbeheerders, verdwenen zo stil uit de dataset.
+
+
+def test_ls_distributiecabine_hoort_bij_de_vaste_kolommen() -> None:
+    from energie_vlaanderen.ingest.tariffs.normalizer import (
+        ELEK_AFNAME_KOPKOLOMMEN,
+        ELEK_AFNAME_VASTE_KOLOMMEN,
+        ELEK_LS_STANDAARDKAART,
+    )
+
+    vaste = {k for _, k in ELEK_AFNAME_VASTE_KOLOMMEN}
+    # ELEK_LS_DC wordt op vaste index gelezen, samen met MS en HS.
+    assert "ELEK_LS_DC" in vaste
+    assert {"ELEK_HS1", "ELEK_HS2", "ELEK_MS1", "ELEK_MS2"} <= vaste
+    # En het is géén kopkolom: de kop boven kolom 11 is "≤1 kV", niet
+    # "Laagspanningsnet".
+    assert "ELEK_LS_DC" not in ELEK_AFNAME_KOPKOLOMMEN
+    assert "ELEK_LS_DC" not in ELEK_LS_STANDAARDKAART.values()
+    # De kopkaart dekt precies de drie meetsoorten onder "Laagspanningsnet".
+    assert set(ELEK_LS_STANDAARDKAART.values()) == {
+        "ELEK_LS_DIGI", "ELEK_LS_ANA", "ELEK_LS_ANA_PRO",
+    }
+
+
+def test_geen_klanttype_valt_tussen_de_twee_groepen() -> None:
+    """Het invariant dat de fout onmogelijk maakt: elk klanttype uit de
+    kolomlijst zit in precies één van de twee groepen."""
+    from energie_vlaanderen.ingest.tariffs.normalizer import (
+        ELEK_AFNAME_COLS,
+        ELEK_AFNAME_KOPKOLOMMEN,
+        ELEK_AFNAME_VASTE_KOLOMMEN,
+    )
+
+    alle = {k for _, k in ELEK_AFNAME_COLS}
+    vaste = {k for _, k in ELEK_AFNAME_VASTE_KOLOMMEN}
+    assert vaste | set(ELEK_AFNAME_KOPKOLOMMEN) == alle
+    assert not (vaste & set(ELEK_AFNAME_KOPKOLOMMEN))
+
+
+def test_verschillend_rij_aantal_onderdrukt_de_positieverschillen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bij een afwijkend rij-aantal is alleen `_row_count` bruikbaar.
+
+    De vergelijking loopt op positie. Ontbreken er rijen, dan staan de twee
+    kanten vanaf dat punt uit de pas en telt bijna elk veld als verschil — in
+    het geval dat dit blootlegde 2.220 stuks, geen ervan echt (het CSV miste
+    96 ELEK_LS_DC-rijen). Die lijst afdrukken stuurt de lezer een dwaalspoor
+    op; het rij-aantal is de enige echte bevinding.
+    """
+    import pandas as pd
+
+    from energie_vlaanderen.audit import golden as golden_mod
+
+    kolommen = ["Netbeheerder", "Klanttype", "Tarieftype", "Tariefdetail",
+                "Tariefnotering", "Prijs_num", "source_sheet", "source_row"]
+
+    def _rij(klanttype: str, prijs: str, rij: int) -> dict:
+        return {
+            "Netbeheerder": "FA", "Klanttype": klanttype,
+            "Tarieftype": "Netgebruik", "Tariefdetail": "Toegangsvermogen",
+            "Tariefnotering": "EUR/kVA/jaar", "Prijs_num": prijs,
+            "source_sheet": "FA ELEK Afname", "source_row": str(rij),
+        }
+
+    # De verse kant heeft één rij méér dan het CSV.
+    vers = pd.DataFrame([_rij("ELEK_HS1", "1.0", 1), _rij("ELEK_LS_DC", "2.0", 2)],
+                        columns=kolommen)
+    staged = tmp_path / "tariffs_electricity_hoogspanning.csv"
+    pd.DataFrame([_rij("ELEK_HS1", "1.0", 1)], columns=kolommen).to_csv(
+        staged, sep=";", index=False, encoding="utf-8-sig"
+    )
+
+    class _Parsed:
+        afname = pd.DataFrame()
+        injectie = pd.DataFrame()
+
+        @staticmethod
+        def kolomkaarten():
+            return {}
+
+    class _Norm:
+        afname = vers
+        injectie = pd.DataFrame()
+
+    monkeypatch.setattr(
+        golden_mod.TariffWorkbookParser, "parse",
+        lambda self, pad, energy_type=None: _Parsed(),
+    )
+    monkeypatch.setattr(
+        golden_mod.TariffDataNormalizer, "normalize",
+        lambda self, a, i, k=None: _Norm(),
+    )
+
+    xlsx = tmp_path / "elek.xlsx"
+    xlsx.write_bytes(b"")
+    result = golden_mod.TariffGoldenAuditor().audit(
+        staged_csv=staged, source_xlsx=xlsx, energy_type="electricity",
+        direction="hoogspanning", version_id="v1",
+    )
+
+    assert not result.passed
+    velden = [mm.field for mm in result.mismatches]
+    assert velden == ["_row_count"], f"alleen het rij-aantal verwacht, kreeg {velden}"

@@ -21,6 +21,7 @@ from energie_vlaanderen.infrastructure.db.schema import (
     netbeheerder_tarief,
     nettarief_transport,
     vtest_scrape_run,
+    marktcurve,
     vtest_contract,
     vtest_postcode_prijs,
     overheidsheffing_accijns_schijf,
@@ -794,23 +795,50 @@ def import_energie_product_kenmerken(
     df = pd.read_csv(vtest_csv, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
 
     # Eén rij per product: hetzelfde contract komt per postcode terug, maar de
-    # producteigenschappen verschillen daar niet.
-    per_vreg: dict[str, str] = {}
+    # producteigenschappen verschillen daar niet. Per veld aanvullen wat leeg
+    # is, want niet elke combinatie draagt alles (het sociaal tarief heeft
+    # bijvoorbeeld geen eigen tariefkaart).
+    per_vreg: dict[str, dict[str, str]] = {}
     for rij in df.to_dict("records"):
         vreg_id = _str(rij.get("vreg_id"))
-        soort = (_str(rij.get("green_type")) or "").upper()
-        if vreg_id and soort:
-            per_vreg.setdefault(vreg_id, soort)
+        if not vreg_id:
+            continue
+        bron = {
+            "green_type": (_str(rij.get("green_type")) or "").upper(),
+            "link_tariefkaart": _str(rij.get("link_tariefkaart")) or "",
+            "link_voorwaarden": _str(rij.get("link_voorwaarden")) or "",
+        }
+        doel = per_vreg.setdefault(vreg_id, {"green_type": "", "link_tariefkaart": "", "link_voorwaarden": ""})
+        for sleutel, waarde in bron.items():
+            if waarde and not doel[sleutel]:
+                doel[sleutel] = waarde
 
     bijgewerkt = 0
-    for vreg_id, soort in per_vreg.items():
+    for vreg_id, velden in per_vreg.items():
+        soort = velden["green_type"]
+        waarden: dict[str, Any] = {}
+        if soort:
+            waarden["groene_stroom"] = soort in GROENE_STROOM_TYPES
+            waarden["groene_stroom_type"] = soort
+        # De tariefkaart en de algemene voorwaarden komen uit het detailpaneel
+        # van vtest.be. Die stonden hier nooit: deze functie vulde alleen het
+        # groene-stroomtype, waardoor `tariefkaart_url` en
+        # `bijzondere_voorwaarden_url` op alle 686 producten leeg bleven ook
+        # nadat de scrape ze wél binnenhaalde.
+        #
+        # Een leeg veld overschrijft niets: een run zonder detailpanelen mag
+        # een eerder opgehaalde link niet wissen (zelfde regel als bij
+        # `vtest_contract`).
+        if velden["link_tariefkaart"]:
+            waarden["tariefkaart_url"] = velden["link_tariefkaart"]
+        if velden["link_voorwaarden"]:
+            waarden["bijzondere_voorwaarden_url"] = velden["link_voorwaarden"]
+        if not waarden:
+            continue
         resultaat = conn.execute(
             sa.update(energie_product)
             .where(energie_product.c.vreg_id == vreg_id)
-            .values(
-                groene_stroom=soort in GROENE_STROOM_TYPES,
-                groene_stroom_type=soort,
-            )
+            .values(**waarden)
         )
         bijgewerkt += resultaat.rowcount or 0
 
@@ -867,6 +895,130 @@ def import_vtest_scrape_run(
 # vtest_contract + vtest_postcode_prijs
 # ---------------------------------------------------------------------------
 
+# De velden die samen "de beschrijving van dit contract" vormen. Wijzigt er
+# hier iets, dan is dat een nieuw snapshot waard; `laatst_gezien_*` en de
+# tijdas zelf horen er dus niet bij.
+_CONTRACT_INHOUD = tuple(
+    c.name for c in vtest_contract.columns
+    if c.name not in (
+        "id", "vreg_id", "geldig_van", "geldig_tot", "gepubliceerd_op",
+        "laatst_gezien_versie", "laatst_gezien_op",
+    )
+)
+
+
+def _scd2_contract_snapshots(
+    conn: sa.Connection, contract_rows: list[dict[str, Any]]
+) -> int:
+    """Schrijf de contractmetadata als tijdreeks weg (SCD2 op de scrapedatum).
+
+    Er komt alleen een nieuw snapshot bij wanneer de beschrijving werkelijk
+    wijzigt. Zonder die regel zou elke scrape 355 rijen toevoegen en zou de
+    tabel binnen een jaar honderdduizenden rijen tellen zonder één extra feit.
+
+    Afwezigheid geldt niet als wijziging: een run zonder detailpanelen levert
+    lege velden, en die mogen noch de bestaande metadata overschrijven, noch
+    een nieuw snapshot uitlokken. Een leeg veld valt terug op wat er stond;
+    draagt de nieuwe rij iets dat er nog niet was, dan vult dat het huidige
+    snapshot aan in plaats van er een nieuw naast te zetten — het is dezelfde
+    waarneming, alleen vollediger.
+    """
+    if not contract_rows:
+        return 0
+
+    vreg_ids = [r["vreg_id"] for r in contract_rows]
+    bestaand: dict[str, dict[str, Any]] = {}
+    for rij in conn.execute(
+        sa.select(vtest_contract).where(
+            vtest_contract.c.vreg_id.in_(vreg_ids)
+            & vtest_contract.c.geldig_tot.is_(None)
+        )
+    ).mappings():
+        bestaand[rij["vreg_id"]] = dict(rij)
+
+    in_te_voegen: list[dict[str, Any]] = []
+    for rij in contract_rows:
+        vreg_id = rij["vreg_id"]
+        scrape_datum = rij.pop("_scrape_datum", None)
+        if scrape_datum is None:
+            # Zonder scrapedatum is er geen tijdas om op te ankeren. Raden zou
+            # het snapshot op de verkeerde dag zetten.
+            LOG.warning(
+                "Contract %s heeft geen scraped_at; overgeslagen voor de "
+                "contracthistoriek.", vreg_id,
+            )
+            continue
+
+        huidig = bestaand.get(vreg_id)
+        inhoud = {k: rij.get(k) for k in _CONTRACT_INHOUD}
+
+        if huidig is None:
+            in_te_voegen.append({
+                **inhoud,
+                "vreg_id": vreg_id,
+                "geldig_van": scrape_datum,
+                "geldig_tot": None,
+                "laatst_gezien_versie": rij["laatst_gezien_versie"],
+                "laatst_gezien_op": rij["laatst_gezien_op"],
+            })
+            continue
+
+        # Leeg overschrijft niets: het effectieve snapshot is de nieuwe waarde
+        # waar die er is, en anders wat er stond.
+        effectief = {
+            k: (v if _heeft_waarde(v) else huidig.get(k)) for k, v in inhoud.items()
+        }
+        gewijzigd = any(effectief[k] != huidig.get(k) for k in _CONTRACT_INHOUD)
+
+        if not gewijzigd or scrape_datum <= huidig["geldig_van"]:
+            # Ongewijzigd, of een waarneming van dezelfde dag of ouder: het
+            # bestaande snapshot bijwerken. Een oudere scrape mag de tijdas
+            # niet terugdraaien, maar mag wel gaten vullen.
+            conn.execute(
+                sa.update(vtest_contract)
+                .where(vtest_contract.c.id == huidig["id"])
+                .values(
+                    **effectief,
+                    laatst_gezien_versie=rij["laatst_gezien_versie"],
+                    laatst_gezien_op=rij["laatst_gezien_op"],
+                )
+            )
+            continue
+
+        # Echt gewijzigd en nieuwer: het lopende snapshot afsluiten op de dag
+        # vóór de nieuwe waarneming, en een nieuw snapshot openen.
+        conn.execute(
+            sa.update(vtest_contract)
+            .where(vtest_contract.c.id == huidig["id"])
+            .values(geldig_tot=date.fromordinal(scrape_datum.toordinal() - 1))
+        )
+        in_te_voegen.append({
+            **effectief,
+            "vreg_id": vreg_id,
+            "geldig_van": scrape_datum,
+            "geldig_tot": None,
+            "laatst_gezien_versie": rij["laatst_gezien_versie"],
+            "laatst_gezien_op": rij["laatst_gezien_op"],
+        })
+
+    if in_te_voegen:
+        conn.execute(sa.insert(vtest_contract), in_te_voegen)
+    return len(in_te_voegen)
+
+
+def _heeft_waarde(waarde: Any) -> bool:
+    """Leeg is "niets waargenomen", niet "de waarde is leeg".
+
+    False is wél een waarde (grayedout/complex_product), dus een simpele
+    waarheidstoets zou die als afwezig lezen.
+    """
+    if waarde is None:
+        return False
+    if isinstance(waarde, str):
+        return waarde.strip() != ""
+    return True
+
+
 def import_vtest_contract_en_prijzen(
     conn: sa.Connection,
     version_id: str,
@@ -879,49 +1031,64 @@ def import_vtest_contract_en_prijzen(
 
     df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
 
-    contract_rows = []
+    # Eén rij per contract, over alle segment/energie/postcode-combinaties
+    # heen. Niet "de eerste wint": bij een hervatte matrixrun kan de eerste
+    # combinatie nog van vóór de contractdetails komen en de latere wél
+    # gevuld zijn. Er wordt daarom per veld aangevuld wat leeg is.
+    contract_per_vreg_id: dict[str, dict[str, Any]] = {}
     prijs_rows = []
-    seen_vreg_ids: set[str] = set()
 
     for _, r in df.iterrows():
         vreg_id = _str(r.get("vreg_id")) or ""
         if not vreg_id:
             continue
 
-        # Contract metadata (eenmaal per vreg_id)
-        if vreg_id not in seen_vreg_ids:
-            seen_vreg_ids.add(vreg_id)
-            contract_rows.append({
-                "vreg_id": vreg_id,
-                "leverancier_raw": _str(r.get("supplier_raw")) or "",
-                "product_raw": _str(r.get("product_raw")) or "",
-                "energie_type": _str(r.get("energy")),
-                "tarief_type": _str(r.get("tariff_type")),
-                "looptijd_tekst": _str(r.get("looptijd_tekst")),
-                "looptijd_maanden": _int(r.get("looptijd_maanden")),
-                "datum_intekenen_van": _date(r.get("datum_intekenen_van")),
-                "datum_intekenen_tot": _date(r.get("datum_intekenen_tot")),
-                "datum_start_levering_van": _date(r.get("datum_start_levering_van")),
-                "datum_start_levering_tot": _date(r.get("datum_start_levering_tot")),
-                "doelgroep_zonnepanelen": _str(r.get("doelgroep_zonnepanelen")),
-                "doelgroep_ev": _str(r.get("doelgroep_ev")),
-                "doelgroep_energiedelen": _str(r.get("doelgroep_energiedelen")),
-                "doelgroep_leegstand": _str(r.get("doelgroep_leegstand")),
-                "doelgroep_groepsaankoop": _str(r.get("doelgroep_groepsaankoop")),
-                "prijszekerheid_termijn": _str(r.get("prijszekerheid_termijn")),
-                "link_tariefkaart": _str(r.get("link_tariefkaart")),
-                "link_voorwaarden": _str(r.get("link_voorwaarden")),
-                "link_supplier": _str(r.get("link_supplier")),
-                "contracttype": _str(r.get("contracttype")),
-                "supplier_id": _str(r.get("supplier_id")),
-                "product_id": _str(r.get("product_id")),
-                "green_type": _str(r.get("green_type")),
-                "stars": _str(r.get("stars")),
-                "complex_product": r.get("complex_product") == "True",
-                "grayedout": r.get("grayedout") == "True",
-                "laatst_gezien_versie": version_id,
-                "laatst_gezien_op": datetime.now(tz=timezone.utc),
-            })
+        # De scrapedatum is de tijdas van dit contract: vanaf wanneer deze
+        # metadata bij vtest.be zo stond.
+        gescrapet = _ts(r.get("scraped_at"))
+        rij = {
+            "vreg_id": vreg_id,
+            "_scrape_datum": gescrapet.date() if gescrapet is not None else None,
+            "leverancier_raw": _str(r.get("supplier_raw")) or "",
+            "product_raw": _str(r.get("product_raw")) or "",
+            "energie_type": _str(r.get("energy")),
+            "tarief_type": _str(r.get("tariff_type")),
+            "looptijd_tekst": _str(r.get("looptijd_tekst")),
+            "looptijd_maanden": _int(r.get("looptijd_maanden")),
+            "datum_intekenen_van": _date(r.get("datum_intekenen_van")),
+            "datum_intekenen_tot": _date(r.get("datum_intekenen_tot")),
+            "datum_start_levering_van": _date(r.get("datum_start_levering_van")),
+            "datum_start_levering_tot": _date(r.get("datum_start_levering_tot")),
+            "doelgroep_zonnepanelen": _str(r.get("doelgroep_zonnepanelen")),
+            "doelgroep_ev": _str(r.get("doelgroep_ev")),
+            "doelgroep_energiedelen": _str(r.get("doelgroep_energiedelen")),
+            "doelgroep_leegstand": _str(r.get("doelgroep_leegstand")),
+            "doelgroep_groepsaankoop": _str(r.get("doelgroep_groepsaankoop")),
+            "prijszekerheid_termijn": _str(r.get("prijszekerheid_termijn")),
+            "link_tariefkaart": _str(r.get("link_tariefkaart")),
+            "link_voorwaarden": _str(r.get("link_voorwaarden")),
+            "link_supplier": _str(r.get("link_supplier")),
+            "contracttype": _str(r.get("contracttype")),
+            "supplier_id": _str(r.get("supplier_id")),
+            "product_id": _str(r.get("product_id")),
+            "green_type": _str(r.get("green_type")),
+            "stars": _str(r.get("stars")),
+            "complex_product": r.get("complex_product") == "True",
+            "grayedout": r.get("grayedout") == "True",
+            "laatst_gezien_versie": version_id,
+            "laatst_gezien_op": datetime.now(tz=timezone.utc),
+        }
+        bestaand = contract_per_vreg_id.get(vreg_id)
+        if bestaand is None:
+            contract_per_vreg_id[vreg_id] = rij
+        else:
+            for sleutel, waarde in rij.items():
+                if sleutel == "_scrape_datum":
+                    # De vroegste waarneming in deze run bepaalt de tijdas.
+                    if waarde and (not bestaand.get(sleutel) or waarde < bestaand[sleutel]):
+                        bestaand[sleutel] = waarde
+                elif not bestaand.get(sleutel) and waarde:
+                    bestaand[sleutel] = waarde
 
         # Prijs per postcode
         postcode = _str(r.get("postcode")) or ""
@@ -940,15 +1107,8 @@ def import_vtest_contract_en_prijzen(
             "scraped_at": _ts(r.get("scraped_at")) or datetime.now(tz=timezone.utc),
         })
 
-    # Upsert contracts
-    if contract_rows:
-        stmt = sa.dialects.postgresql.insert(vtest_contract).values(contract_rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["vreg_id"],
-            set_={"laatst_gezien_versie": stmt.excluded.laatst_gezien_versie,
-                  "laatst_gezien_op": stmt.excluded.laatst_gezien_op},
-        )
-        conn.execute(stmt)
+    contract_rows = list(contract_per_vreg_id.values())
+    nieuwe_snapshots = _scd2_contract_snapshots(conn, contract_rows)
 
     # Insert prijzen
     if prijs_rows:
@@ -957,7 +1117,10 @@ def import_vtest_contract_en_prijzen(
         conn.execute(stmt)
 
     total = len(contract_rows) + len(prijs_rows)
-    LOG.info("vtest: %d contracts, %d prijsrijen", len(contract_rows), len(prijs_rows))
+    LOG.info(
+        "vtest: %d contracten (%d nieuwe snapshots), %d prijsrijen",
+        len(contract_rows), nieuwe_snapshots, len(prijs_rows),
+    )
     return ImportResult(domain="vtest_postcode_prijs", rows_inserted=total)
 
 
@@ -987,6 +1150,18 @@ def import_netbeheerder_tarieven(
 
         df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
         geldig_van = date(jaar, 1, 1)
+        # VREG stelt de distributienettarieven per kalenderjaar vast, dus een
+        # tariefjaar loopt af op 31 december. `geldig_tot = NULL` liet elke
+        # rij "nog lopend" heten en zou een berekening over 2027 stil met de
+        # tarieven van 2026 laten rekenen — dezelfde stille-verkeerde-waarde
+        # als de accijnzen die na hun laatste ingangsdatum doorrekenen.
+        #
+        # Inclusieve einddatum (31 december, niet 1 januari): dat is de
+        # conventie die deze tabel al hanteert, waar een voorganger afgesloten
+        # wordt op `geldig_van - 1 dag`. De half-open conventie in de
+        # commentaar bij `schema.py` geldt voor de gebruikerstabellen uit
+        # migratie 0017, een andere familie.
+        geldig_tot = date(jaar, 12, 31)
 
         for _, r in df.iterrows():
             prijs = _dec(r.get("Prijs_num"))
@@ -1010,6 +1185,7 @@ def import_netbeheerder_tarieven(
                 "tariefnotering": _str(r.get("Tariefnotering")) or "",
                 "prijs": prijs,
                 "geldig_van": geldig_van,
+                "geldig_tot": geldig_tot,
                 "source_sheet": _str(r.get("source_sheet")),
                 "source_row": _int(r.get("source_row")),
             }
@@ -1021,7 +1197,20 @@ def import_netbeheerder_tarieven(
 
 
 def _scd2_upsert_netbeheerder(conn: sa.Connection, row_data: dict[str, Any]) -> None:
-    """SCD2-upsert voor netbeheerder_tarief."""
+    """SCD2-upsert voor netbeheerder_tarief.
+
+    De "huidige" rij wordt gezocht op de hoogste `geldig_van` voor de sleutel,
+    niet op `geldig_tot IS NULL`. Dat laatste werkte zolang elke rij open
+    stond, maar sinds een tariefjaar op 31 december afgesloten wordt is er
+    geen open rij meer: de opzoeking vond dan niets, viel door naar de insert
+    onderaan, en die botste op `uq_netbeheerder_tarief`. Een herimport van
+    dezelfde versie liep zo stuk met een IntegrityError.
+
+    De uniciteit hangt daardoor volledig aan `uq_netbeheerder_tarief` (de
+    volledige sleutel plus `geldig_van`); de partiële index
+    `ix_netbeheerder_tarief_open` bewaakte alleen open rijen en is met
+    migratie 0018 geschrapt.
+    """
     netbeheerder_code = row_data.get("netbeheerder_code")
     energie_type = row_data.get("energie_type")
     contract_richting = row_data.get("contract_richting")
@@ -1034,14 +1223,12 @@ def _scd2_upsert_netbeheerder(conn: sa.Connection, row_data: dict[str, Any]) -> 
     if not all([netbeheerder_code, energie_type, contract_richting, klanttype, geldig_van]):
         return
 
-    # Sluit eventuele open rij.
-    #
-    # De notering hoort hier mee in: dezelfde tariefnaam komt voor met
+    # De notering hoort bij de sleutel: dezelfde tariefnaam komt voor met
     # verschillende eenheden (bij FA staat het prosumententarief zowel als
     # 51,54 EUR/kW/jaar als 1,8984501 zonder eenheid). Zonder de notering zou
-    # de ene versie als de open rij van de andere gelden en die afsluiten —
+    # de ene versie als de vorige rij van de andere gelden en die afsluiten —
     # een tariefhistoriek die zichzelf overschrijft.
-    open_row = conn.execute(
+    laatste = conn.execute(
         sa.select(netbeheerder_tarief.c.id, netbeheerder_tarief.c.geldig_van).where(
             (netbeheerder_tarief.c.netbeheerder_code == netbeheerder_code)
             & (netbeheerder_tarief.c.energie_type == energie_type)
@@ -1050,42 +1237,48 @@ def _scd2_upsert_netbeheerder(conn: sa.Connection, row_data: dict[str, Any]) -> 
             & (netbeheerder_tarief.c.tarieftype == tarieftype)
             & (netbeheerder_tarief.c.tariefdetail == tariefdetail)
             & (netbeheerder_tarief.c.tariefnotering == tariefnotering)
-            & (netbeheerder_tarief.c.geldig_tot.is_(None))
         )
+        .order_by(netbeheerder_tarief.c.geldig_van.desc())
+        .limit(1)
     ).fetchone()
 
-    if open_row:
-        open_id, open_geldig_van = open_row
+    if laatste:
+        laatste_id, laatste_geldig_van = laatste
 
         # Zelfde periode: bijwerken in plaats van een nieuwe historiekrij.
-        # Zie _scd2_upsert — blind afsluiten en invoegen liet een herimport
-        # van dezelfde versie stuklopen op de unieke sleutel.
-        if open_geldig_van == geldig_van:
+        # Blind afsluiten en invoegen liet een herimport van dezelfde versie
+        # stuklopen op de unieke sleutel.
+        if laatste_geldig_van == geldig_van:
             conn.execute(
                 sa.update(netbeheerder_tarief)
-                .where(netbeheerder_tarief.c.id == open_id)
+                .where(netbeheerder_tarief.c.id == laatste_id)
                 .values(**{k: v for k, v in row_data.items() if k != "geldig_van"})
             )
             return
 
-        if open_geldig_van > geldig_van:
+        if laatste_geldig_van > geldig_van:
             LOG.warning(
                 "Overgeslagen: netbeheerder_tarief %s/%s/%s begint op %s "
-                "terwijl de open rij al op %s begint.",
-                netbeheerder_code, klanttype, tariefdetail, geldig_van, open_geldig_van,
+                "terwijl de laatste rij al op %s begint.",
+                netbeheerder_code, klanttype, tariefdetail, geldig_van, laatste_geldig_van,
             )
             return
 
+        # De voorganger afsluiten op de dag vóór dit tariefjaar. Meestal staat
+        # daar al 31 december van dat jaar; het blijft nodig voor een regime
+        # dat middenin een jaar begint en voor rijen van vóór migratie 0018.
         vorige_dag = date.fromordinal(geldig_van.toordinal() - 1)
         conn.execute(
             sa.update(netbeheerder_tarief)
-            .where(netbeheerder_tarief.c.id == open_id)
+            .where(netbeheerder_tarief.c.id == laatste_id)
+            .where(
+                netbeheerder_tarief.c.geldig_tot.is_(None)
+                | (netbeheerder_tarief.c.geldig_tot > vorige_dag)
+            )
             .values(geldig_tot=vorige_dag)
         )
 
-    # Insert nieuwe open rij
-    row_to_insert = {**row_data, "geldig_tot": None}
-    conn.execute(sa.insert(netbeheerder_tarief).values(**row_to_insert))
+    conn.execute(sa.insert(netbeheerder_tarief).values(**row_data))
 
 
 # ---------------------------------------------------------------------------
@@ -1258,6 +1451,173 @@ def _profiel_meta_uit_bestandsnaam(bestandsnaam: str) -> tuple[str, str, int]:
         f"Onbekend profielenbestand: {bestandsnaam!r} — verwacht "
         f"'<{'|'.join(_PROFIEL_BESTANDSVOORVOEGSELS)}>_<jaar>.csv'."
     )
+
+
+# ---------------------------------------------------------------------------
+# Marktcurves (VREG-prijscurves)
+# ---------------------------------------------------------------------------
+
+_CURVES_CHUNK_SIZE = 5_000
+
+# Het werkboek noemt de energievorm in vier vormen door elkaar: één letter
+# ("E"/"G"), voluit, als voorvoegsel van een marktplaats ("Gas TTF", "Gas ZTP")
+# en met een achtervoegsel voor de richting ("Elektriciteit_Injectie"). Zonder
+# normalisatie belanden die alle vier als aparte energie_type-waarde in de
+# databank en levert een filter op "gas" niets op.
+_ENERGIE_UIT_CURVES = {"e": "elektriciteit", "g": "gas"}
+
+
+def _curve_energie(waarde: Any) -> str | None:
+    tekst = (_str(waarde) or "").strip().lower()
+    if not tekst:
+        return None
+    if tekst in _ENERGIE_UIT_CURVES:
+        return _ENERGIE_UIT_CURVES[tekst]
+    if "elektriciteit" in tekst:
+        return "elektriciteit"
+    if "gas" in tekst or "ttf" in tekst or "ztp" in tekst:
+        return "gas"
+    # Liever de ruwe waarde dan een gok: een onbekende vorm hoort op te
+    # vallen, niet stil als elektriciteit door te gaan.
+    return _str(waarde)
+
+
+def import_marktcurves(conn: sa.Connection, bron_dir: Path, version_id: str) -> ImportResult:
+    """Importeer de gestagede VREG-prijscurves naar `marktcurve`.
+
+    `curves/` werd wel geparsed maar nooit ingelezen: de tabel stond leeg
+    terwijl de CSV's al maanden in staging klaarstonden.
+
+    De drie bestanden dragen verschillende vormen en gaan op één generieke
+    tabel:
+
+    - `curves_spot.csv` — één waarde per groep/parameter, zonder tijdstip.
+    - `curves_forward.csv` — per datum en energievorm twee waarden, voor
+      afname en teruglevering. Die worden twee rijen, uit elkaar gehouden
+      door `groep`; ze in één rij persen zou een van beide laten vallen.
+    - `curves_timeseries.csv` — de eigenlijke tijdreeksen (~132.000 rijen),
+      met het curvetype in de data zelf (EPC, ...).
+
+    Er is bewust geen unieke sleutel en dus geen ON CONFLICT: de natuurlijke
+    sleutel zou `datum` en `tijdstip` moeten bevatten, en die zijn per
+    bestandsvorm afwisselend NULL — PostgreSQL ziet NULLs in een unieke
+    sleutel als onderling verschillend, waardoor een echt duplicaat er alsnog
+    in mag (dezelfde valkuil als `netbeheerder_tarief.tariefnotering`). In de
+    plaats daarvan wordt alles van deze versie eerst verwijderd: een versie
+    levert de curves in hun geheel, niet aanvullend.
+    """
+    curves_dir = bron_dir / "curves"
+    if not curves_dir.is_dir():
+        LOG.info("Geen curves/-map in %s, overgeslagen.", bron_dir)
+        return ImportResult(domain="marktcurve", rows_inserted=0)
+
+    verwijderd = conn.execute(
+        sa.delete(marktcurve).where(marktcurve.c.version_id == version_id)
+    ).rowcount
+    if verwijderd:
+        LOG.info("marktcurve: %d bestaande rijen van deze versie verwijderd.", verwijderd)
+
+    totaal = 0
+    totaal += _import_curves_spot(conn, curves_dir / "curves_spot.csv", version_id)
+    totaal += _import_curves_forward(conn, curves_dir / "curves_forward.csv", version_id)
+    totaal += _import_curves_timeseries(conn, curves_dir / "curves_timeseries.csv", version_id)
+
+    LOG.info("marktcurve: %d rijen", totaal)
+    return ImportResult(domain="marktcurve", rows_inserted=totaal)
+
+
+def _schrijf_curverijen(conn: sa.Connection, rijen: list[dict[str, Any]]) -> int:
+    """Schrijft in stukken weg, zoals de profielenimport, zodat een reeks van
+    honderdduizenden rijen niet als één statement de databank in moet."""
+    geschreven = 0
+    for start in range(0, len(rijen), _CURVES_CHUNK_SIZE):
+        blok = rijen[start:start + _CURVES_CHUNK_SIZE]
+        conn.execute(sa.insert(marktcurve), blok)
+        geschreven += len(blok)
+    return geschreven
+
+
+def _import_curves_spot(conn: sa.Connection, csv_path: Path, version_id: str) -> int:
+    if not csv_path.is_file():
+        return 0
+    df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
+    rijen = []
+    for _, r in df.iterrows():
+        waarde = _dec(r.get("Waarde"))
+        if waarde is None:
+            continue
+        groep = _str(r.get("Groep"))
+        rijen.append({
+            "version_id": version_id,
+            "curve_type": "spot",
+            # De groep draagt de energievorm ("Elektriciteit - afname"); die
+            # blijft staan zoals ze is en wordt er ook uit afgeleid.
+            "energie_type": _curve_energie((groep or "").split(" - ")[0]),
+            "groep": groep,
+            "parameter": _str(r.get("Parameter")),
+            "datum": None,
+            "tijdstip": None,
+            "waarde": waarde,
+            "source_sheet": _str(r.get("SourceSheet")),
+        })
+    return _schrijf_curverijen(conn, rijen)
+
+
+def _import_curves_forward(conn: sa.Connection, csv_path: Path, version_id: str) -> int:
+    if not csv_path.is_file():
+        return 0
+    df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
+    rijen = []
+    for _, r in df.iterrows():
+        tijdstip = _ts(r.get("Datum"))
+        basis = {
+            "version_id": version_id,
+            "curve_type": "forward",
+            "energie_type": _curve_energie(r.get("Energietype")),
+            "parameter": _str(r.get("Indexatieparameter")),
+            "datum": tijdstip.date() if tijdstip is not None else None,
+            "tijdstip": None,
+            "source_sheet": _str(r.get("SourceSheet")),
+        }
+        # Twee waarden per bronrij: afname en teruglevering zijn aparte
+        # grootheden en krijgen elk een rij.
+        for kolom, groep in (("Afname_VNR", "afname"), ("Teruglevering_VNR", "teruglevering")):
+            waarde = _dec(r.get(kolom))
+            if waarde is None:
+                continue
+            rijen.append({**basis, "groep": groep, "waarde": waarde})
+    return _schrijf_curverijen(conn, rijen)
+
+
+def _import_curves_timeseries(conn: sa.Connection, csv_path: Path, version_id: str) -> int:
+    if not csv_path.is_file():
+        return 0
+    df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
+    rijen: list[dict[str, Any]] = []
+    geschreven = 0
+    for _, r in df.iterrows():
+        waarde = _dec(r.get("Waarde"))
+        tijdstip = _ts(r.get("Timestamp"))
+        if waarde is None or tijdstip is None:
+            continue
+        rijen.append({
+            "version_id": version_id,
+            "curve_type": _str(r.get("CurveType")) or "tijdreeks",
+            "energie_type": _curve_energie(r.get("EnergyType")),
+            "groep": _str(r.get("Variant")),
+            "parameter": _str(r.get("Resolution")),
+            "datum": tijdstip.date(),
+            "tijdstip": tijdstip,
+            "waarde": waarde,
+            "source_sheet": _str(r.get("SourceSheet")),
+        })
+        # Meteen wegschrijven per blok i.p.v. eerst alle ~132.000 rijen in
+        # het geheugen op te bouwen — zelfde reden als bij de profielen.
+        if len(rijen) >= _CURVES_CHUNK_SIZE:
+            geschreven += _schrijf_curverijen(conn, rijen)
+            rijen = []
+    geschreven += _schrijf_curverijen(conn, rijen)
+    return geschreven
 
 
 def import_verbruiksprofielen(conn: sa.Connection, bron_dir: Path, version_id: str) -> ImportResult:

@@ -19,6 +19,47 @@ from energie_vlaanderen.utility.constants import LOCAL_TZ
 
 LOG = logging.getLogger(__name__)
 
+# De detailpanelen worden als losse bestanden bewaard, één per contract, zodat
+# een nieuw veld een herparse kost in plaats van een nieuwe scrape. Ze zijn
+# producteigenschappen en gelden dus over alle postcodes en segmenten heen —
+# vandaar één map per staging-versie en niet per combinatie.
+_DETAILS_MAP = "contractdetails"
+
+
+def _lees_contractdetails(map_pad: Path) -> dict[str, str]:
+    """Leest eerder bewaarde detailpanelen van schijf."""
+    if not map_pad.is_dir():
+        return {}
+    fragmenten: dict[str, str] = {}
+    for bestand in sorted(map_pad.glob("*.html")):
+        try:
+            fragmenten[bestand.stem] = bestand.read_text(encoding="utf-8")
+        except OSError as exc:
+            LOG.warning("Detailpaneel %s niet leesbaar: %s", bestand, exc)
+    if fragmenten:
+        LOG.info("%d bewaarde detailpanelen ingelezen uit %s", len(fragmenten), map_pad)
+    return fragmenten
+
+
+def _schrijf_contractdetails(map_pad: Path, fragmenten: dict[str, str]) -> int:
+    """Bewaart detailpanelen die nog niet op schijf staan."""
+    if not fragmenten:
+        return 0
+    map_pad.mkdir(parents=True, exist_ok=True)
+    nieuw = 0
+    for vreg_id, html in fragmenten.items():
+        if not html:
+            continue
+        bestand = map_pad / f"{vreg_id}.html"
+        if bestand.is_file():
+            continue
+        bestand.write_text(html, encoding="utf-8")
+        nieuw += 1
+    if nieuw:
+        LOG.info("%d nieuwe detailpanelen bewaard in %s", nieuw, map_pad)
+    return nieuw
+
+
 _PRODUCT_CSV_COLUMNS = [
     "vreg_id", "supplier_raw", "product_raw", "energy", "tariff_type",
     "looptijd_tekst", "looptijd_maanden",
@@ -78,7 +119,7 @@ class VTestRefinePipeline:
         browser: str = "firefox",
         timeout: int = 60,
         skip_download: bool = False,
-        contractdetails: dict[str, dict[str, str]] | None = None,
+        contractdetails: dict[str, str] | None = None,
     ) -> VTestRefinePipelineResult:
         vtest_dir = staging_dir / "vtest"
         vtest_dir.mkdir(parents=True, exist_ok=True)
@@ -86,6 +127,15 @@ class VTestRefinePipeline:
         stem = _combo_stem(segment, energy, postcode)
         dump_html = vtest_dir / f"vtest_dump_{stem}.html"
         dump_meta = vtest_dir / f"vtest_dump_meta_{stem}.json"
+
+        # Wat al op schijf staat telt mee, ook wanneer er niet om
+        # contractdetails gevraagd is: dan blijft een herparse (--no-download)
+        # de eerder opgehaalde panelen gebruiken in plaats van ze te negeren.
+        details_dir = vtest_dir / _DETAILS_MAP
+        bewaarde_details = _lees_contractdetails(details_dir)
+        if contractdetails is not None:
+            for vreg_id, fragment in bewaarde_details.items():
+                contractdetails.setdefault(vreg_id, fragment)
 
         if skip_download:
             if not dump_html.is_file():
@@ -118,6 +168,8 @@ class VTestRefinePipeline:
                 timeout=timeout,
             )
             dump_html.write_text(html, encoding="utf-8")
+            if contractdetails:
+                _schrijf_contractdetails(details_dir, contractdetails)
             dump_meta.write_text(
                 json.dumps({
                     "postcode": postcode,
@@ -131,25 +183,28 @@ class VTestRefinePipeline:
             )
             LOG.info("Dump opgeslagen: %s", dump_html)
 
+        # De datums, de doelgroep, de looptijd, de prijszekerheid en de links
+        # naar de tariefkaart en de algemene voorwaarden staan niet in de
+        # resultatendump maar in het detailpaneel per contract. Die panelen
+        # gaan als aparte fragmenten mee de parser in.
+        fragmenten = contractdetails if contractdetails is not None else bewaarde_details
+
         LOG.info("HTML parsen ...")
-        raw_products = VTestProductParser().parse(html)
+        raw_products = VTestProductParser().parse(html, detail_fragments=fragmenten)
         LOG.info("%d producten gevonden.", len(raw_products))
 
-        # De tariefkaart- en voorwaardenlinks staan niet op de
-        # resultatenpagina maar in het detailpaneel, dat pas bij een klik
-        # geladen wordt. Ze komen dus niet uit de HTML-dump maar uit de
-        # verzameling die de downloader tijdens de sessie opbouwt.
-        if contractdetails:
-            gekoppeld = 0
-            for product in raw_products:
-                details = contractdetails.get(product.vreg_id)
-                if not details:
-                    continue
-                product.links.update(details)
-                gekoppeld += 1
-            LOG.info(
-                "Contractdetails gekoppeld aan %d van %d producten.",
-                gekoppeld, len(raw_products),
+        gekoppeld = sum(1 for p in raw_products if p.vreg_id in (fragmenten or {}))
+        if gekoppeld == len(raw_products) and raw_products:
+            LOG.info("Contractdetails gekoppeld aan alle %d producten.", gekoppeld)
+        else:
+            # Luid, niet stil: een ontbrekend detailpaneel kost geen fout maar
+            # vijftien lege kolommen in vtest_contract, en dat viel eerder pas
+            # maanden later op.
+            LOG.warning(
+                "Contractdetails ontbreken voor %d van %d producten — "
+                "intekenperiode, start levering, looptijd, doelgroep, "
+                "prijszekerheid en de tariefkaartlink blijven daar leeg.",
+                len(raw_products) - gekoppeld, len(raw_products),
             )
 
         normalizer = VTestProductNormalizer()

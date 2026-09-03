@@ -243,6 +243,9 @@ def import_version_into_db(
             )
         )
 
+        LOG.info("Importeren van marktcurves ...")
+        results.append(imp.import_marktcurves(conn, bron_dir, version_id))
+
         LOG.info("Importeren van verbruiksprofielen (indien aanwezig) ...")
         results.append(imp.import_verbruiksprofielen(conn, bron_dir, version_id))
 
@@ -264,6 +267,19 @@ def mark_version_active_in_db(settings: Settings, version_id: str) -> None:
 
     engine = get_engine(settings.project_root)
     with engine.begin() as conn:
+        # Ook de status meenemen, niet enkel `geactiveerd_op`: een vorige
+        # actieve versie hield anders `status = "active"` terwijl haar
+        # `geactiveerd_op` leeggemaakt werd. `db verify` kijkt naar
+        # `geactiveerd_op` en meldde dus terecht "komt overeen", terwijl
+        # `db status` twee versies als actief afdrukte. Dezelfde
+        # tegenspraak tussen de twee velden die `upsert_data_version`
+        # aan de andere kant al opving.
+        conn.execute(
+            sa.update(dv_table)
+            .where(dv_table.c.version_id != version_id)
+            .where(dv_table.c.status == "active")
+            .values(geactiveerd_op=None, status="superseded")
+        )
         conn.execute(
             sa.update(dv_table)
             .where(dv_table.c.version_id != version_id)
@@ -273,6 +289,29 @@ def mark_version_active_in_db(settings: Settings, version_id: str) -> None:
             sa.update(dv_table)
             .where(dv_table.c.version_id == version_id)
             .values(geactiveerd_op=sa.func.now(), status="active")
+        )
+
+        # De publicatiedatum van de contractsnapshots hoort hier en niet bij de
+        # import: `version publish` importeert eerst en activeert daarna, dus
+        # tijdens de import bestaat er nog geen publicatiemoment. Een versie
+        # die wel ingelezen maar nog niet gepubliceerd is (`db import` los)
+        # houdt `gepubliceerd_op` daarom op NULL — dat is de juiste uitspraak,
+        # geen ontbrekend gegeven.
+        #
+        # Alleen de nog lopende snapshots krijgen de stempel: een afgesloten
+        # snapshot droeg de publicatiedatum van zijn eigen tijd en die mag een
+        # latere publicatie niet herschrijven.
+        from energie_vlaanderen.infrastructure.db.schema import (
+            vtest_contract as vc_table,
+        )
+
+        conn.execute(
+            sa.update(vc_table)
+            .where(
+                (vc_table.c.laatst_gezien_versie == version_id)
+                & vc_table.c.geldig_tot.is_(None)
+            )
+            .values(gepubliceerd_op=sa.func.now())
         )
 
 

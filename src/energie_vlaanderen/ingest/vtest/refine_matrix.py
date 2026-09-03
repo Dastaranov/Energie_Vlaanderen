@@ -99,11 +99,11 @@ class VTestRefineMatrix:
         fouten: list[VTestMatrixFout] = []
         overgeslagen = 0
 
-        # Eén verzameling over de hele matrix heen: de tariefkaart- en
-        # voorwaardenlinks zijn producteigenschappen en verschillen niet per
-        # postcode. Dezelfde contracten komen bij elke postcode terug, dus
-        # delen scheelt honderden kliks.
-        contractdetails: dict[str, dict[str, str]] | None = (
+        # Eén verzameling over de hele matrix heen: de detailpanelen dragen
+        # producteigenschappen en verschillen niet per postcode. Dezelfde
+        # contracten komen bij elke postcode terug, dus delen scheelt
+        # honderden kliks.
+        contractdetails: dict[str, str] | None = (
             {} if met_contractdetails else None
         )
 

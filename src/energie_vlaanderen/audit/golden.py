@@ -33,9 +33,21 @@ class GoldenAuditResult:
     total_rows: int
     verified_rows: int
     mismatches: tuple[FieldMismatch, ...]
+    # Gezet wanneer het gestagede CSV niet gevonden werd. Eerder leverde dat
+    # een resultaat met 0 rijen en 0 verschillen op, en dus `passed = True`:
+    # "OK 0/0 rijen geverifieerd" voor elk domein. Een audit die niets kon
+    # vergelijken mag niet slagen — zeker niet deze, die de poort naar
+    # publicatie bewaakt.
+    ontbrekend_bestand: Path | None = None
 
     @property
     def passed(self) -> bool:
+        if self.ontbrekend_bestand is not None:
+            return False
+        # Nul geverifieerde rijen is geen geslaagde audit maar een audit die
+        # niet gelopen heeft.
+        if self.verified_rows == 0:
+            return False
         return not self.mismatches
 
 
@@ -74,6 +86,7 @@ class VTestGoldenAuditor:
                 total_rows=0,
                 verified_rows=0,
                 mismatches=(),
+                ontbrekend_bestand=staged_csv,
             )
 
         staged_df = pd.read_csv(staged_csv, sep=";", dtype=str, encoding="utf-8-sig").fillna("")
@@ -209,7 +222,16 @@ class TariffGoldenAuditor:
     ) -> GoldenAuditResult:
         domain = f"{energy_type}_{direction}"
         parsed = TariffWorkbookParser().parse(source_xlsx, energy_type=energy_type)
-        genormaliseerd = TariffDataNormalizer().normalize(parsed.afname, parsed.injectie)
+        # `kolomkaarten()` moet mee, net als in TariffPipeline. Zonder die
+        # kaarten valt de normalisatie terug op de vaste kolomindices en leest
+        # ze kolom 11 (ELEK_LS_DC) er alsnog bij: 528 hoogspanningsrijen
+        # tegenover de 432 die de pipeline schrijft. De vergelijking loopt dan
+        # op positie uit de pas en meldde 2.220 verschillen die geen van alle
+        # een echt dataverschil waren — dezelfde soort fout als toen deze
+        # audit de verse normalisatie tegen alleen het afname-bestand legde.
+        genormaliseerd = TariffDataNormalizer().normalize(
+            parsed.afname, parsed.injectie, parsed.kolomkaarten()
+        )
 
         # De pipeline schrijft de hoogspannings- en middenspanningsklanttypes
         # naar een eigen CSV, met afname én injectie samen. De verse kant hier
@@ -251,6 +273,7 @@ class TariffGoldenAuditor:
                 total_rows=0,
                 verified_rows=0,
                 mismatches=(),
+                ontbrekend_bestand=staged_csv,
             )
 
         staged_df = pd.read_csv(staged_csv, sep=";", dtype=str, encoding="utf-8-sig").fillna("")
@@ -272,6 +295,22 @@ class TariffGoldenAuditor:
                 xlsx_value=str(len(fresh_sorted)),
                 row_key="totaal",
             ))
+            # De vergelijking hieronder loopt op positie. Bij een verschillend
+            # aantal rijen staan de twee kanten vanaf het eerste ontbrekende
+            # element uit de pas, en dan telt bijna élk veld als verschil —
+            # 2.220 stuks in het geval dat dit blootlegde, geen ervan echt.
+            # Die lijst afdrukken stuurt de lezer een dwaalspoor op (waarom
+            # staat ELEK_LS_DC naast ELEK_MS1?), terwijl de enige bruikbare
+            # bevinding het rij-aantal zelf is. Eerst dat oplossen, dan pas
+            # veld voor veld vergelijken.
+            return GoldenAuditResult(
+                version_id=version_id,
+                domain=domain,
+                source_xlsx=source_xlsx,
+                total_rows=total,
+                verified_rows=verified,
+                mismatches=tuple(mismatches),
+            )
 
         for idx in range(verified):
             fresh_row = fresh_sorted.iloc[idx]

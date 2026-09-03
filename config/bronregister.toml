@@ -18,8 +18,8 @@
 # en dat zou dagelijks vals alarm geven. De naam draagt de periode
 # (202608-...) en dat is precies het signaal dat telt.
 
-bijgewerkt_op = "2026-08-31"
-verwerkte_versie = "20260829T202059Z-853a7046"
+bijgewerkt_op = "2026-09-03"
+verwerkte_versie = "20260903T172618Z-f82afd0a"
 
 [[bron]]
 kind = "vtest"

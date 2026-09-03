@@ -56,7 +56,7 @@ The CLI is grouped as `<groep> <actie> [opties]`; every action also accepts `--j
 |---|---|
 | `source` | `download --year`, `list --year` |
 | `raw` | `verify --version`, `status` |
-| `staging` | `parse --version [--only vtest\|tariffs\|curves\|profielen\|all] [--overwrite] [--synergrid-version] [--jaar]`, `refine --version [--postcode] [--segment woning\|onderneming] [--energy elektriciteit\|gas] [--matrix] [--no-download] [--browser chrome\|firefox] [--show]`, `calibrate --version [--postcode] [--browser] [--show]` |
+| `staging` | `parse --version [--only vtest\|tariffs\|curves\|profielen\|all] [--overwrite] [--synergrid-version] [--jaar]`, `refine --version [--postcode] [--segment woning\|onderneming] [--energy elektriciteit\|gas] [--matrix] [--no-download] [--zonder-contractdetails] [--browser chrome\|firefox] [--show]`, `calibrate --version [--postcode] [--browser] [--show]` |
 | `synergrid` | `list --year`, `download --year`, `verify --version`, `status` |
 | `market` | `sync --start --end [--no-api]` |
 | `audit` | `status`, `approve`, `golden`, `set-golden`, `sanity`, `sample` (all `--version`), `heffingen [--datum] [--streng]` (geen versie nodig) |
@@ -758,6 +758,249 @@ vóór dat hertekenen is daarna stale, en de klik gaat verloren zonder dat er oo
 een resultaat komt. De lus zoekt de knop opnieuw en klikt opnieuw binnen hetzelfde
 `timeout`-budget, en een uitblijvend resultaat citeert nu de validatiemeldingen
 van de pagina in plaats van "controleer of vtest.be bereikbaar is".
+
+### De contractmetadata staat niet in de resultatendump
+
+`vtest_contract` stond grotendeels leeg: intekenperiode, start levering,
+looptijd, doelgroep, prijszekerheid en de links naar de tariefkaart en de
+algemene voorwaarden waren NULL voor alle 350 contracten. Vijftien kolommen,
+en niets faalde — de stille-lege-waarde-fout in haar zuiverste vorm.
+
+Twee oorzaken, los van elkaar, allebei nodig om op te lossen:
+
+**1. Het detailpaneel bereikte de parser nooit.** vtest.be serveerde de
+detailblokken vroeger inline in de resultatenpagina (`contractdetail-<id>` —
+te zien in de archiefdumps van juni 2026), maar haalt ze nu pas op na een klik
+op "Meer details", via een POST naar `/VTest/GetContractDetails`. Dat endpoint
+heeft de zoekopdracht in de sessie nodig; losstaand aanroepen geeft een 500,
+dus de klik in de lopende Selenium-sessie is de enige weg. In de opgeslagen
+dumps staat daardoor alleen een leeg `<div id="contractDetailsModal">`.
+
+De parser zelf was niet stuk: op een dump die de blokken wél bevat vult hij
+199 van de 199 producten. Het was plumbing.
+
+Wat er nu gebeurt: `_verzamel_contractdetails` bewaart de **volledige**
+innerHTML van het paneel onder
+`staging/<versie>/vtest/contractdetails/<vreg_id>.html`, en
+`VTestProductParser.parse(html, detail_fragments=...)` ontleedt die achteraf.
+Een extra veld kost daarmee een herparse (`--no-download`), geen nieuwe scrape
+van een half uur. Eerder werden alleen de links uit het paneel geplukt en ging
+de rest verloren.
+
+Drie dingen die daarbij tegenvielen en nu vastliggen:
+
+- **Het paneel draagt het contract twee keer**: een verborgen printversie in
+  `#contractdetail-<vreg_id>` en de zichtbare `.contractDetailsContent`
+  (een class, geen id). De sectietabellen staan in de zichtbare helft, en de
+  tariefkaartlink ook — maar buiten het printblok. Op `#contractdetail-<id>`
+  scopen levert dus wel de datums en de doelgroep op, en géén enkele link.
+  Er wordt over het hele fragment gezocht.
+- **De links matchen op `onclick="matomoLinks('...')"`**, niet op de zichtbare
+  ankertekst. Op tekst alleen matchen pikte de consumentenakkoord-link van FOD
+  Economie op als "website van de leverancier"; die komt nu uit de
+  "Website"-rij van de leverancierssectie.
+- **Er wordt gewacht op het paneel van dít contract** (`#contractDetailsModal
+  #contractdetail-<id>`), niet op "paneel niet leeg". Bij een klik die niet
+  aankomt blijft de vorige inhoud staan, en dan zouden de details van het
+  vorige contract stil aan dit contract gehangen worden.
+
+Het ophalen zit **niet meer achter een vlag**. Zolang `--met-contractdetails`
+opt-in was, leverde een gewone refine-run vijftien lege kolommen op zonder dat
+er iets faalde. Nu is het standaardgedrag; `--zonder-contractdetails` blijft
+over voor een snelle prijs-only run, en de pipeline waarschuwt luid wanneer
+een paneel ontbreekt. `--met-contractdetails` blijft aanvaard.
+
+**2. De upsert werkte de metadata niet bij.** `import_vtest_contract_en_prijzen`
+deed `ON CONFLICT DO UPDATE` op alleen `laatst_gezien_versie` en
+`laatst_gezien_op`. Een contract dat ooit zonder detailpaneel ingelezen was,
+bleef daardoor voorgoed leeg — ook na een verse scrape die de gegevens wél
+had. Nieuwe waarden winnen nu, maar afwezigheid wist nooit iets: tekst gaat
+door `COALESCE(NULLIF(excluded.x, ''), x)`, datums door `COALESCE`. Een run
+zonder detailpanelen kan de eerder opgehaalde metadata dus niet overschrijven.
+
+Binnen één import wordt bovendien per veld aangevuld in plaats van "de eerste
+rij wint": bij een hervatte matrixrun kan de eerste combinatie nog van vóór de
+contractdetails komen terwijl een latere ze wél draagt.
+
+### Een nettarief loopt tot 31 december, niet eeuwig
+
+`netbeheerder_tarief.geldig_tot` stond op NULL voor alle 1.048 rijen — de
+SCD2-betekenis "nog lopend". VREG stelt de distributienettarieven per
+kalenderjaar vast, dus dat klopte niet: het tarief van 2026 gold formeel ook
+in 2027, en een berekening over dat jaar zou er stil mee rekenen. Dezelfde
+klasse als de accijnzen die na hun laatste ingangsdatum doorrekenen.
+
+Migratie 0018 vult `geldig_tot = 31 december van het tariefjaar`, en de
+importer schrijft het voortaan zelf mee. Twee dingen die daaraan vastzitten:
+
+- **De einddatum is inclusief** (31/12), niet half-open (01/01). Dat is de
+  conventie die deze tabel al hanteerde — `_scd2_upsert_netbeheerder` sluit een
+  voorganger af op `geldig_van - 1 dag`. De half-open conventie in de
+  commentaar bij `schema.py` gaat over de gebruikerstabellen uit migratie 0017,
+  een andere familie. Eén dag verschil is hier precies de stille fout die dit
+  project probeert te vangen.
+- **De SCD2-opzoeking moest mee.** Ze zocht de huidige rij op
+  `geldig_tot IS NULL`; zodra elke rij een einddatum draagt vond ze niets, viel
+  door naar de insert onderaan, en botste op `uq_netbeheerder_tarief` — een
+  herimport van dezelfde versie liep stuk met een IntegrityError (nagegaan
+  tegen de echte databank vóór de wijziging). Ze gaat nu op de hoogste
+  `geldig_van`. De partiële index `ix_netbeheerder_tarief_open` bewaakte alleen
+  open rijen en is geschrapt; `uq_netbeheerder_tarief` dekt de uniciteit
+  volledig, want dat is de sleutel plus `geldig_van`.
+
+### De hoogspanningsaudit meldde 2.220 verschillen die niet bestonden
+
+`audit golden` gaf `NOK electricity_hoogspanning` met 2.220 verschillen. Geen
+ervan was echt. Drie fouten, gevonden door de audit op de oude én de nieuwe
+versie te draaien (identiek resultaat, dus niet door recente wijzigingen).
+
+**1. De audit gaf de kolomkaarten niet mee.** `TariffPipeline` doet
+`normalize(afname, injectie, parsed.kolomkaarten())`; de audit liet dat derde
+argument weg. Zonder kaarten valt de normalisatie terug op de vaste
+kolomindices en leest kolom 11 er alsnog bij: 528 hoogspanningsrijen tegenover
+de 432 die de pipeline schrijft. Daarna vergelijkt de audit op positie, en dan
+telt élke rij als verschil. Exact dezelfde soort fout als toen deze audit de
+volledige verse normalisatie tegen alleen het afname-bestand legde en 108
+onechte verschillen meldde.
+
+**2. Erger: de audit slaagde op nul rijen.** `version publish` ruimt de
+stagingmap op, en `audit golden` las uitsluitend daar. Op een gepubliceerde
+versie vond ze dus geen enkel CSV en meldde `OK 0/0 rijen geverifieerd` voor
+alle zeven domeinen — een groene audit die niets gecontroleerd had, en juist
+deze audit is de poort naar `audit approve` en `version publish`. Ze zoekt nu
+eerst in `versions/` en valt terug op `staging/` (dezelfde volgorde als
+`db import`), en zowel een ontbrekend bestand als nul geverifieerde rijen
+geldt nu als een **fout**.
+
+Dit stond ook zo in een test: `test_missing_staged_csv_returns_empty_result`
+beweerde `assert result.passed` bij nul rijen. De fout was dus als gewenst
+gedrag vastgelegd — precies waar "Tests: herkomst boven aantal" over gaat.
+
+**3. En daardoor gevonden: 96 afnamerijen verdwenen stil.** Kolom 11 is
+`≤1 kV / distributiecabine` (`ELEK_LS_DC`): in naam laagspanning, maar met een
+eigen kolom náást de kop "Laagspanningsnet" en met MS/HS-achtige tarieven
+(toegangsvermogen in kVA, maandpiek, databeheer). De splitsing tussen "uit de
+koppen afgeleid" en "op vaste index" liep op de naam
+(`startswith("ELEK_LS_")`), waardoor dit klanttype uit *beide* groepen viel:
+uitgesloten van de vaste kolommen om zijn naam, en expliciet uitgesloten van de
+kopkaart omdat het geen kopkolom is. Niemand las kolom 11 nog. 96 rijen met
+echte prijzen voor alle acht netbeheerders.
+
+De groepen heten nu `ELEK_AFNAME_KOPKOLOMMEN` (precies de drie meetsoorten
+onder "Laagspanningsnet") en `ELEK_AFNAME_VASTE_KOLOMMEN` (al de rest, dus HS,
+MS én LS-distributiecabine). Een test bewaakt het invariant: elk klanttype uit
+`ELEK_AFNAME_COLS` zit in precies één van de twee. De laagspanning-CSV's
+blijven ongewijzigd (200 afname, 48 injectie) — `grid_cost()` is niet geraakt,
+en `HS_MS_KLANTTYPES` routeerde `ELEK_LS_DC` al naar de hoogspannings-CSV.
+
+Het werkboek van 2024 gedraagt zich onveranderd: de afwijkende indeling laat de
+vaste kolommen (en dus ook `ELEK_LS_DC`) overslaan, met de bestaande
+waarschuwing.
+
+### Wat er van de historiek bewaard blijft, en wat niet
+
+Een contract van april 2026 moet in 2028 nog na te rekenen zijn. Nagegaan op de
+echte databank:
+
+| tabel | historiek |
+|---|---|
+| `tarief_afname` / `tarief_injectie` | maandelijkse SCD2, jan 2025 t/m aug 2026 (16.642 rijen, 20 snapshots, 596 producten) |
+| `netbeheerder_tarief` | per tariefjaar, afgesloten op 31/12 (migratie 0018) |
+| `vtest_postcode_prijs` | per `version_id` — oudere versies blijven staan |
+| `marktcurve` | per `version_id`; een herimport verwijdert alleen die ene versie |
+| `verbruiksprofiel_waarde` | per `version_id` |
+| `versions/<id>/` | blijft op schijf staan; publiceren ruimt alleen `staging/` op |
+
+Getoetst: 336 producten hebben een aprilsnapshot en 1.527 tariefrijen zijn
+geldig op 2026-04-17. De prijskant van de vraag is dus al gedekt.
+
+**`vtest_contract` had dat gat, en heeft nu een tijdas** (migratie 0019). De
+tabel had één rij per `vreg_id`: de metadata werd bij elke import overschreven,
+zodat je in 2028 de *laatste* beschrijving van een contract uit september 2026
+kreeg in plaats van die van toen.
+
+**De tijdas ankert op de scrapedatum, niet op de publicatiedatum.**
+`geldig_van` zegt vanaf wanneer deze metadata bij vtest.be écht zo stond — een
+eigenschap van de bron. Wanneer wij die gegevens publiceerden is administratie
+van deze toepassing en kan er dagen na liggen: versie `20260829T202059Z` is op
+31 augustus gescrapet en pas op 2 september geïmporteerd. Die twee door elkaar
+halen zou de historiek de administratie laten volgen in plaats van de
+werkelijkheid. De publicatiedatum staat daarom apart in `gepubliceerd_op`.
+
+`gepubliceerd_op` wordt gezet bij het **activeren** van de versie, niet bij de
+import: `version publish` importeert eerst en activeert daarna, dus tijdens de
+import bestaat er nog geen publicatiemoment. Een versie die alleen met
+`db import` ingelezen is, draagt daar NULL — dat is de juiste uitspraak, geen
+ontbrekend gegeven. Alleen nog lopende snapshots krijgen de stempel; een
+afgesloten snapshot droeg de publicatiedatum van zijn eigen tijd.
+
+Daarmee draagt deze tabel vier datumfamilies die elk iets anders betekenen en
+onafhankelijk schuiven — `datum_intekenen_*`, `datum_start_levering_*`,
+`geldig_van`/`geldig_tot` en `gepubliceerd_op`. Ze staan met die uitleg naast
+elkaar in `schema.py`.
+
+Twee gevolgen die niet los kunnen van de tijdas:
+
+- **`vreg_id` is niet meer de primaire sleutel.** Er is een surrogaat `id` en
+  een unieke sleutel op (`vreg_id`, `geldig_van`) — dezelfde vorm als
+  `netbeheerder_tarief` en `tarief_afname`.
+- **De foreign key vanuit `vtest_postcode_prijs.vreg_id` verviel**, want die
+  wees naar een kolom die niet meer uniek is; er staat een index voor in de
+  plaats. Beide tabellen worden in dezelfde transactie uit hetzelfde CSV
+  geschreven, en een SCD2-tabel verwijdert niets, dus het `ON DELETE CASCADE`
+  werd nooit uitgeoefend. Een `contract_id` die rechtstreeks naar het juiste
+  snapshot wijst is de natuurlijke volgende stap.
+
+**Er komt alleen een snapshot bij wanneer de beschrijving werkelijk wijzigt.**
+Zonder die regel zou elke scrape 355 rijen toevoegen zonder één extra feit.
+Afwezigheid telt daarbij niet als wijziging: een run zonder detailpanelen
+levert lege velden, en die mogen noch de metadata overschrijven, noch een lege
+contractversie naast de bestaande zetten. Draagt een nieuwe waarneming iets dat
+er nog niet was, dan vult dat het lopende snapshot aan — het is dezelfde
+waarneming, alleen vollediger. Nagerekend op de echte data: een herimport van
+dezelfde versie levert 0 nieuwe snapshots op 355 contracten.
+
+Let op bij het vergelijken: `False` is een waarde, geen afwezigheid.
+`grayedout` en `complex_product` zouden met een gewone waarheidstoets als
+"niets waargenomen" gelden.
+
+**`energie_product.tariefkaart_url` en `bijzondere_voorwaarden_url` stonden op
+0 van 686.** `import_energie_product_kenmerken` vulde alleen `groene_stroom` en
+`groene_stroom_type`, en raakte die twee velden nooit aan — ook niet nadat de
+scrape ze wél binnenhaalde. Ze worden nu meegenomen, met dezelfde regel als
+elders: een leeg veld overschrijft een eerder opgehaalde link niet.
+
+### De marktcurves werden geparsed maar nooit ingelezen
+
+`marktcurve` stond op nul rijen terwijl `staging/<versie>/curves/` de drie
+CSV's al maanden klaar had staan: er was simpelweg geen importer. CLAUDE.md
+noemde de tabel daarom "een ongebruikt scaffold". `import_marktcurves` vult
+hem nu — 132.540 rijen voor augustus 2026.
+
+De drie bestanden hebben verschillende vormen en gaan op één generieke tabel:
+
+- `curves_spot.csv` — één waarde per groep/parameter, zonder tijdstip.
+- `curves_forward.csv` — per datum en energievorm **twee** waarden, voor afname
+  en teruglevering. Dat worden twee rijen, uit elkaar gehouden door `groep`;
+  ze in één rij persen zou er stil een van laten vallen.
+- `curves_timeseries.csv` — de eigenlijke reeksen (EPC, RLP, SPP), ~132.000
+  rijen, gechunkt weggeschreven zoals de profielenimport.
+
+Twee dingen die daarbij vastliggen:
+
+- **De energievorm staat in vier schrijfwijzen door elkaar**: `E`/`G`, voluit,
+  als voorvoegsel van een marktplaats (`Gas TTF`, `Gas ZTP`) en met de richting
+  erachter (`Elektriciteit_Injectie`). Ongenormaliseerd belanden die alle vier
+  als aparte `energie_type` in de databank en levert een filter op "gas" niets
+  op. Een onbekende vorm wordt bewust níét naar elektriciteit geraden maar
+  ruw doorgegeven, zodat ze opvalt.
+- **Geen unieke sleutel, dus geen `ON CONFLICT`.** De natuurlijke sleutel zou
+  `datum` en `tijdstip` moeten bevatten, en die zijn per bestandsvorm
+  afwisselend NULL — PostgreSQL ziet NULLs in een unieke sleutel als onderling
+  verschillend, waardoor een echt duplicaat er alsnog in mag (dezelfde valkuil
+  als `netbeheerder_tarief.tariefnotering`). In de plaats daarvan wordt eerst
+  alles van deze versie verwijderd: een versie levert haar curves in hun
+  geheel, niet aanvullend.
 
 ### Twee stille nullen in de rekenengine, nu weg
 

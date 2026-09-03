@@ -60,7 +60,91 @@ class SanityChecker:
             violations=tuple(violations)
         )
 
+    # Kolommen die uit het detailpaneel van vtest.be komen. Ze bleven
+    # maandenlang leeg zonder dat er iets faalde: de scraper haalde het paneel
+    # niet op, de parser kreeg dus niets, en `vtest_contract` kwam leeg in de
+    # databank. Een lege kolom is hier geen geldige uitkomst maar een
+    # ontbrekende scrape.
+    #
+    # Niet elk veld hoort bij elk contract, en dat onderscheid moet erin:
+    # nagerekend op 2.485 gescrapete contracten (2026-09-03) draagt gas géén
+    # vraag over zonnepanelen, elektrisch voertuig of energiedelen — die
+    # secties staan enkel in een elektriciteitspaneel (0% op 776 gasrijen,
+    # 99% op 1.709 elektriciteitsrijen). Ze meetellen voor gas zou een
+    # gas-only run vals laten falen.
+    _DETAILVELDEN = (
+        "looptijd_tekst",
+        "datum_intekenen_van", "datum_intekenen_tot",
+        "datum_start_levering_van", "datum_start_levering_tot",
+        "doelgroep_groepsaankoop", "prijszekerheid_termijn",
+        "link_tariefkaart", "link_voorwaarden", "link_supplier",
+    )
+
+    # Enkel in een elektriciteitspaneel.
+    _DETAILVELDEN_ELEKTRICITEIT = (
+        "doelgroep_zonnepanelen", "doelgroep_ev", "doelgroep_energiedelen",
+    )
+
+    # `doelgroep_leegstand` staat bewust in geen van beide lijsten: die vraag
+    # wordt ook binnen elektriciteit maar door een deel van de leveranciers
+    # beantwoord (29% elektriciteit, 43% gas). Leeg is daar een geldig
+    # antwoord en geen signaal.
+
+    @staticmethod
+    def _volledig_leeg(df, kolom: str) -> bool:
+        if kolom not in df.columns:
+            return True
+        return df[kolom].fillna("").astype(str).str.strip().eq("").all()
+
+    def _check_contractdetails(
+        self, vtest_dir: Path, violations: list[SanityViolation]
+    ) -> None:
+        """Meldt kolommen uit het detailpaneel die volledig leeg zijn.
+
+        Volledig leeg, niet gedeeltelijk: enkele contracten dragen terecht
+        geen tariefkaart (het sociaal tarief verwijst naar de CREG) en
+        "Onbepaald" levert terecht geen looptijd in maanden. Een kolom die
+        voor *elk* contract leeg is, betekent dat het paneel niet opgehaald
+        werd — dat is het signaal dat telt.
+        """
+        products_csv = vtest_dir / "vtest_products.csv"
+        if not products_csv.is_file():
+            return
+        try:
+            df = pd.read_csv(products_csv, sep=";", encoding="utf-8-sig", dtype=str)
+        except (OSError, ValueError, pd.errors.ParserError):
+            return
+        if df.empty:
+            return
+
+        leeg = [k for k in self._DETAILVELDEN if self._volledig_leeg(df, k)]
+
+        # De elektriciteitsvelden alleen toetsen op de elektriciteitsrijen, en
+        # alleen wanneer die er zijn.
+        if "energy" in df.columns:
+            elek = df[df["energy"].fillna("").str.strip().str.lower() == "elektriciteit"]
+            if not elek.empty:
+                leeg += [
+                    k for k in self._DETAILVELDEN_ELEKTRICITEIT
+                    if self._volledig_leeg(elek, k)
+                ]
+
+        if leeg:
+            violations.append(SanityViolation(
+                file=products_csv.name,
+                rule="Contractmetadata ontbreekt",
+                message=(
+                    f"{len(leeg)} kolom(men) uit het detailpaneel zijn voor alle "
+                    f"{len(df)} contracten leeg: {', '.join(leeg)}. "
+                    "Draai `staging refine` zonder --zonder-contractdetails, of "
+                    "herparse met --no-download als de panelen al onder "
+                    "vtest/contractdetails/ staan."
+                ),
+            ))
+
     def _check_vtest(self, vtest_dir: Path, violations: list[SanityViolation]) -> None:
+        self._check_contractdetails(vtest_dir, violations)
+
         vast_csv = vtest_dir / "master_vast.csv"
         var_csv = vtest_dir / "master_var_dyn.csv"
         

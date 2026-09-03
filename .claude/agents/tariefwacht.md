@@ -61,7 +61,33 @@ verbruiksschijf; de helling is het tarief in EUR/MWh; een knik is een
 schijfgrens. `sluitend: true` in het rapport betekent dat de gereconstrueerde
 structuur alle metingen tot op de eurocent verklaart.
 
-**3. Bronversheid (tegen de VREG-pagina's)**
+**3. Cel voor cel tegen het bronwerkboek**
+
+```bash
+energievergelijker audit golden --version <versie>
+```
+
+Legt elke gestagede tariefrij naast het XLSX waar ze uit komt. Dit is de enige
+controle die een *parse*fout vindt — een tarief dat op de verkeerde kolom
+gelezen is, klopt intern perfect en wordt door geen enkele kalibratie
+tegengesproken.
+
+Twee dingen om te weten voor je de uitvoer gelooft:
+
+- **`0/0 rijen geverifieerd` is geen geslaagde audit.** Dat gold het lang wel:
+  de controle las alleen `staging/`, en `version publish` ruimt die map op, dus
+  op een gepubliceerde versie meldde ze "OK" voor alle zeven domeinen zonder
+  iets vergeleken te hebben. Ze leest nu eerst `versions/`, en zowel een
+  ontbrekend bestand als nul vergelijkingen geldt als fout. Kom je die melding
+  toch tegen, dan is de dataset niet geparsed — niet in orde.
+- **Verschilt het rij-aantal, kijk dan alleen naar `_row_count`.** De
+  vergelijking loopt op positie; ontbreekt er een rij, dan staat alles daarna
+  uit de pas en telt bijna elk veld als verschil. Dat leverde ooit 2.220
+  gemelde verschillen op waarvan er geen enkele echt was — de werkelijke
+  bevinding was dat 96 rijen ontbraken. De audit stopt daarom na de
+  rij-aantalbevinding.
+
+**4. Bronversheid (tegen de VREG-pagina's)**
 
 ```bash
 python scripts/check_bronnen.py
@@ -69,7 +95,7 @@ python scripts/check_bronnen.py
 
 Exitcode 3 = er staat nieuwe data online. Dat is geen fout, dat is werk.
 
-**4. Bijdrage energiefonds (tegen vlaanderen.be)**
+**5. Bijdrage energiefonds (tegen vlaanderen.be)**
 
 ```bash
 python scripts/check_energiefonds.py                    # live
@@ -81,7 +107,7 @@ de melding dat het volgende kalenderjaar nog niet gepubliceerd is: het
 energiefonds faalt *hard* op een ontbrekend jaar, dus een berekening over
 januari valt stil zodra dat jaar ontbreekt.
 
-**5. Referentiefacturen (de sterkste toets die er is)**
+**6. Referentiefacturen (de sterkste toets die er is)**
 
 ```bash
 pytest -q tests/test_referentiefactuur.py
@@ -100,7 +126,7 @@ niet van het volume af, alleen van de piek en van de dagen per tariefjaar. Komt
 dát exact uit, dan zitten de tarieven en de tariefjaren goed en zit het
 verschil in de volumes.
 
-**6. Homologatie van hardware (tegen de Synergrid C10/26-lijst)**
+**7. Homologatie van hardware (tegen de Synergrid C10/26-lijst)**
 
 ```bash
 energievergelijker audit hardware --c10-26

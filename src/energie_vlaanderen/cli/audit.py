@@ -39,9 +39,23 @@ def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
     except (OSError, json.JSONDecodeError) as exc:
         return fail("Manifest is ongeldig: %s", exc)
 
-    staging_dir = paths.staging / version_id
-    vtest_dir = staging_dir / "vtest"
-    tariffs_dir = staging_dir / "tariffs"
+    # Eerst in `versions/`, dan in `staging/` — dezelfde volgorde als
+    # `db import`. `version publish` ruimt de stagingmap op, waardoor deze
+    # audit op een gepubliceerde versie geen enkel CSV meer vond. Ze meldde
+    # dan "OK 0/0 rijen geverifieerd" voor elk domein: een groene audit die
+    # niets gecontroleerd had, en dat is de poort die publicatie hoort te
+    # bewaken.
+    bron_dir = paths.version_dir(version_id)
+    if not bron_dir.is_dir():
+        bron_dir = paths.staging / version_id
+    if not bron_dir.is_dir():
+        return fail(
+            "Geen data gevonden voor versie %s — niet in versions/ en niet "
+            "in staging/.", version_id,
+        )
+    LOG.info("Bron voor de audit: %s", bron_dir)
+    vtest_dir = bron_dir / "vtest"
+    tariffs_dir = bron_dir / "tariffs"
 
     all_results = []
 
@@ -110,6 +124,17 @@ def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
         for res in all_results:
             status = "OK " if res.passed else "NOK"
             print(f"{status}  {res.domain:<30} {res.verified_rows}/{res.total_rows} rijen geverifieerd")
+            if res.ontbrekend_bestand is not None:
+                print(f"      Bestand niet gevonden: {res.ontbrekend_bestand}")
+                print("      Er is dus niets vergeleken; dat geldt als een "
+                      "mislukte audit, niet als een geslaagde.")
+            elif res.verified_rows == 0:
+                print("      Nul rijen vergeleken — de audit heeft niet "
+                      "gelopen. Is deze dataset wel geparsed?")
+            if any(mm.field == "_row_count" for mm in res.mismatches):
+                print("      Het aantal rijen verschilt; de vergelijking per "
+                      "veld loopt dan op positie uit de pas en is niet "
+                      "zinvol. Los eerst het rij-aantal op.")
             if not res.passed:
                 for mm in res.mismatches[:10]:
                     print(f"      [{mm.field}] {mm.row_key}")
@@ -132,6 +157,9 @@ def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
                 "verified_rows": res.verified_rows,
                 "total_rows": res.total_rows,
                 "mismatches": len(res.mismatches),
+                "ontbrekend_bestand": (
+                    str(res.ontbrekend_bestand) if res.ontbrekend_bestand else None
+                ),
             }
             for res in all_results
         ],

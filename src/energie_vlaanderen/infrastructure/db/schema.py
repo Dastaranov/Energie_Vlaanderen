@@ -168,10 +168,23 @@ tarief_injectie = sa.Table(
 # Groep 3b — Live vtest.be-scrape (contractmetadata + postcode-tarieven)
 # ---------------------------------------------------------------------------
 
+# SCD2 op de scrapedatum (migratie 0019). `geldig_van` zegt vanaf wanneer deze
+# metadata bij vtest.be zo stond — een eigenschap van de bron. Wanneer wij die
+# gegevens publiceerden staat apart in `gepubliceerd_op` en kan er dagen na
+# liggen; die twee door elkaar halen zou de historiek de administratie laten
+# volgen in plaats van de werkelijkheid.
+#
+# Let op: deze tabel draagt nu vier datumfamilies naast elkaar. Ze betekenen
+# elk iets anders en schuiven onafhankelijk:
+#   - datum_intekenen_*        : wanneer je op dit contract kunt intekenen
+#   - datum_start_levering_*   : wanneer de levering kan starten
+#   - geldig_van / geldig_tot  : wanneer deze *beschrijving* van het contract gold
+#   - gepubliceerd_op          : wanneer wij die beschrijving publiceerden
 vtest_contract = sa.Table(
     "vtest_contract",
     metadata,
-    sa.Column("vreg_id", sa.Text, primary_key=True),
+    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+    sa.Column("vreg_id", sa.Text, nullable=False),
     sa.Column("leverancier_raw", sa.Text, nullable=False),
     sa.Column("product_raw", sa.Text, nullable=False),
     sa.Column("energie_type", sa.Text, nullable=True),
@@ -200,13 +213,25 @@ vtest_contract = sa.Table(
     sa.Column("grayedout", sa.Boolean, nullable=True),
     sa.Column("laatst_gezien_versie", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
     sa.Column("laatst_gezien_op", sa.TIMESTAMP(timezone=True), nullable=False),
+    # De tijdas: de scrapedatum vanaf wanneer dit snapshot gold.
+    sa.Column("geldig_van", sa.Date, nullable=False),
+    sa.Column("geldig_tot", sa.Date, nullable=True),
+    # Gezet bij het activeren van de versie (`version publish`), niet bij de
+    # import: een versie die wel ingelezen maar nog niet gepubliceerd is,
+    # hoort hier NULL te dragen.
+    sa.Column("gepubliceerd_op", sa.TIMESTAMP(timezone=True), nullable=True),
+    sa.UniqueConstraint("vreg_id", "geldig_van", name="uq_vtest_contract_versie"),
+    sa.Index("ix_vtest_contract_vreg_id", "vreg_id"),
 )
 
 vtest_postcode_prijs = sa.Table(
     "vtest_postcode_prijs",
     metadata,
     sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
-    sa.Column("vreg_id", sa.Text, sa.ForeignKey("vtest_contract.vreg_id", ondelete="CASCADE"), nullable=False),
+    # Geen foreign key meer naar vtest_contract.vreg_id: die kolom is sinds
+    # migratie 0019 niet meer uniek (SCD2). Beide tabellen worden in dezelfde
+    # transactie uit hetzelfde CSV geschreven, dus wezen zijn uitgesloten.
+    sa.Column("vreg_id", sa.Text, nullable=False),
     sa.Column("postcode", sa.String(10), nullable=False),
     sa.Column("segment", sa.Text, nullable=False),
     sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=False),
@@ -250,8 +275,10 @@ netbeheerder_tarief = sa.Table(
         "klanttype", "tarieftype", "tariefdetail", "tariefnotering", "geldig_van",
         name="uq_netbeheerder_tarief",
     ),
-    sa.Index("ix_netbeheerder_tarief_open", "netbeheerder_code", "energie_type", "klanttype", "tarieftype", "tariefdetail", "tariefnotering",
-             unique=True, postgresql_where=sa.text("geldig_tot IS NULL")),
+    # Geen partiële index op open rijen meer: een tariefjaar wordt afgesloten
+    # op 31 december (inclusief — zie migratie 0018), dus er zijn geen rijen
+    # met geldig_tot IS NULL. `uq_netbeheerder_tarief` hierboven dekt de
+    # uniciteit volledig: de sleutel plus geldig_van.
 )
 
 overheidsheffing_accijns_schijf = sa.Table(
