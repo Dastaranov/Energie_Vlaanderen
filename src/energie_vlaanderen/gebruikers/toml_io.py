@@ -309,17 +309,37 @@ def lees_dossier(
             "injectie apart en valt niet onder het prosumententarief."
         )
 
+    # Een gemeten maandpiek verslaat elke schatting: het capaciteitstarief is bij
+    # een digitale meter de grootste post van de netkost, en de standaardwaarde
+    # van 4,218 kW is de piek van vtest.be's standaardwoning, niet die van dit
+    # gezin. Op een echte afrekening stond 7,409 kW — 76% hoger.
+    gemeten_piek = _getal(aansluiting_raw, "gemeten_maandpiek_kw", "aansluiting")
     meters = [
         Meter(
             aansluitingspunt_id=punt.id,
             meterregime=regime,
             registerschema=registerschema,
             terugdraaiend=terugdraaiend,
+            **({"geschatte_maandpiek_kw": gemeten_piek} if gemeten_piek else {}),
         )
         for punt in punten
         if punt.energie_type is EnergieType.ELEKTRICITEIT
     ]
-    if meters and regime in (Meterregime.DIGITAAL, Meterregime.AMR):
+    if gemeten_piek:
+        aannames.append(
+            Aanname(
+                veld="geschatte_maandpiek_kw",
+                waarde=str(gemeten_piek),
+                bron="[aansluiting].gemeten_maandpiek_kw — opgegeven gemeten waarde",
+                geverifieerd=True,
+                beinvloedt_bedrag=True,
+                motivering=(
+                    "Een opgegeven gemeten maandpiek in plaats van de "
+                    "standaardschatting van 4,218 kW."
+                ),
+            )
+        )
+    if not gemeten_piek and meters and regime in (Meterregime.DIGITAAL, Meterregime.AMR):
         aannames.append(
             Aanname(
                 veld="geschatte_maandpiek_kw",
@@ -421,7 +441,7 @@ def lees_dossier(
     contracten = _lees_contracten(ruw, punten)
 
     # -- verbruik ----------------------------------------------------------
-    opgaven = _lees_verbruiksopgaven(verbruik_raw, punten)
+    opgaven = _lees_verbruiksopgaven(verbruik_raw, punten, ruw.get("verbruiksopgave"))
 
     fluvius = _tekst(verbruik_raw, "fluvius_csv", "verbruik")
     fluvius_pad = None
@@ -536,13 +556,31 @@ def _contract_uit(
     )
 
 
-def _lees_verbruiksopgaven(verbruik_raw: Mapping[str, Any], punten) -> list[Verbruiksopgave]:
+def _lees_verbruiksopgaven(
+    verbruik_raw: Mapping[str, Any],
+    punten,
+    extra: Any = None,
+) -> list[Verbruiksopgave]:
     """Een handmatig doorgegeven jaarverbruik, als er een staat.
 
     Bewust `OpgaveBron.MANUEEL` en dus exactheidsklasse `gereconstrueerd`: het
     is de beste beschikbare opgave, maar niet tegen een factuur of meting
     gelegd.
     """
+    # `[[verbruiksopgave]]` naast of in plaats van `[verbruik]`: een afrekening
+    # splitst het verbruik vaak per tariefkaartperiode, met de werkelijk
+    # opgenomen meterstanden per stuk. Die aanleveren is beter dan één totaal
+    # dat de berekening pro rata over de dagen moet verdelen — dat laatste
+    # negeert seizoensverschillen, en juist die zijn groot.
+    opgaven: list[Verbruiksopgave] = []
+    if extra is not None:
+        if isinstance(extra, Mapping):
+            extra = [extra]
+        if not isinstance(extra, list):
+            raise GebruikersError("[[verbruiksopgave]] moet een lijst secties zijn.")
+        for rij in extra:
+            opgaven.append(_opgave_uit(rij, punten, "verbruiksopgave"))
+
     velden = (
         "afname_dag_kwh",
         "afname_nacht_kwh",
@@ -552,15 +590,38 @@ def _lees_verbruiksopgaven(verbruik_raw: Mapping[str, Any], punten) -> list[Verb
     )
     waarden = {veld: _getal(verbruik_raw, veld, "verbruik") for veld in velden}
     if all(waarde is None for waarde in waarden.values()):
-        return []
+        return opgaven
+
+    # Een afrekening loopt zelden gelijk met het kalenderjaar: meterstanden
+    # worden opgenomen wanneer het de netbeheerder uitkomt. Staat er een
+    # expliciete periode, dan telt die; anders wordt `jaar` het kalenderjaar.
+    # Het onderscheid is niet cosmetisch — de pro-rata verdeling over
+    # deelperiodes deelt door het aantal dagen van de opgave.
+    periode_van = _datum(verbruik_raw, "periode_van", "verbruik")
+    periode_tot = _datum(verbruik_raw, "periode_tot", "verbruik")
+    if (periode_van is None) != (periode_tot is None):
+        raise GebruikersError(
+            "[verbruik].periode_van en periode_tot horen samen: met maar één "
+            "van beide is de meetperiode niet bepaald."
+        )
 
     jaar = verbruik_raw.get("jaar")
-    if not isinstance(jaar, int):
+    if periode_van is None and not isinstance(jaar, int):
         raise GebruikersError(
-            "[verbruik].jaar is verplicht zodra er een jaarverbruik staat: "
-            "zonder jaartal is niet te bepalen welke tarieven, heffingen en "
-            "btw-tarieven erop van toepassing zijn."
+            "[verbruik] heeft een periode nodig: ofwel `jaar` voor een volledig "
+            "kalenderjaar, ofwel `periode_van` en `periode_tot`. Zonder periode "
+            "is niet te bepalen welke tarieven, heffingen en btw-tarieven erop "
+            "van toepassing zijn."
         )
+
+    bron_tekst = _tekst(verbruik_raw, "bron", "verbruik") or "manueel"
+    try:
+        bron = OpgaveBron(bron_tekst.casefold())
+    except ValueError as exc:
+        opties = ", ".join(sorted(b.value for b in OpgaveBron))
+        raise GebruikersError(
+            f"[verbruik].bron moet één van {opties} zijn, kreeg {bron_tekst!r}."
+        ) from exc
 
     elek = next((p for p in punten if p.energie_type is EnergieType.ELEKTRICITEIT), None)
     if elek is None:
@@ -569,12 +630,54 @@ def _lees_verbruiksopgaven(verbruik_raw: Mapping[str, Any], punten) -> list[Verb
             "[aansluiting].elektriciteit staat niet aan."
         )
 
-    return [
+    return opgaven + [
         Verbruiksopgave(
             aansluitingspunt_id=elek.id,
-            periode_van=date(jaar, 1, 1),
-            periode_tot=date(jaar + 1, 1, 1),
-            bron=OpgaveBron.MANUEEL,
+            periode_van=periode_van or date(jaar, 1, 1),
+            periode_tot=periode_tot or date(jaar + 1, 1, 1),
+            bron=bron,
             **{veld: (waarde if waarde is not None else D("0")) for veld, waarde in waarden.items()},
         )
     ]
+
+
+def _opgave_uit(rij: Mapping[str, Any], punten, sectie: str) -> Verbruiksopgave:
+    """Eén `[[verbruiksopgave]]`-sectie."""
+    if not isinstance(rij, Mapping):
+        raise GebruikersError(f"[[{sectie}]] moet een TOML-sectie zijn.")
+
+    van = _datum(rij, "periode_van", sectie, verplicht=True)
+    tot = _datum(rij, "periode_tot", sectie, verplicht=True)
+
+    energie = _tekst(rij, "energie", sectie) or "elektriciteit"
+    doel = next((p for p in punten if p.energie_type.value == energie), None)
+    if doel is None:
+        raise GebruikersError(
+            f"[[{sectie}]] beschrijft {energie}, maar [aansluiting].{energie} "
+            "staat niet aan."
+        )
+
+    bron_tekst = _tekst(rij, "bron", sectie) or "manueel"
+    try:
+        bron = OpgaveBron(bron_tekst.casefold())
+    except ValueError as exc:
+        opties = ", ".join(sorted(b.value for b in OpgaveBron))
+        raise GebruikersError(
+            f"[[{sectie}]].bron moet één van {opties} zijn, kreeg {bron_tekst!r}."
+        ) from exc
+
+    velden = (
+        "afname_dag_kwh",
+        "afname_nacht_kwh",
+        "afname_exclusief_nacht_kwh",
+        "injectie_dag_kwh",
+        "injectie_nacht_kwh",
+    )
+    waarden = {veld: (_getal(rij, veld, sectie) or D("0")) for veld in velden}
+    return Verbruiksopgave(
+        aansluitingspunt_id=doel.id,
+        periode_van=van,
+        periode_tot=tot,
+        bron=bron,
+        **waarden,
+    )

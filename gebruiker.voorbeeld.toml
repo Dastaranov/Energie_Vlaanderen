@@ -64,9 +64,18 @@ afname_nacht_kwh = 1000
 injectie_dag_kwh = 0
 injectie_nacht_kwh = 0
 
-# Kwartiermetingen (Fluvius-export). Laat weg zolang je ze niet hebt: een pad
-# naar een ontbrekend bestand leest als "er is meetdata" terwijl die er niet is.
-# fluvius_csv = "data/input/fluvius.csv"
+# Kwartiermetingen (Fluvius-export, op te vragen via mijn.fluvius.be). Laat weg
+# zolang je ze niet hebt: een pad naar een ontbrekend bestand leest als "er is
+# meetdata" terwijl die er niet is.
+#
+# Staat dit bestand er, dan haalt de berekening de volumes per deelperiode
+# hieruit in plaats van een jaartotaal pro rata over de dagen te verdelen. Dat
+# maakt het verschil tussen exactheidsklasse "gereconstrueerd" en "exact", en
+# het sluit onder meer de verdeling over de jaarwissel.
+#
+# Bewaar de export buiten git: hij draagt je EAN en je volledige verbruikspatroon.
+# `data/referentie/` is daarvoor bedoeld.
+# fluvius_csv = "data/referentie/meterdata/fluvius_elektriciteit_kwartier.csv"
 resolutie = "kwartier"
 ontbrekende_data = "waarschuwen"
 
@@ -86,6 +95,20 @@ leverancier = "Aspiravi Energy"
 product = "Eco Plus flex"
 type = "variabel"
 van = "2026-08-01"
+
+# In plaats van één jaartotaal kan het verbruik ook per periode opgegeven
+# worden, zoals een afrekening het splitst. Handig wanneer je geen
+# kwartierhistoriek hebt maar wel de meterstanden per tariefkaartperiode.
+#
+# [[verbruiksopgave]]
+# energie = "elektriciteit"
+# periode_van = "2025-06-25"
+# periode_tot = "2025-10-28"
+# bron = "meting"          # meting | factuur | manueel | schatting
+# afname_dag_kwh = 710
+# afname_nacht_kwh = 1414
+# injectie_dag_kwh = 1631
+# injectie_nacht_kwh = 642
 
 [analyse]
 historiek_vanaf = "2026-01-01"

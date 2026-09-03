@@ -230,20 +230,27 @@ def run_gebruiker_controleer(args: argparse.Namespace, settings: Settings) -> in
 
 
 def _laad_metingen(dossier: Dossier):
-    """De kwartierreeks uit het Fluvius-bestand van het dossier, of niets.
+    """De meetreeks uit het Fluvius-bestand van het dossier, plus haar waarschuwingen.
 
-    Kolomnamen worden hier op `tijdstip` gezet — `FluviusIntervals.read()` levert
-    `timestamp`, de databank `tijdstip`. Eén naam verderop scheelt een klasse
-    fouten waarbij de reeks stil leeg lijkt.
+    De waarschuwingen komen mee omdat ze over de *kwaliteit* van het resultaat
+    gaan: hoeveel intervallen Fluvius geschat heeft, hoeveel er ontbreken, of er
+    onderbrekingen zijn. Ze verzwijgen zou een reeks met gaten laten doorgaan
+    voor een volledige meting.
     """
     if dossier.fluvius_csv is None or not dossier.fluvius_csv.is_file():
-        return None
-    from energie_vlaanderen.metering.fluvius_csv import FluviusIntervals
+        return None, ()
+    from energie_vlaanderen.metering.fluvius_csv import (
+        FluviusDataError,
+        FluviusIntervals,
+    )
 
-    df = FluviusIntervals.read(dossier.fluvius_csv)
-    if df.empty:
-        return None
-    return df.rename(columns={"timestamp": "tijdstip"})
+    try:
+        reeks = FluviusIntervals.read(dossier.fluvius_csv)
+    except FluviusDataError as exc:
+        return None, (str(exc),)
+    if reeks.intervallen.empty:
+        return None, ("Het meetbestand bevat geen bruikbare intervallen.",)
+    return reeks, reeks.waarschuwingen
 
 
 def _laad_markt(settings: Settings, van: date, tot: date):
@@ -273,6 +280,48 @@ def _laad_markt(settings: Settings, van: date, tot: date):
         # ze ontbreken.
         return None
     return None if df.empty else df
+
+
+def _nettarieven_per_jaar(settings: Settings, vtest_dir) -> dict:
+    """Alle beschikbare tariefjaren, elk met hun eigen dataversie.
+
+    De distributienettarieven worden per kalenderjaar goedgekeurd, maar een
+    afrekening loopt zelden gelijk met het kalenderjaar: een verbruiksperiode
+    van juni tot april kruist de jaarwissel. Zonder deze kaart zou zo'n periode
+    met de tarieven van één jaar doorgerekend worden.
+
+    Elke dataversie draagt haar tariefjaar in `tariffs_*_report.json` (uit de
+    bestandsnaam van het VREG-werkboek, niet uit het versie-id). Bij meerdere
+    versies voor hetzelfde jaar wint de nieuwste — versie-id's beginnen met een
+    tijdstempel. De productdata komt uit `vtest_dir`; alleen de tariefmap
+    verschilt per jaar.
+    """
+    import json
+
+    from energie_vlaanderen.data.paths import DataPaths
+    from energie_vlaanderen.data.repository import DataRepository
+    from energie_vlaanderen.nettarieven.netbeheerder import standaard_gemeente_csv
+
+    paden = DataPaths.from_settings(settings)
+    kandidaten = sorted(paden.versions.glob("*")) + sorted(paden.staging.glob("*"))
+
+    per_jaar: dict[int, Path] = {}
+    for map_ in kandidaten:
+        tariff_dir = map_ / "tariffs"
+        for rapport in sorted(tariff_dir.glob("tariffs_*_report.json")):
+            try:
+                jaar = json.loads(rapport.read_text(encoding="utf-8")).get("tarief_jaar")
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(jaar, int):
+                # Nieuwste wint: de lus loopt oplopend door de versie-id's.
+                per_jaar[jaar] = tariff_dir
+
+    gemeente_csv = standaard_gemeente_csv(settings.data_root)
+    return {
+        jaar: DataRepository(vtest_dir, gemeente_csv=gemeente_csv, tariff_dir=tariff_dir)
+        for jaar, tariff_dir in per_jaar.items()
+    }
 
 
 def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
@@ -314,10 +363,18 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
         (a.omvormer_kva for a in dossier.assets if a.omvormer_kva is not None),
         None,
     )
-    metingen = None if getattr(args, "geen_metingen", False) else _laad_metingen(dossier)
+    meetreeks, meetwaarschuwingen = (
+        (None, ()) if getattr(args, "geen_metingen", False) else _laad_metingen(dossier)
+    )
+    metingen = meetreeks.intervallen if meetreeks is not None else None
     markt = _laad_markt(settings, args.van, args.tot)
 
-    rekenaar = Kostberekening(repo, heffingen, segment=str(dossier.gebruiker.segment))
+    nettarieven = _nettarieven_per_jaar(settings, Path(data_dir))
+    rekenaar = Kostberekening(
+        repo, heffingen,
+        segment=str(dossier.gebruiker.segment),
+        nettarieven_per_jaar=nettarieven,
+    )
     try:
         resultaat = rekenaar.bereken(
             punt,
@@ -341,8 +398,15 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
         print_kv("Dataversie", Path(data_dir).name)
         print_kv(
             "Meetdata",
-            f"{len(metingen)} intervallen" if metingen is not None else "geen (pro rata verdeeld)",
+            (
+                f"{len(metingen)} intervallen, {meetreeks.resolutie}"
+                + (f", {meetreeks.geschatte_intervallen} geschat" if meetreeks.geschatte_intervallen else "")
+                if meetreeks is not None
+                else "geen (pro rata verdeeld)"
+            ),
         )
+        if nettarieven:
+            print_kv("Nettarieven", ", ".join(str(j) for j in sorted(nettarieven)))
         print_kv(
             "Marktprijzen",
             f"{len(markt)} punten" if markt is not None else "geen (enkel voor dynamische producten nodig)",
@@ -378,7 +442,7 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
             for aanname in resultaat.aannames:
                 merk = "geverifieerd" if aanname.geverifieerd else "NIET geverifieerd"
                 print(f"    - {aanname.veld} = {aanname.waarde}  [{merk}] {aanname.bron}")
-        for waarschuwing in resultaat.warnings:
+        for waarschuwing in tuple(meetwaarschuwingen) + resultaat.warnings:
             print(f"  ! {waarschuwing}")
 
     emit(

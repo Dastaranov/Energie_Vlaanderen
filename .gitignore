@@ -254,6 +254,12 @@ data/referentie/*
 data/datasheets/*
 !data/datasheets/LEESMIJ.md
 
+# Het persoonlijke gebruikersprofiel. Zodra er een EAN, adres of meterstand in
+# staat, is dit persoonsgegeven: docs/manifest.md §5.2 noemt de EAN expliciet
+# gevoelig. `gebruiker.voorbeeld.toml` blijft wel in git en documenteert de
+# volledige bestandsvorm.
+gebruiker.toml
+
 # Simulatie-uitvoer
 output/
 

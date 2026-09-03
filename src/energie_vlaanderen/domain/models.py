@@ -36,9 +36,24 @@ class Profile:
     # wijzigen, en omdat een berekening moet kunnen zeggen wélke ondergrens ze
     # toegepast heeft.
     minimum_maandpiek_kw: Decimal = D("2.5")
+    # Het exclusief-nachtregister is géén synoniem van "nacht" of "dal".
+    #
+    # Een tweevoudige meter splitst het verbruik in piek- en daluren; beide
+    # krijgen het *normale* ODV-tarief. "Exclusief nacht" is een apart register
+    # voor toestellen die alleen 's nachts draaien (accumulatieverwarming,
+    # boiler) en heeft een eigen, lager ODV-tarief.
+    #
+    # Ze samenvoegen paste dat lagere tarief toe op het hele dalverbruik. Op een
+    # echte afrekening — 4.218 kWh dal bij FMV 2025 — scheelde dat 35 EUR per
+    # jaar te weinig netkost. Dit veld staat achteraan zodat bestaande
+    # positionele aanroepen van `Profile(...)` niet stil verschuiven.
+    afname_exclusief_nacht_kwh: Decimal = D("0")
     kwartier_csv: Optional[Path] = None
     @property
-    def afname_kwh(self): return self.afname_dag_kwh + self.afname_nacht_kwh
+    def afname_kwh(self):
+        return (
+            self.afname_dag_kwh + self.afname_nacht_kwh + self.afname_exclusief_nacht_kwh
+        )
     @property
     def injectie_kwh(self): return self.injectie_dag_kwh + self.injectie_nacht_kwh
 

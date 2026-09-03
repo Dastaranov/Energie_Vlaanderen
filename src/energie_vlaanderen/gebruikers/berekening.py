@@ -22,7 +22,7 @@ berekening, het wordt nooit een nul.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional, Sequence
 
@@ -105,17 +105,41 @@ def dagaandeel(opgave: Verbruiksopgave, periode: Deelperiode) -> tuple[Decimal, 
     overlap_tot = min(opgave.periode_tot, periode.tot)
     dagen = max((overlap_tot - overlap_van).days, 0)
 
+    # Kruist de opgave een tariefjaargrens, dan kost deze aanname geld: de
+    # nettarieven verschillen tussen de jaren, dus het maakt uit hoeveel kWh
+    # vóór en na 1 januari verbruikt is. Een leverancier splitst daar op de
+    # werkelijke meterstand; wij op de dagen.
+    #
+    # Op een echte afrekening scheelde dat 0,73 EUR: over 28/10-30/04 viel 40,2%
+    # van het verbruik in de 35,1% van de dagen die nog in 2025 lagen — een
+    # winter verbruikt nu eenmaal niet zoals een lente.
+    kruist_jaargrens = opgave.periode_van.year != (opgave.periode_tot - timedelta(days=1)).year
+    if kruist_jaargrens:
+        motivering = (
+            f"De kost onder het regime van {periode.van}..{periode.tot} is naar "
+            f"rato van {dagen} op {dagen_opgave} dagen toegewezen. Deze opgave "
+            f"loopt over de jaarwissel, en de nettarieven verschillen per "
+            "kalenderjaar — hoeveel kWh vóór en na 1 januari verbruikt is, maakt "
+            "dus uit voor het bedrag. Een meterstand op 31 december sluit dit: "
+            "geef dan twee `[[verbruiksopgave]]`-secties op in plaats van één."
+        )
+    else:
+        motivering = (
+            f"De kost onder het regime van {periode.van}..{periode.tot} is naar "
+            f"rato van {dagen} op {dagen_opgave} dagen toegewezen. "
+            "Seizoenseffecten zitten hier niet in; met kwartiermetingen of een "
+            "Synergrid-profiel wordt dit exacter."
+        )
+
     aanname = Aanname(
-        veld="verdeling_over_deelperiode",
+        veld=(
+            "verdeling_over_de_jaarwissel" if kruist_jaargrens
+            else "verdeling_over_deelperiode"
+        ),
         waarde=f"{dagen}/{dagen_opgave} dagen",
         bron="pro rata temporis op dagbasis",
         geverifieerd=False,
-        motivering=(
-            f"De jaarkost onder het regime van {periode.van}..{periode.tot} is "
-            f"naar rato van {dagen} op {dagen_opgave} dagen toegewezen. "
-            "Seizoenseffecten zitten hier niet in; met kwartiermetingen of een "
-            "Synergrid-profiel wordt dit exacter."
-        ),
+        motivering=motivering,
     )
     return D(dagen) / D(dagen_opgave), aanname
 
@@ -157,14 +181,10 @@ def bouw_profile(
         segment=segment,
         meter="digitaal" if digitaal else "analoog",
         afname_dag_kwh=verbruik.get("afname_dag_kwh", D("0")),
-        # Het exclusief-nachtregister deelt in `grid_cost()` het nachttarief:
-        # daar wordt het ODV-tarief "exclusief nacht" op de nachtvolumes
-        # toegepast. Apart houden vergt een derde volumeslot in `Profile`, wat
-        # buiten deze stap valt.
-        afname_nacht_kwh=(
-            verbruik.get("afname_nacht_kwh", D("0"))
-            + verbruik.get("afname_exclusief_nacht_kwh", D("0"))
-        ),
+        afname_nacht_kwh=verbruik.get("afname_nacht_kwh", D("0")),
+        # Apart, niet bij het nachtvolume geteld: het exclusief-nachtregister
+        # heeft een eigen, lager ODV-tarief dat niet voor gewone daluren geldt.
+        afname_exclusief_nacht_kwh=verbruik.get("afname_exclusief_nacht_kwh", D("0")),
         injectie_dag_kwh=verbruik.get("injectie_dag_kwh", D("0")),
         injectie_nacht_kwh=verbruik.get("injectie_nacht_kwh", D("0")),
         omvormer_kva=omvormer_kva if (terugdraaiend and not digitaal) else D("0"),
@@ -183,11 +203,46 @@ class Kostberekening:
         heffingen,
         *,
         segment: str = "Woning",
+        nettarieven_per_jaar: Optional[dict[int, DataRepository]] = None,
     ) -> None:
+        """`nettarieven_per_jaar` koppelt een tariefjaar aan zijn dataversie.
+
+        De distributienettarieven worden per kalenderjaar goedgekeurd en de
+        tariefrijen dragen zelf geen datum. Een afrekening loopt zelden gelijk
+        met het kalenderjaar — een verbruiksperiode van juni tot april kruist de
+        jaarwissel — dus één dataversie volstaat dan niet.
+
+        `periodes.tariefjaargrenzen()` knipt al op elke 1 januari, zodat elke
+        deelperiode binnen één kalenderjaar valt en er dus altijd precies één
+        tariefjaar bij hoort. Zonder deze kaart blijft `data_repo` de enige
+        bron, en toetst `_controleer_tariefjaar()` of dat jaar klopt.
+        """
         self.data_repo = data_repo
         self.heffingen = heffingen
         self.segment = segment
+        self.nettarieven_per_jaar = dict(nettarieven_per_jaar or {})
         self.calculator = Calculator(data_repo, heffingen=heffingen)
+        self._calculators: dict[int, Calculator] = {
+            jaar: Calculator(repo, heffingen=heffingen)
+            for jaar, repo in self.nettarieven_per_jaar.items()
+        }
+        # Eén melding per opgave, niet één per deelperiode. Als instantieveld en
+        # niet als klasseattribuut: dat laatste zou gedeeld worden tussen
+        # berekeningen en de tweede stil laten zwijgen.
+        self._gemelde_opgaven: set[tuple] = set()
+
+    def _calculator_voor(self, periode: Deelperiode) -> Calculator:
+        """De rekenengine met de nettarieven van het jaar van deze deelperiode."""
+        if not self._calculators:
+            return self.calculator
+        gekozen = self._calculators.get(periode.van.year)
+        if gekozen is None:
+            beschikbaar = ", ".join(str(j) for j in sorted(self._calculators))
+            raise BerekeningError(
+                f"Geen nettarieven geladen voor {periode.van.year} "
+                f"({periode.van}..{periode.tot}). Beschikbaar: {beschikbaar}."
+            )
+        return gekozen
 
     def zoek_product(
         self,
@@ -319,6 +374,7 @@ class Kostberekening:
                     "venster."
                 )
             opgave = self._opgave_voor(opgaven, periode)
+            warnings.extend(self._toets_opgave_tegen_meting(opgave, metingen))
             aandeel, verdeel_aanname = dagaandeel(opgave, periode)
             resultaat = self._reken_periode(
                 punt, meter, periode, opgave, aandeel,
@@ -404,10 +460,24 @@ class Kostberekening:
             punt, meter, jaarverbruik, segment=self.segment, omvormer_kva=omvormer_kva
         )
 
-        # -- jaargrootheden, naar dagen geschaald --------------------------
-        self._controleer_tariefjaar(periode)
-        grid = self.calculator.grid_cost(jaarprofiel) * aandeel
-        levies = self.calculator.levies(jaarprofiel, product.year, product.month) * aandeel
+        rekenaar = self._calculator_voor(periode)
+        if not self._calculators:
+            self._controleer_tariefjaar(periode)
+
+        # Twee breuken, en ze zijn niet hetzelfde zodra de meetperiode geen
+        # volledig jaar beslaat:
+        #
+        #   `aandeel`  = dagen van deze deelperiode / dagen van de opgave.
+        #                Hoeveel van het *verbruik* hier valt.
+        #   `tijddeel` = dagen van deze deelperiode / 365.
+        #                Hoeveel van een *jaar* deze periode is.
+        #
+        # Een eindafrekening over 310 gemeten dagen rekent het capaciteitstarief
+        # en het databeheer naar rato van 310/365 aan, niet voluit. Wie daar
+        # `aandeel` gebruikt — dat over de deelperiodes tot 1 sommeert — betaalt
+        # een vol jaar aan vaste posten voor tien maanden verbruik: 365/310 =
+        # 1,177 keer te veel.
+        tijddeel = D(periode.dagen) / D("365")
 
         # -- volumes van deze deelperiode ----------------------------------
         periode_intervals = _snijd_metingen(metingen, periode)
@@ -418,8 +488,21 @@ class Kostberekening:
             punt, meter, periodeverbruik, segment=self.segment, omvormer_kva=omvormer_kva
         )
 
+        # Netkost op de volumes van deze periode, met de vaste jaarposten naar
+        # rato van de dagen.
+        grid = rekenaar.grid_cost(periodeprofiel, dagen=periode.dagen)
+
+        # Heffingen: de accijnsschijven zijn progressief over het jaarverbruik,
+        # dus die worden op het volledige opgavevolume berekend en daarna naar
+        # het volumeaandeel geschaald. Het energiefonds is een maandbedrag en
+        # volgt de kalender.
+        verbruiksheffing, energiefonds = rekenaar.levies_gesplitst(
+            jaarprofiel, product.year, product.month
+        )
+        levies = verbruiksheffing * aandeel + energiefonds * tijddeel
+
         supplier, warnings = self._leverancierskost(
-            product, periodeprofiel, aandeel, markt, _afname(periode_intervals)
+            product, periodeprofiel, tijddeel, markt, _afname(periode_intervals)
         )
 
         # -- injectie -------------------------------------------------------
@@ -465,7 +548,7 @@ class Kostberekening:
                 credit, inj_warnings = self._leverancierskost(
                     inject_product,
                     injectieprofiel,
-                    aandeel,
+                    tijddeel,
                     markt,
                     _injectie(periode_intervals),
                     sta_vlak_profiel=False,
@@ -473,7 +556,7 @@ class Kostberekening:
                 warnings.extend(inj_warnings)
 
         belastbaar = supplier + grid + levies - credit
-        btw = max(belastbaar, D("0")) * self.calculator.vat
+        btw = max(belastbaar, D("0")) * rekenaar.vat
 
         return PeriodeResultaat(
             periode=periode,
@@ -486,6 +569,50 @@ class Kostberekening:
             ),
             aannames=tuple(aannames),
         )
+
+    def _toets_opgave_tegen_meting(
+        self, opgave: Verbruiksopgave, metingen: Optional[pd.DataFrame]
+    ) -> list[str]:
+        """Melden wanneer de aangegeven volumes en de meetreeks uiteenlopen.
+
+        Beide worden gebruikt: de opgave bepaalt het volume waarover de
+        progressieve accijnsschijven lopen, de meetreeks bepaalt hoe dat volume
+        over de deelperiodes verdeeld is. Als ze het oneens zijn, is stil
+        doorrekenen het slechtste antwoord — dan staat er een bedrag dat op twee
+        verschillende verbruiken tegelijk steunt.
+
+        Een procent speling: een factuur drukt kWh in hele eenheden af, en vier
+        afgeronde registers geven makkelijk een kWh verschil op de som.
+        """
+        if metingen is None or metingen.empty:
+            return []
+        sleutel = (opgave.periode_van, opgave.periode_tot)
+        if sleutel in self._gemelde_opgaven:
+            return []
+        self._gemelde_opgaven.add(sleutel)
+
+        binnen = _snijd_metingen(
+            metingen, Deelperiode(opgave.periode_van, opgave.periode_tot, None)
+        )
+        if binnen is None or binnen.empty:
+            return [
+                f"Geen meetgegevens voor {opgave.periode_van}..{opgave.periode_tot}, "
+                "terwijl er wel een verbruiksopgave is."
+            ]
+        gemeten = _reeks(binnen, ("afname_dag_kwh", "afname_nacht_kwh", "afname_kwh"))
+        gemeten_kwh = D(str(gemeten["afname_kwh"].sum()))
+        aangegeven = opgave.afname_kwh
+        if aangegeven <= 0:
+            return []
+        afwijking = abs(gemeten_kwh - aangegeven) / aangegeven
+        if afwijking > D("0.01"):
+            return [
+                f"Opgave {opgave.periode_van}..{opgave.periode_tot} noemt "
+                f"{aangegeven:.1f} kWh afname, de meetreeks {gemeten_kwh:.1f} kWh "
+                f"({afwijking:.1%} verschil). De heffingen rekenen met de opgave, "
+                "de verdeling over de periodes met de meting."
+            ]
+        return []
 
     def _controleer_tariefjaar(self, periode: Deelperiode) -> None:
         """Weiger nettarieven van een ander jaar dan de deelperiode.
@@ -518,7 +645,7 @@ class Kostberekening:
         self,
         product: Product,
         profiel: Profile,
-        aandeel: Decimal,
+        tijddeel: Decimal,
         markt: Optional[pd.DataFrame],
         intervals: Optional[pd.DataFrame],
         *,
@@ -528,9 +655,12 @@ class Kostberekening:
 
         `supplier_cost()` telt de vaste vergoeding altijd voluit mee — dat is
         juist voor een jaarberekening en verkeerd voor een deelperiode. Ze wordt
-        er hier afgetrokken en naar dagen geschaald teruggezet; anders betaalt
-        een gebruiker met vier contractperiodes vier keer de jaarlijkse
+        er hier afgetrokken en naar `tijddeel` (dagen/365) teruggezet; anders
+        betaalt een gebruiker met vier contractperiodes vier keer de jaarlijkse
         abonnementskost.
+
+        Een echte eindafrekening bevestigt de breuk: 22,29 EUR over 125 dagen en
+        32,99 EUR over 185 dagen komen allebei op 65,09 EUR per jaar uit.
         """
         try:
             kost, warnings = self.calculator.supplier_cost(
@@ -539,7 +669,7 @@ class Kostberekening:
         except ValueError as exc:
             raise BerekeningError(str(exc)) from exc
         vaste_vergoeding = product.components.get("fixed_fee", D("0"))
-        return kost - vaste_vergoeding + vaste_vergoeding * aandeel, list(warnings)
+        return kost - vaste_vergoeding + vaste_vergoeding * tijddeel, list(warnings)
 
     def _periodevolumes(
         self,
@@ -560,16 +690,24 @@ class Kostberekening:
                 )
             }, ()
 
-        # Gemeten kwartierdata kent geen dag/nacht-onderscheid: de Fluvius-export
-        # geeft één afname- en één injectieregister. Alles komt daarom in het
-        # dagslot; wie een tweevoudige meter heeft en het onderscheid nodig heeft,
-        # levert dat via een verbruiksopgave aan.
+        # De Fluvius-export kent vier registers — Afname Dag, Afname Nacht,
+        # Injectie Dag, Injectie Nacht — en `FluviusIntervals` houdt die apart.
+        # Dat onderscheid is nodig: het nettarief en de meeste
+        # leveranciersproducten rekenen een ander tarief voor dag en nacht.
+        # Levert de reeks alleen een totaal (een oudere of eenvoudiger export),
+        # dan valt alles in het dagslot.
+        def som(*namen: str) -> Decimal:
+            aanwezig = [n for n in namen if n in intervals]
+            if not aanwezig:
+                return D("0")
+            return D(str(intervals[aanwezig].sum(axis=1).sum()))
+
         return {
-            "afname_dag_kwh": D(str(intervals["afname_kwh"].sum())),
-            "afname_nacht_kwh": D("0"),
-            "afname_exclusief_nacht_kwh": D("0"),
-            "injectie_dag_kwh": D(str(intervals["injectie_kwh"].sum())),
-            "injectie_nacht_kwh": D("0"),
+            "afname_dag_kwh": som("afname_dag_kwh") or som("afname_kwh"),
+            "afname_nacht_kwh": som("afname_nacht_kwh"),
+            "afname_exclusief_nacht_kwh": som("afname_exclusief_nacht_kwh"),
+            "injectie_dag_kwh": som("injectie_dag_kwh") or som("injectie_kwh"),
+            "injectie_nacht_kwh": som("injectie_nacht_kwh"),
         }, ()
 
     @staticmethod
@@ -616,11 +754,12 @@ def _snijd_metingen(
 
 
 def _afname(intervals: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
-    """De reeks in de vorm die `supplier_cost()` verwacht: timestamp + afname_kwh."""
-    if intervals is None or intervals.empty:
-        return None
-    uit = intervals[["tijdstip", "afname_kwh"]].copy()
-    return uit.rename(columns={"tijdstip": "timestamp"})
+    """De reeks in de vorm die `supplier_cost()` verwacht: timestamp + afname_kwh.
+
+    Dag en nacht worden hier samengeteld: een dynamisch product rekent per
+    kwartier tegen de marktprijs en kent dat onderscheid niet.
+    """
+    return _reeks(intervals, ("afname_dag_kwh", "afname_nacht_kwh", "afname_kwh"))
 
 
 def _injectie(intervals: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -630,7 +769,19 @@ def _injectie(intervals: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
     alleen de volumes verschillen. Hier stond eerder de afnamereeks, waardoor een
     dynamisch injectieproduct het verbruik tegen de injectieprijs waardeerde.
     """
+    return _reeks(intervals, ("injectie_dag_kwh", "injectie_nacht_kwh", "injectie_kwh"))
+
+
+def _reeks(
+    intervals: Optional[pd.DataFrame], kolommen: tuple[str, ...]
+) -> Optional[pd.DataFrame]:
+    """Tel de genoemde kolommen op tot één `afname_kwh`-reeks."""
     if intervals is None or intervals.empty:
         return None
-    uit = intervals[["tijdstip", "injectie_kwh"]].copy()
-    return uit.rename(columns={"tijdstip": "timestamp", "injectie_kwh": "afname_kwh"})
+    aanwezig = [k for k in kolommen if k in intervals]
+    if not aanwezig:
+        return None
+    return pd.DataFrame({
+        "timestamp": intervals["tijdstip"],
+        "afname_kwh": intervals[aanwezig].sum(axis=1),
+    })

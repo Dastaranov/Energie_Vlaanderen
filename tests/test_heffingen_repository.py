@@ -38,15 +38,46 @@ class TestAccijnsParsing:
         )
         assert schijf.bijzondere_accijns_eur_mwh == D("46.0000")
         assert isinstance(schijf.bijzondere_accijns_eur_mwh, D)
-        assert schijf.geverifieerd
 
-    def test_residentiele_energiebijdrage_is_nul(self, repo: HeffingenRepository):
-        # De bijdrage op de energie is voor huishoudens 0 — bevestigd door
-        # vtest.be, dat deze post op 0,00 EUR zet.
+    def test_residentiele_energiebijdrage_is_1_9261(self, repo: HeffingenRepository):
+        """Deze assertie stond op 0, en dat was fout.
+
+        De verantwoording luidde "bevestigd door vtest.be, dat deze post op
+        0,00 EUR zet". vtest.be *toont* die post inderdaad niet — maar dat is
+        iets anders dan dat ze nul is.
+
+        Artikel 39 van de programmawet van 25/12/2021 zet voor niet-zakelijk
+        gebruik in elke verbruiksschijf "bijdrage op de energie: 1,9261 euro
+        per MWh" (zie `docs/research/tarief bijzonder accijns.md`, met de
+        wettekst). Een echte ENGIE-eindafrekening rekent hem ook aan: 4,09 EUR
+        op 2.124 kWh en 9,04 EUR op 4.693 kWh, allebei 1,9261 EUR/MWh, als
+        aparte regel naast de bijzondere accijns.
+
+        Een wettekst en een betaalde factuur die elkaar bevestigen wegen hier
+        zwaarder dan een vergelijkingstool die de post weglaat.
+        """
         (schijf,) = repo.accijns_schijven(
             "elektriciteit", "niet_zakelijk", date(2026, 8, 31)
         )
-        assert schijf.energiebijdrage_eur_mwh == D("0")
+        assert schijf.energiebijdrage_eur_mwh == D("1.9261")
+
+    def test_de_bijdrage_op_de_energie_is_gelijk_voor_gezin_en_onderneming(
+        self, repo: HeffingenRepository
+    ):
+        """De wet maakt hier geen onderscheid; de bijzondere accijns wel.
+
+        Programmawet art. 39 noemt 1,9261 EUR/MWh zowel onder "zakelijk
+        gebruik, aansluiting <= 1 kV" als onder "niet-zakelijk gebruik". Alleen
+        boven 1 kV staat de bijdrage op nul.
+        """
+        (gezin,) = repo.accijns_schijven(
+            "elektriciteit", "niet_zakelijk", date(2026, 8, 31)
+        )
+        zakelijk = repo.accijns_schijven(
+            "elektriciteit", "zakelijk_laagspanning", date(2026, 8, 31)
+        )
+        assert gezin.energiebijdrage_eur_mwh == zakelijk[0].energiebijdrage_eur_mwh
+        assert gezin.bijzondere_accijns_eur_mwh != zakelijk[0].bijzondere_accijns_eur_mwh
 
     def test_ouder_regime_blijft_bereikbaar(self, repo: HeffingenRepository):
         (schijf,) = repo.accijns_schijven(
@@ -80,7 +111,9 @@ class TestProgressieveBerekening:
                 "elektriciteit", "niet_zakelijk", kwh, date(2026, 8, 31)
             )
             assert bijzondere == kwh / D("1000") * D("46.0000")
-            assert energiebijdrage == D("0")
+            # De bijdrage op de energie is eveneens vlak: de wet noemt
+            # 1,9261 EUR/MWh in élke schijf.
+            assert energiebijdrage == kwh / D("1000") * D("1.9261")
 
     def test_gemiddeld_gezin_komt_overeen_met_vtest(self, repo: HeffingenRepository):
         """Het profiel dat vtest.be zelf als standaard hanteert: 3.434 kWh.

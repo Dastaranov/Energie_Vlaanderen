@@ -99,6 +99,49 @@ en de skill `.claude/skills/tariefcontrole/` beschrijven de werkwijze bij een
 afwijking — beide gaan over tarieven/heffingen, niet over verbruiksprofielen
 (zie hieronder), maar volgen wel hetzelfde stramien.
 
+```bash
+python scripts/check_energiefonds.py                   # config vs. vlaanderen.be
+python scripts/check_energiefonds.py --html <kopie>    # zonder netwerk
+python scripts/check_injectie_index.py                 # SPP-gewogen injectie-index
+```
+
+**De bijdrage op de energie stond op nul, en dat was fout.** De masterdata gaf
+`energiebijdrage_eur_mwh = "0"` voor klantcategorie `niet_zakelijk`, met als
+verantwoording dat vtest.be die post op 0,00 EUR zet. vtest.be *toont* hem
+inderdaad niet — maar dat is iets anders dan dat hij nul is. Artikel 39 van de
+programmawet van 25/12/2021 zet voor niet-zakelijk gebruik in élke schijf
+"bijdrage op de energie: 1,9261 euro per MWh" (de wettekst staat in
+`docs/research/tarief bijzonder accijns.md`), en een echte ENGIE-eindafrekening
+rekent hem ook aan — als aparte regel náást de bijzondere accijns, dus niet
+geïntegreerd maar additief. Op 6.817 kWh scheelde dat 13,13 EUR per jaar.
+
+Dit is de ene plaats waar vtest.be **niet** leidend is: een wettekst en een
+betaalde factuur die elkaar bevestigen wegen zwaarder dan een vergelijkingstool
+die een post weglaat. Sinds de correctie reproduceert de heffingenberekening de
+factuurregel "Toeslagen" exact — 336,81 EUR op 6.817 kWh — en
+`tests/test_referentiefactuur.py` bewaakt dat.
+
+Het regime vanaf 01/08/2026 draagt dezelfde 1,9261 op grond van continuïteit
+(die hervorming wijzigde alleen de bijzondere accijns), maar met
+`geverifieerd = false` tot een afrekening van ná die datum het bevestigt.
+
+**De bijdrage energiefonds is nu machinaal te controleren.**
+`ingest/heffingen/energiefonds.py` leest de tarieftabel van vlaanderen.be — de
+enige heffing in deze masterdata met een publieke, jaarlijks bijgewerkte tabel.
+Twee eigenaardigheden van die pagina liggen vast in de code: de labels zijn met
+`<br>` afgebroken (`get_text()` zonder scheidingsteken maakt er
+"Residentiëleafnemer" van, waarna geen enkel rijlabel meer matcht), en
+"niet-residentiële afnemer" bevat "residentiële afnemer" als deelstring — de
+specifiekere moet dus eerst getoetst worden, anders krijgt een gezin de
+bedragen van een onderneming. Het script meldt ook wanneer het volgende
+kalenderjaar nog niet gepubliceerd is; het energiefonds faalt hard op een
+ontbrekend jaar.
+
+De federale accijnzen hebben zo'n tabel niet: hun bron is wetgeving
+(Belgisch Staatsblad), en de pagina's van FOD Economie en Fluvius verwijzen
+alleen door. Daar blijven `staging calibrate` tegen vtest.be en de
+referentiefactuur de controle.
+
 **Let op bij vergelijken**: de masterdata staat exclusief btw, publieke
 communicatie noemt bedragen doorgaans inclusief 6%. Een verschil van precies
 factor 1,06 is een eenheidsverwarring, geen afwijking.
@@ -425,6 +468,187 @@ map eronder gaat zonder regel gewoon mee de repo in.
 Uit zo'n document worden alleen de cijfers overgenomen naar een geanonimiseerde
 fixture onder `tests/fixturen/facturen/`. Die gaat wél in git en wordt de
 referentiecase; het document zelf blijft lokaal.
+
+### Meterdata: `metering/fluvius_csv.py`
+
+Een Fluvius-verbruikshistoriek is de enige bron van werkelijk verbruik die een
+gebruiker zelf kan aanleveren, en ze maakt het verschil tussen een geschatte en
+een exacte reconstructie. De parser is herschreven nadat een echte export van
+drie jaar (210.625 regels elektriciteit, 52.657 gas) vier eigenschappen
+blootlegde waarop de vorige versie stukliep:
+
+- **Vier registers, niet twee.** `Afname Dag`, `Afname Nacht`, `Injectie Dag`,
+  `Injectie Nacht`. Alleen op "afname" en "injectie" matchen gooit het
+  dag-/nachtonderscheid weg — precies wat het nettarief en de meeste
+  leveranciersproducten nodig hebben.
+- **Gas staat er dubbel in**: elk uur één regel in m³ en één in kWh. Optellen
+  per tijdstip telde volume en energie bij elkaar op. Er wordt op
+  `Eenheid == "kWh"` gefilterd.
+- **`Validatiestatus` onderscheidt drie dingen.** `Uitgelezen` is een meting,
+  `Geschat` een schatting van Fluvius zelf (mét waarde), en `Geen verbruik`
+  betekent dat er géén meting is — daar staat een leeg volume. Dat op nul zetten
+  maakt van een ontbrekende meting een gemeten nul (Manifest §12). In de export:
+  508 geschat, 193 zonder meting.
+- **Lokale tijd met de zomertijdsprongen erin.** Op de laatste zondag van
+  oktober telt de dag 100 kwartieren op 96 unieke lokale tijdstippen; groeperen
+  op tijdstip plakt dat uur samen en laat verbruik verdwijnen. Elk register
+  wordt apart naar UTC omgezet: binnen één register staan de twee doorgangen na
+  elkaar, en de eerste is de zomertijddoorgang. `ambiguous="infer"` van pandas
+  kan dat ook, maar slechts voor één overgang per aanroep — over drie jaar zijn
+  het er drie of vier en gooit het een fout.
+
+`FluviusReeks` draagt naast de intervallen ook de kwaliteit: resolutie, aantal
+geschatte en ontbrekende intervallen, en waarschuwingen over onderbrekingen.
+`maandpieken_kw()` levert de werkelijke maandpieken (hoogste kwartiergemiddelde
+maal vier), `voor_berekening()` de vorm die `supplier_cost()` verwacht.
+
+Zodra `[verbruik].fluvius_csv` naar zo'n bestand wijst, haalt
+`gebruiker bereken` de volumes per deelperiode uit de meting in plaats van een
+jaartotaal pro rata over de dagen te verdelen. Dat sluit onder meer de
+jaarwissel. Staan er én een meetbestand én een `[[verbruiksopgave]]`, dan
+bepaalt de opgave het volume waarover de progressieve accijnsschijven lopen en
+de meting de verdeling over de periodes; lopen ze meer dan een procent uiteen,
+dan wordt dat gemeld.
+
+### Het capaciteitstarief wordt maandelijks herrekend
+
+Onderzoek op de referentiefactuur en drie jaar meetdata: de "gemiddelde
+maandpiek" van 7,409 kW op die factuur is geen piek van de periode maar het
+resultaat van een **maandelijkse herrekening op een voortschrijdend
+twaalfmaandsgemiddelde** van de maandpieken, met de wettelijke ondergrens van
+2,5 kW per maand.
+
+Nagerekend op de echte kwartierdata:
+
+| model | capaciteitskost |
+|---|---|
+| onze maandpieken, per maand voluit | 352,76 |
+| onze maandpieken, deelmaand naar rato | 331,19 |
+| **voortschrijdend 12-maandsgemiddelde, maandelijks herrekend** | **312,59** |
+| factuur | 311,23 |
+
+Het voortschrijdende gemiddelde komt op 0,4% van de factuur uit; de andere
+modellen zitten er 6 tot 13% naast. `grid_cost()` rekent vandaag nog met de
+jaarvorm (`som(max(piek, ondergrens) x tarief/12)` naar dagen geschaald), wat
+klopt zolang er één representatieve piek meegegeven wordt — maar het is niet de
+manier waarop de netbeheerder factureert. Het restverschil van 1,36 EUR is
+vermoedelijk het verschil tussen onze maandpieken en de door Fluvius
+gevalideerde waarden.
+
+### De referentiefactuur nagerekend
+
+Een echte ENGIE-eindafrekening (verbruiksperiode 25/06/2025-30/04/2026, 310
+gemeten dagen, Fluvius Midden-Vlaanderen) is met `gebruiker bereken`
+hergesimuleerd uit de eigen data:
+
+Met alleen de factuurvolumes (jaarwissel pro rata naar dagen):
+
+| | simulatie | factuur | verschil |
+|---|---|---|---|
+| Energie afname + groene stroom + WKK | 1132,35 | 1132,36 | −0,01 |
+| Injectievergoeding | −71,20 | −71,20 | **0,00** |
+| Netwerkkosten | 677,42 | 678,09 | −0,67 |
+| Toeslagen en heffingen | 336,81 | 336,81 | **0,00** |
+| **Subtotaal excl. btw** | **2075,38** | **2076,06** | **−0,68 (0,033%)** |
+
+Met de Fluvius-kwartierhistoriek erbij vervalt elke pro-rata-aanname en wordt
+het resultaat `exact`:
+
+| | simulatie | factuur | verschil |
+|---|---|---|---|
+| Energie afname + groene stroom + WKK | 1132,40 | 1132,36 | +0,04 |
+| Injectievergoeding | −71,22 | −71,20 | −0,02 |
+| Netwerkkosten | 678,14 | 678,09 | +0,05 |
+| Toeslagen en heffingen | 336,81 | 336,81 | **0,00** |
+| **Subtotaal excl. btw** | **2076,13** | **2076,06** | **+0,07 (0,003%)** |
+
+De meetdata bevestigt de factuurvolumes: 2598,8 / 4217,5 kWh afname en
+2788,1 / 1003,5 kWh injectie tegenover de afgedrukte 2599 / 4218 / 2788 / 1003.
+Het echte totaal is 6816,3 kWh, niet 6817 — precies de afronding die het
+restverschil verklaarde.
+
+Twee factuurposten vallen buiten wat de engine kent en worden niet vergeleken:
+de correctie "Periode tussen meteropname en factuurdatum" (+112,66, een
+facturatiemechanisme dat op de volgende factuur weer rechtgezet wordt) en de
+kortingen (−380,70, contractueel en in geen publieke bron).
+
+**Het restverschil van 0,67 is uitgeklaard en zit niet in de code.** Het valt in
+twee stukken uiteen, allebei na te rekenen uit de factuur zelf.
+
+*0,73 EUR — de verdeling over de jaarwissel.* Een leverancier verdeelt
+**tijd**grootheden naar dagen en **volume**grootheden naar de werkelijke
+meterstand. Het databeheer bewijst het eerste: 125/365 x 17,51 = 5,997 (factuur
+5,99) en 65/365 x 17,51 + 120/365 x 17,85 = 8,987 (factuur 8,99) — er wordt dus
+wel degelijk op 01/01 geknipt. Maar de distributiekosten over 28/10-30/04
+(4.693 kWh) komen naar dagen verdeeld op 238,84 uit terwijl de factuur 239,57
+rekent; dat bedrag hoort bij 1.886 kWh in 2025 en 2.807 in 2026, oftewel 40,2%
+van het volume in 35,1% van de dagen. Precies wat je van een winter verwacht.
+Wij verdelen het volume naar dagen omdat we de meterstand op 31 december niet
+hebben — die staat niet op de factuur. Voer je hem in als twee
+`[[verbruiksopgave]]`-secties, dan sluit het: 678,15 tegenover 678,09.
+
+*0,05 EUR — de afronding op hele kWh.* De eerste tariefkaartperiode
+(25/06-27/10/2025) ligt volledig in tariefjaar 2025: geen jaargrens, geen
+verdeling. Onze berekening geeft 2.124 kWh x 0,0528980 = 112,355 EUR, de factuur
+112,31 — dat hoort bij 2.123,14 kWh. De factuur drukt piek en dal elk afgerond
+af (710 + 1.414 = 2.124); vier afgeronde registers geven makkelijk een kWh
+verschil op de som. Dit is de precisiegrens van het document, niet van de
+berekening.
+
+*Dat de tarieven zelf kloppen*, bewijst het capaciteitstarief: dat hangt niet
+van het volume af, alleen van de gemeten piek en van hoeveel dagen in welk
+tariefjaar vallen. 7,409 kW x (190/365 x 49,0426291 + 120/365 x 50,1239818) =
+311,238 tegenover 311,23 op de factuur — acht duizendsten van een euro. Zat er
+iets fout in de tariefselectie of in de verdeling over de jaarwissel, dan zou
+het daar al blijken.
+
+`aanname.veld` heet daarom `verdeling_over_de_jaarwissel` zodra een opgave de
+jaargrens kruist: daar kost de aanname geld, elders niet.
+`tests/test_referentiefactuur.py` bewaakt het geheel en de verklaring.
+
+**Drie fouten die deze afrekening blootlegde**, alle drie onzichtbaar zolang er
+alleen over hele kalenderjaren gerekend werd:
+
+- **Jaargrootheden werden door de meetperiode gedeeld in plaats van door 365.**
+  Het capaciteitstarief, het databeheer en de vaste vergoeding zijn
+  jaarbedragen; `grid_cost()` kent daarvoor nu een `dagen`-parameter. Over 310
+  gemeten dagen werd 365/310 = 1,177 keer te veel aangerekend. De factuur
+  rekent 7,409 kW x (190/365 x 49,042629 + 120/365 x 50,123982) = 311,23 EUR,
+  precies het jaarbedrag naar rato van de dagen.
+- **Twee breuken die niet hetzelfde zijn.** `_reken_periode` onderscheidt nu
+  `aandeel` (dagen van de deelperiode / dagen van de opgave — hoeveel van het
+  *verbruik* hier valt) van `tijddeel` (dagen / 365 — hoeveel van een *jaar*
+  dit is). Bij een opgave over een volledig kalenderjaar vallen ze samen; bij
+  een afrekening niet. De accijnsschijven volgen het volumeaandeel omdat ze
+  progressief zijn over het jaarverbruik, het energiefonds volgt het tijddeel
+  omdat het een maandbedrag is.
+- **"Dal" is geen "exclusief nacht".** Het lagere ODV-tarief "kWh-tarief
+  exclusief nacht" geldt alleen voor het aparte register van toestellen die
+  enkel 's nachts draaien. `bouw_profile` telde het dalvolume van een
+  tweevoudige meter bij dat register op, waardoor 4.218 kWh het lagere tarief
+  kreeg: 35 EUR per jaar te weinig netkost. `Profile` heeft nu een eigen
+  `afname_exclusief_nacht_kwh`.
+
+**De btw op de injectievergoeding is beslist.** `calculate()` trok het krediet
+eerder van de btw-basis af; `docs/price_model_low_voltage.md` §9.1 schreef juist
+voor het krediet met 6% te verhogen. Geen van beide klopte. De btw-tabel van de
+factuur zet de injectievergoeding in een aparte vrijstellingsregel (Beslissing
+ET 131.616/2 van 25-10-2019) náást de 6%-basis: ze valt volledig buiten die
+basis en wordt zonder btw van het totaal afgetrokken. Daarmee is de openstaande
+validatie uit Manifest §14 gesloten.
+
+**Een vast contract volgt de tariefkaart van bij het intekenen.** Verdwijnt het
+product een maand later van vtest.be, dan verandert er niets: `zoek_product()`
+zoekt bij een bevroren contract in de snapshot van `tariefkaart_van`, niet in
+die van de verbruiksperiode, en `indexatiegrenzen()` knipt alleen bij variabele
+en dynamische contracten per maand.
+
+**`gebruiker.toml` staat niet meer in git.** Zodra er een EAN, adres of
+meterstand in staat is het een persoonsgegeven — Manifest §5.2 noemt de EAN
+expliciet gevoelig. `gebruiker.voorbeeld.toml` blijft wel in git en
+documenteert de volledige bestandsvorm, inclusief `gemeten_maandpiek_kw`,
+`periode_van`/`periode_tot` en de lijst `[[verbruiksopgave]]` voor een verbruik
+dat per tariefkaartperiode opgesplitst is.
 
 ### Injectie
 

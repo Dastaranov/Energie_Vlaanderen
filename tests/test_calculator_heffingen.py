@@ -92,9 +92,15 @@ class TestLeviesPerKlantcategorie:
         cost = calculator.calculate(_product("Woning"), _profile("Woning"))
 
         # Product uit juni 2026, dus het regime van 01/07/2023: 3 MWh
-        # niet_zakelijk tegen 47,4811 EUR/MWh, geen energiebijdrage voor
-        # huishoudens, en Energiefonds residentieel 2026 = 0,00 EUR/maand.
-        verwacht = D("3") * D("47.4811") + D("0") + D("0")
+        # niet_zakelijk tegen 47,4811 EUR/MWh bijzondere accijns plus
+        # 1,9261 EUR/MWh bijdrage op de energie, en Energiefonds residentieel
+        # 2026 = 0,00 EUR/maand.
+        #
+        # De bijdrage op de energie stond hier eerder op nul. Programmawet
+        # 25/12/2021 art. 39 zet ze voor niet-zakelijk gebruik op 1,9261 in elke
+        # schijf, en een ENGIE-eindafrekening rekent ze ook echt aan — als
+        # aparte regel naast de bijzondere accijns.
+        verwacht = D("3") * D("47.4811") + D("3") * D("1.9261") + D("0")
         assert cost.levies == verwacht
         assert cost.grid == D("0")
 
@@ -164,5 +170,7 @@ class TestTariefwissel:
         kost_juli = calculator.calculate(juli, profiel)
         kost_augustus = calculator.calculate(augustus, profiel)
 
-        assert kost_juli.levies == D("3") * D("47.4811")
-        assert kost_augustus.levies == D("3") * D("46.0000")
+        assert kost_juli.levies == D("3") * (D("47.4811") + D("1.9261"))
+        # De hervorming van 01/08/2026 wijzigde alleen de bijzondere accijns;
+        # de bijdrage op de energie komt uit een andere wet en loopt door.
+        assert kost_augustus.levies == D("3") * (D("46.0000") + D("1.9261"))

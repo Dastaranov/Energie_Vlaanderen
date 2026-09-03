@@ -127,8 +127,19 @@ class TestProfileBouwen:
         """
         assert bouw_profile(punt, None, {}, segment="Onderneming").segment == "Onderneming"
 
-    def test_exclusief_nacht_telt_mee_in_het_nachtvolume(self, punt):
-        """`grid_cost()` past het ODV-tarief 'exclusief nacht' op de nachtvolumes toe."""
+    def test_exclusief_nacht_blijft_een_eigen_register(self, punt):
+        """"Dal" van een tweevoudige meter is geen exclusief-nachtaansluiting.
+
+        Het lagere ODV-tarief "kWh-tarief exclusief nacht" geldt alleen voor het
+        aparte register van toestellen die enkel 's nachts draaien
+        (accumulatieverwarming, boiler). Piek- en daluren krijgen allebei het
+        normale tarief.
+
+        Ze samenvoegen paste dat lagere tarief toe op het hele dalverbruik. Op
+        een echte eindafrekening — 4.218 kWh dal bij Fluvius Midden-Vlaanderen
+        2025, waar het verschil 0,0083166 EUR/kWh bedraagt — scheelde dat
+        35 EUR per jaar te weinig netkost.
+        """
         profiel = bouw_profile(
             punt,
             None,
@@ -138,7 +149,8 @@ class TestProfileBouwen:
                 "afname_exclusief_nacht_kwh": D("500"),
             },
         )
-        assert profiel.afname_nacht_kwh == D("1500")
+        assert profiel.afname_nacht_kwh == D("1000")
+        assert profiel.afname_exclusief_nacht_kwh == D("500")
         assert profiel.afname_kwh == D("3500")
 
 
@@ -241,13 +253,17 @@ class TestTegenDeEchteDataset:
             punt, meter, contracten, [opgave], date(2026, 1, 1), date(2027, 1, 1)
         )
 
+        # Beide regimes dragen daarnaast dezelfde bijdrage op de energie van
+        # 1,9261 EUR/MWh (programmawet 25/12/2021 art. 39), die de hervorming
+        # van 01/08/2026 niet raakte.
         verwacht = D("3") * (
-            D("212") / D("365") * D("47.4811") + D("153") / D("365") * D("46.0000")
+            D("212") / D("365") * (D("47.4811") + D("1.9261"))
+            + D("153") / D("365") * (D("46.0000") + D("1.9261"))
         )
         assert money(resultaat.totalen["levies"]) == money(verwacht)
         # En het ligt tussen de twee regimes in — één van beide op het hele
         # jaar toepassen zou 142,4433 of 138,00 geven.
-        assert D("138.00") < resultaat.totalen["levies"] < D("142.4433")
+        assert D("143.78") < resultaat.totalen["levies"] < D("148.2216")
 
     def test_een_variabel_contract_krijgt_per_maand_zijn_eigen_index(
         self, dataset, heffingen, punt

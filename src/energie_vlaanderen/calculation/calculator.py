@@ -13,7 +13,22 @@ class Calculator:
     def __init__(self, repo: DataRepository, vat=D("0.06"), heffingen: Optional[HeffingenRepository] = None):
         self.repo=repo; self.vat=vat; self.heffingen=heffingen
 
-    def grid_cost(self,p:Profile)->Decimal:
+    def grid_cost(self,p:Profile,dagen:int=365)->Decimal:
+        """De netkost voor `dagen` dagen met de volumes uit `p`.
+
+        Nettarieven mengen twee soorten grootheden, en die schalen niet
+        hetzelfde. Het volumetrische deel volgt de kWh in `p`. Het
+        capaciteitstarief, het databeheer, de vaste term van de analoge
+        categorie en de wettelijke ondergrens zijn *jaar*bedragen: die worden
+        met `dagen/365` verdeeld.
+
+        Dat onderscheid kwam uit een echte eindafrekening. Die rekende over 310
+        gemeten dagen een capaciteitstarief van 311,23 EUR aan — precies
+        7,409 kW x (190/365 x 49,042629 + 120/365 x 50,123982), dus het
+        jaarbedrag naar rato van de dagen. Wie in plaats daarvan door de
+        meetperiode deelt, rekent 365/310 = 1,177 keer te veel op elke vaste
+        post.
+        """
         _,code=self.repo.dnb_for(p.postcode,p.gemeente)
         kind="ELEK_LS_DIGI" if p.meter=="digitaal" else ("ELEK_LS_ANA_PRO" if p.omvormer_kva>0 else "ELEK_LS_ANA")
         rows=self.repo.dnb[(self.repo.dnb.Netbeheerder==code)&(self.repo.dnb.Klanttype==kind)&(self.repo.dnb.Contracttype=="Afname")]
@@ -70,23 +85,33 @@ class Calculator:
         normal=val("kWh-tarief","EUR/kWh",bevat="netgebruik")
         odv_n=val("kWh-tarief normaal","EUR/kWh"); odv_x=val("kWh-tarief exclusief nacht","EUR/kWh")
         toe=val("Tarieven voor de toeslagen","EUR/kWh"); data=val("Laagspanningnet","EUR/jaar")
-        volume=p.afname_dag_kwh*(normal+odv_n+toe)+p.afname_nacht_kwh*(normal+odv_x+toe)
+        # Het lagere "exclusief nacht"-ODV-tarief geldt alleen voor dát register.
+        # Bij een tweevoudige meter krijgen piek- én daluren het normale tarief:
+        # "dal" is geen exclusief-nachtaansluiting. Dit stond eerder op
+        # `afname_nacht_kwh`, waardoor elk dalverbruik het lagere tarief kreeg —
+        # op een echte afrekening 35 EUR per jaar te weinig netkost.
+        volume=(
+            (p.afname_dag_kwh+p.afname_nacht_kwh)*(normal+odv_n+toe)
+            +p.afname_exclusief_nacht_kwh*(normal+odv_x+toe)
+        )
+        jaardeel=D(dagen)/D("365")
+        data=data*jaardeel
         if p.meter=="digitaal":
             # Bij een digitale meter is het capaciteitstarief de grootste post
             # van de netkost; ontbreekt het, dan klopt er niets van het bedrag.
             rate=val("Gemiddelde maandpiek","EUR/kW/jaar",verplicht=True)
             peaks=p.maandpieken_kw or tuple([p.geschatte_maandpiek_kw]*12)
             floor=p.minimum_maandpiek_kw
-            capacity=sum((max(x,floor)*rate/D("12") for x in peaks),D("0"))
+            capacity=sum((max(x,floor)*rate/D("12") for x in peaks),D("0"))*jaardeel
             maximum=val("Maximumtarief","EUR/kWh")*p.afname_kwh
             capacity_plus_volume=min(capacity+volume,maximum) if maximum>0 else capacity+volume
-            minimum=floor*rate
+            minimum=floor*rate*jaardeel
             grid=max(capacity_plus_volume,minimum)+data
         else:
             # Zelfde tarieftype-mismatch als hierboven: de vaste term van de
             # analoge klantcategorie (125,31 EUR/jaar bij FMV 2026) viel weg.
-            fixed=val("Vaste term","EUR/jaar",bevat="netgebruik",verplicht=True)
-            pros=val("Aanvullend capaciteitstarief voor prosumenten met terugdraaiende teller","EUR/kW/jaar")*p.omvormer_kva
+            fixed=val("Vaste term","EUR/jaar",bevat="netgebruik",verplicht=True)*jaardeel
+            pros=val("Aanvullend capaciteitstarief voor prosumenten met terugdraaiende teller","EUR/kW/jaar")*p.omvormer_kva*jaardeel
             grid=fixed+volume+data+pros
         return grid
 
@@ -197,6 +222,34 @@ class Calculator:
             return energy+fixed+extras,warnings
         raise ValueError(f"Onbekend tarieftype: {product.kind}")
 
+    def levies_gesplitst(self,p:Profile,jaar:int,maand:int)->tuple[Decimal,Decimal]:
+        """Splits de heffingen in wat met het verbruik meeschaalt en wat met de tijd.
+
+        De accijns en de bijdrage op de energie volgen de kWh, en hun schijven
+        zijn progressief over het *jaar*verbruik — die moeten dus op het
+        volledige opgavevolume berekend worden en daarna naar het volumeaandeel
+        van de deelperiode. Het energiefonds is een vast bedrag per maand en
+        volgt de kalender, niet het verbruik.
+
+        Ze samen teruggeven zou een van beide verkeerd verdelen zodra de
+        meetperiode geen volledig jaar beslaat — en dat is bij een afrekening
+        eerder regel dan uitzondering.
+        """
+        if self.heffingen is None:
+            raise ValueError(
+                "Calculator vereist een HeffingenRepository "
+                "(zie energie_vlaanderen.heffingen.HeffingenRepository.load) "
+                "— heffingen worden niet stilzwijgend op 0 gezet."
+            )
+        if p.segment=="Woning":
+            accijns_categorie,fonds_categorie="niet_zakelijk","residentieel"
+        else:
+            accijns_categorie,fonds_categorie="zakelijk_laagspanning","niet_residentieel"
+        bijzondere_accijns,energiebijdrage=self.heffingen.bereken_accijns_en_energiebijdrage(
+            "elektriciteit",accijns_categorie,p.afname_kwh,date(jaar,maand,1))
+        energiefonds=self.heffingen.energiefonds_per_jaar("laag",fonds_categorie,jaar)
+        return bijzondere_accijns+energiebijdrage, energiefonds
+
     def levies(self,p:Profile,jaar:int,maand:int)->Decimal:
         """Publieke ingang op de heffingenberekening.
 
@@ -270,6 +323,16 @@ class Calculator:
                 credit,inj_warnings=self.supplier_cost(
                     inject_product,ip,market,injectie_intervals,sta_vlak_profiel=False)
                 warnings.extend(inj_warnings)
-        taxable=supplier+grid+levies-credit
+        # De injectievergoeding valt búiten de btw-basis en wordt er niet van
+        # afgetrokken. Ze is vrijgesteld onder Beslissing ET 131.616/2 van
+        # 25-10-2019 — een echte eindafrekening zet haar in een aparte
+        # vrijstellingsregel naast de 6%-basis, niet erin.
+        #
+        # Dit stond eerder als `taxable = supplier + grid + levies - credit`,
+        # wat de btw-basis verlaagde. `docs/price_model_low_voltage.md` §9.1
+        # schreef nóg iets anders voor (`T - injectieprijs x kWh x 1,06`, dus
+        # het krediet zelf met btw verhoogd). Geen van beide klopte; Manifest
+        # §14 noemde dit een openstaande validatie en de factuur beslist ze.
+        taxable=supplier+grid+levies
         vat=max(taxable,D("0"))*self.vat
         return Cost(supplier,grid,levies,credit,vat,warnings)
