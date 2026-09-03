@@ -1,8 +1,8 @@
 name: Bronbewaking
 
-# Twee dingen kunnen buiten dit repo veranderen zonder dat iemand het merkt:
-# VREG of Synergrid publiceert een nieuw bronbestand, of de wetgever wijzigt
-# een heffing. In beide gevallen blijft de code draaien en blijven de
+# Drie dingen kunnen buiten dit repo veranderen zonder dat iemand het merkt:
+# VREG of Synergrid publiceert een nieuw bronbestand, de wetgever wijzigt een
+# heffing, of de Vlaamse overheid publiceert nieuwe energiefondstarieven. In beide gevallen blijft de code draaien en blijven de
 # uitkomsten er geloofwaardig uitzien — ze zijn alleen verouderd. Deze
 # workflow maakt dat zichtbaar door er een issue van te maken.
 #
@@ -214,6 +214,103 @@ jobs:
             if (open) {
               // Bijwerken in plaats van bijkomend commentaar: deze lijst is een
               // stand van zaken, geen gebeurtenis.
+              if (open.body !== body) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: open.number,
+                  body,
+                });
+              }
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: titel,
+              body,
+              labels: ["bronbewaking"],
+            });
+
+  energiefonds:
+    name: Tarieven van de bijdrage energiefonds
+    runs-on: ubuntu-latest
+
+    # De enige heffing in dit repo met een publieke, jaarlijks bijgewerkte
+    # tabel. Tot nu toe werd die met de hand vergeleken — het soort controle
+    # dat precies één keer per jaar nodig is en daarom vergeten wordt.
+    #
+    # Er is nog een reden om hier te kijken: het energiefonds faalt *hard* op
+    # een ontbrekend jaar (`HeffingenError`). Publiceert de Vlaamse overheid
+    # het volgende jaar laat, dan valt elke berekening over januari stil. Dat
+    # wil je in december weten, niet op 1 januari.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installeer package
+        run: pip install -e "."
+
+      - id: check
+        name: Vergelijk vlaanderen.be met de masterdata
+        run: |
+          set +e
+          python scripts/check_energiefonds.py > energiefonds.txt 2>&1
+          code=$?
+          set -e
+          cat energiefonds.txt
+          # 0 = gelijk, 1 = uiteengelopen, 2 = kon niet controleren.
+          if [ "$code" = "2" ]; then
+            echo "::error::Tarieftabel van vlaanderen.be niet leesbaar; pagina-indeling gewijzigd?"
+            exit 1
+          fi
+          echo "afwijking=$([ "$code" = "1" ] && echo ja || echo nee)" >> "$GITHUB_OUTPUT"
+          grep -q "^LET OP" energiefonds.txt \
+            && echo "volgend_jaar_ontbreekt=ja" >> "$GITHUB_OUTPUT" \
+            || echo "volgend_jaar_ontbreekt=nee" >> "$GITHUB_OUTPUT"
+
+      - name: Meld een afwijking als issue
+        if: steps.check.outputs.afwijking == 'ja' || steps.check.outputs.volgend_jaar_ontbreekt == 'ja'
+        uses: actions/github-script@v7
+        env:
+          RAPPORT_PAD: energiefonds.txt
+        with:
+          script: |
+            const fs = require("fs");
+            const rapport = fs.readFileSync(process.env.RAPPORT_PAD, "utf8");
+            const titel = "Bijdrage energiefonds: tarieven bijwerken";
+            const body = [
+              "De tarieftabel op vlaanderen.be en `config/heffingen/bijdrage_energiefonds.toml`",
+              "lopen uiteen, of het volgende kalenderjaar is nog niet gepubliceerd.",
+              "",
+              "```",
+              rapport.trim(),
+              "```",
+              "",
+              "Bijwerken: neem de nieuwe rijen over in",
+              "`config/heffingen/bijdrage_energiefonds.toml` en leg de opgeslagen",
+              "kopie in `tests/fixturen/heffingen/` naast de nieuwe pagina. Daarna:",
+              "```bash",
+              "python scripts/check_energiefonds.py",
+              "pytest -q tests/test_energiefonds_ingest.py",
+              "```",
+            ].join("\n");
+
+            const bestaande = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "bronbewaking",
+            });
+            const open = bestaande.data.find((i) => i.title === titel);
+            if (open) {
+              // Een stand van zaken, geen gebeurtenis: bijwerken in plaats van
+              // er dagelijks een commentaar bij te zetten.
               if (open.body !== body) {
                 await github.rest.issues.update({
                   owner: context.repo.owner,

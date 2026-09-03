@@ -62,5 +62,21 @@ jobs:
       # (geen scrapebare bron voor batterij-/omvormerspecificaties), en elk
       # model start ongeverifieerd totdat het tegen een datasheet gelegd is
       # — vandaar ook hier zonder --streng.
+      #
+      # Zonder --c10-26: de Synergrid-homologatielijst is een werkboek van
+      # 1,4 MB dat buiten git blijft (zie data/datasheets/LEESMIJ.md). Die
+      # controle draait lokaal en in de bronbewaking, niet hier.
       - name: Controleer hardware-masterdata
         run: python -m energie_vlaanderen.cli audit hardware
+
+      # De bijdrage energiefonds is de enige heffing met een publieke,
+      # jaarlijks bijgewerkte tabel. Hier wordt ze tegen de opgeslagen kopie
+      # van die pagina gelegd — geen netwerk, dus dit hoort bij elke commit.
+      # De live controle staat in bronbewaking.yml.
+      #
+      # Exitcode 1 betekent dat de masterdata en de opgeslagen kopie uiteen
+      # zijn gaan lopen; dat is een defect in het repo en hoort rood te zijn.
+      - name: Controleer energiefonds tegen de opgeslagen brontabel
+        run: |
+          python scripts/check_energiefonds.py \
+            --html tests/fixturen/heffingen/vlaanderen_energiefonds_2026.html

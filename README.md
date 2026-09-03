@@ -11,6 +11,12 @@ Energievergelijker voor Vlaanderen. Haalt de officiële V-test- en
 distributienettarieven op bij VREG, verwerkt ze via versiegebonden pipelines,
 en zet ze in een PostgreSQL-databank als centrale bron voor prijsberekeningen.
 
+Bovenop die data staat een gebruikersbasis: adressen, EAN's, meters,
+installaties en leverancierscontracten met een geldigheidsperiode. Daarmee kan
+een verbruiksperiode doorgerekend worden zoals een leverancier het doet — per
+contractwissel, per tariefkaartversie, per heffingenregime en per tariefjaar.
+Een echte eindafrekening is er tot op **0,003%** mee gereproduceerd.
+
 ## Inhoud
 
 - [Vereisten](#vereisten)
@@ -18,6 +24,7 @@ en zet ze in een PostgreSQL-databank als centrale bron voor prijsberekeningen.
 - [Van bron tot databank](#van-bron-tot-databank)
 - [Gebruik](#gebruik)
 - [Dataversies en de databank](#dataversies-en-de-databank)
+- [Gebruikers en simulatie](#gebruikers-en-simulatie)
 - [Masterdata en tariefbewaking](#masterdata-en-tariefbewaking)
 - [Verbruiksprofielen (Synergrid)](#verbruiksprofielen-synergrid)
 - [Testen](#testen)
@@ -152,9 +159,10 @@ Energie_vlaanderen >> exit
 | `staging` | `parse --version [--only vtest\|tariffs\|curves\|profielen\|all] [--overwrite] [--synergrid-version] [--jaar]`, `refine --version [--postcode] [--segment] [--energy] [--matrix] [--met-contractdetails] [--browser]`, `calibrate --version [--postcode]` |
 | `synergrid` | `list --year`, `download --year`, `verify --version`, `status` |
 | `market` | `sync --start --end [--no-api]` |
-| `audit` | `status`, `approve`, `golden`, `set-golden`, `sanity`, `sample` (alle `--version`), `heffingen [--datum] [--streng]` |
+| `audit` | `status`, `approve`, `golden`, `set-golden`, `sanity`, `sample` (alle `--version`), `heffingen [--datum] [--streng]`, `hardware [--streng] [--c10-26]` |
 | `version` | `publish --version [--keep-staging] [--force] [--skip-db] [--db-overwrite]` |
 | `db` | `init`, `import --version [--overwrite] [--gemeente]`, `verify`, `status` |
+| `gebruiker` | `toon [--toml]`, `controleer [--toml] [--hardware]`, `bereken --van --tot [--toml] [--version] [--geen-metingen]` |
 | `paths` | *(geen actie)* |
 
 Toelichting per groep:
@@ -180,8 +188,10 @@ Toelichting per groep:
 - **`audit`** — de controles vóór publicatie: `sanity` (plausibiliteit),
   `golden` (cel-voor-cel tegen het bron-XLSX), `sample` (steekproef),
   `status`/`approve` (goedkeuringsstatus zetten/tonen), `set-golden`
-  (nieuwe referentie vastleggen) en `heffingen` (structuur van
-  `config/heffingen/` toetsen, heeft geen `--version` nodig).
+  (nieuwe referentie vastleggen), `heffingen` (structuur van
+  `config/heffingen/` toetsen) en `hardware` (idem voor `config/hardware/`;
+  met `--c10-26` ook tegen de Synergrid-homologatielijst). Die laatste twee
+  hebben geen `--version` nodig.
 - **`version`** — `publish` is de enige actie: kopieert een goedgekeurde
   versie naar `versions/`, importeert ze in de databank en activeert ze,
   als één samenhangende operatie (zie
@@ -189,6 +199,9 @@ Toelichting per groep:
 - **`db`** — databankbeheer: schema aanleggen (`init`), een versie
   importeren (`import`), en controleren of bestanden en databank nog
   overeenkomen (`verify`, `status`).
+- **`gebruiker`** — leest een gebruikersdossier uit `gebruiker.toml` (`toon`),
+  toetst het structureel (`controleer`) en rekent een periode door
+  (`bereken`). Zie [Gebruikers en simulatie](#gebruikers-en-simulatie).
 - **`paths`** — toont de actieve databankpaden (raw/staging/versions/
   current.txt), zonder subactie.
 
@@ -211,6 +224,53 @@ Tariefwijzigingen worden gehistoriseerd (SCD type 2): een nieuwe prijs sluit
 de vorige af in plaats van ze te overschrijven, zodat een berekening over een
 oudere periode nog steeds met het toen geldende tarief rekent.
 
+## Gebruikers en simulatie
+
+Een gebruikersdossier staat in `gebruiker.toml` — postcode, aansluitingspunten
+met hun EAN, meterregime en registerschema, installaties (PV, batterij), en de
+leverancierscontracten met hun geldigheidsperiode.
+`gebruiker.voorbeeld.toml` documenteert de volledige vorm.
+
+```bash
+energievergelijker gebruiker toon                       # het dossier zoals het gelezen wordt
+energievergelijker gebruiker controleer --hardware      # exitcode 2 bij een fout
+energievergelijker gebruiker bereken --van 2025-06-25 --tot 2026-05-01
+```
+
+> **`gebruiker.toml` staat niet in git.** Zodra er een EAN, adres of
+> meterstand in staat is het een persoonsgegeven (manifest §5.2). Hetzelfde
+> geldt voor `data/referentie/` en `data/datasheets/`; daar staat alleen een
+> `LEESMIJ.md` in git.
+
+`bereken` knipt de periode op elke grens die het bedrag beïnvloedt — een
+contractwissel, de bevriezingsdatum van een vaste tariefkaart, een
+heffingenregime, de indexatiemaand van een variabel contract en de jaarwissel
+van de nettarieven — en telt de stukken op. Het resultaat draagt een
+**exactheidsklasse** (exact / gereconstrueerd / geschat / scenario) en de lijst
+**aannames** waarop het steunt, elk met bron.
+
+Wijst `[verbruik].fluvius_csv` naar een verbruikshistoriek van Fluvius, dan
+komen de volumes per deelperiode uit de meting in plaats van pro rata over de
+dagen verdeeld te worden. Dat maakt het verschil tussen "gereconstrueerd" en
+"exact".
+
+### Nagerekend tegen een echte factuur
+
+Een betaalde eindafrekening (10 maanden, over de jaarwissel heen) is met de
+eigen data hergesimuleerd:
+
+| | simulatie | factuur | verschil |
+| --- | ---: | ---: | ---: |
+| Energie + groene stroom + WKK | 1132,40 | 1132,36 | +0,04 |
+| Injectievergoeding | −71,22 | −71,20 | −0,02 |
+| Netwerkkosten | 678,14 | 678,09 | +0,05 |
+| Toeslagen en heffingen | 336,81 | 336,81 | **0,00** |
+| **Subtotaal excl. btw** | **2076,13** | **2076,06** | **+0,07 (0,003%)** |
+
+Buiten beschouwing blijven de commerciële kortingen en de correctie tussen
+meteropname en factuurdatum: die staan in geen publieke bron.
+`tests/test_referentiefactuur.py` bewaakt het geheel.
+
 ## Masterdata en tariefbewaking
 
 Heffingen, btw en het gastransporttarief (`config/heffingen/*.toml`,
@@ -225,18 +285,30 @@ eigen kostenopbouw.
 
 ```bash
 energievergelijker audit heffingen                     # structuur, offline
+energievergelijker audit hardware [--c10-26]           # batterijen/omvormers
 energievergelijker staging calibrate --version <id>    # Selenium
 python scripts/check_tarieven.py --versie <id>         # config vs. vtest.be
 python scripts/check_bronnen.py                        # nieuwe VREG-/Synergrid-bestanden?
+python scripts/check_energiefonds.py                   # config vs. vlaanderen.be
+python scripts/check_injectie_index.py                 # SPP-gewogen injectie-index
+pytest -q tests/test_referentiefactuur.py              # tegen een echte afrekening
 ```
 
-Een GitHub Action draait de laatste twee dagelijks en meldt afwijkingen als
+Een GitHub Action draait de bronbewaking dagelijks en meldt afwijkingen als
 issue. Zie `docs/jaarwissel 2026-2027.md` voor het jaarlijkse
 onderhoudsmoment: enkele tarieven wisselen per 1 januari en dat gebeurt
-zonder waarschuwing als de masterdata niet meegaat.
+zonder waarschuwing als de masterdata niet meegaat. De bijdrage energiefonds
+faalt daarbij *hard* op een ontbrekend jaar — `check_energiefonds.py` meldt
+het zodra het volgende jaar nog niet gepubliceerd is.
 
 **Let op bij vergelijken met externe bronnen:** de masterdata staat exclusief
 btw, publieke communicatie noemt bedragen doorgaans inclusief 6%.
+
+**vtest.be is leidend, maar niet onfeilbaar.** De vergelijkingstool toont voor
+huishoudens géén "bijdrage op de energie", terwijl de programmawet van
+25/12/2021 die op 1,9261 EUR/MWh zet en een echte eindafrekening ze ook
+aanrekent. De masterdata stond daardoor op nul. De rangorde is dus: wetgeving
+en een betaalde factuur samen > vtest.be > secundaire bronnen.
 
 ## Verbruiksprofielen (Synergrid)
 

@@ -18,10 +18,21 @@ kon dat vinden, want de fout zat in een getal, niet in een instructie.
 
 Daaruit volgt hoe je werkt: **een cijfer is pas correct als een externe bron
 het reproduceert.** Interne consistentie is geen bewijs. Een groene testsuite
-is geen bewijs. Wat je overtuigt, is dat vtest.be — de officiële
-vergelijkingstool van VREG — bij hetzelfde profiel hetzelfde bedrag geeft.
+is geen bewijs.
 
-## De drie controles
+Wat je overtuigt is doorgaans dat vtest.be — de officiële vergelijkingstool van
+VREG — bij hetzelfde profiel hetzelfde bedrag geeft. Maar vtest.be is niet
+onfeilbaar, en dat is sinds kort aantoonbaar: de tool toont voor huishoudens
+géén "bijdrage op de energie", terwijl artikel 39 van de programmawet van
+25/12/2021 ze op 1,9261 EUR/MWh zet en een echte eindafrekening ze ook aanrekent
+— als aparte regel náást de bijzondere accijns. De masterdata stond daardoor
+maandenlang op nul, en de kalibratie bevestigde die nul netjes.
+
+**De rangorde is dus: wetgeving en een betaalde factuur samen > vtest.be >
+secundaire bronnen.** Wijkt vtest.be af van een wettekst die een factuur
+bevestigt, dan is vtest.be de bron die iets weglaat.
+
+## De controles
 
 **1. Structuur (offline, seconden)**
 
@@ -58,6 +69,48 @@ python scripts/check_bronnen.py
 
 Exitcode 3 = er staat nieuwe data online. Dat is geen fout, dat is werk.
 
+**4. Bijdrage energiefonds (tegen vlaanderen.be)**
+
+```bash
+python scripts/check_energiefonds.py                    # live
+python scripts/check_energiefonds.py --html <kopie>     # zonder netwerk
+```
+
+De enige heffing met een publieke, jaarlijks bijgewerkte tabel. Let vooral op
+de melding dat het volgende kalenderjaar nog niet gepubliceerd is: het
+energiefonds faalt *hard* op een ontbrekend jaar, dus een berekening over
+januari valt stil zodra dat jaar ontbreekt.
+
+**5. Referentiefacturen (de sterkste toets die er is)**
+
+```bash
+pytest -q tests/test_referentiefactuur.py
+```
+
+Een betaalde eindafrekening reproduceren is bewijs van een andere orde dan een
+vergelijkingstool naderen. `tests/fixturen/facturen/` bevat geanonimiseerde
+facturen; de brondocumenten staan lokaal in `data/referentie/` en vallen buiten
+git. De eerste factuur bracht vier fouten aan het licht die geen enkele
+kalibratie gevonden had — waaronder de bijdrage op de energie hierboven en de
+btw-behandeling van de injectievergoeding.
+
+Loopt een reconstructie niet gelijk, herleid het verschil dan tot een
+component vóór je iets aanpast. Bruikbare toets: het capaciteitstarief hangt
+niet van het volume af, alleen van de piek en van de dagen per tariefjaar. Komt
+dát exact uit, dan zitten de tarieven en de tariefjaren goed en zit het
+verschil in de volumes.
+
+**6. Homologatie van hardware (tegen de Synergrid C10/26-lijst)**
+
+```bash
+energievergelijker audit hardware --c10-26
+```
+
+Vereist het werkboek in `data/datasheets/` (buiten git). Zegt of een batterij
+of omvormer in België aangesloten mag worden, en is tegelijk de enige
+onafhankelijke bron op `config/hardware/`: Synergrid-referentie, vermogen,
+schijnbaar vermogen en aantal fasen.
+
 ## Werkwijze bij een afwijking
 
 Ga niet meteen `config/heffingen/` aanpassen. Werk in deze volgorde:
@@ -72,6 +125,9 @@ Ga niet meteen `config/heffingen/` aanpassen. Werk in deze volgorde:
    - **Btw.** Officiële communicatie noemt bedragen doorgaans inclusief 6%,
      de masterdata staat exclusief. 48,76 incl. is 46,00 excl. Een verschil
      van precies factor 1,06 is geen afwijking.
+   - **Piek versus continu.** Een datasheet noemt vaak een piekwaarde over
+     enkele seconden en een continu vermogen; C10/26 homologeert het continue.
+     Ze verwisselen gaf hier ooit 3.500 in plaats van 2.500 VA — 40% te hoog.
    - **Segment.** De hervorming van 2023 gold enkel voor residentiële
      afnemers; ondernemingen bleven op de oude tarieven. 46,00 tegenover
      14,21 EUR/MWh. Kalibreer het segment dat je controleert

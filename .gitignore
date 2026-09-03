@@ -260,6 +260,10 @@ data/datasheets/*
 # volledige bestandsvorm.
 gebruiker.toml
 
+# Persoonlijk werkdocument om me weer in te werken; geen projectdocumentatie.
+# Wat er wél voor iedereen toe doet staat in README.md, CLAUDE.md en docs/.
+HANDLEIDING.md
+
 # Simulatie-uitvoer
 output/
 

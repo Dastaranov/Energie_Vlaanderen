@@ -37,7 +37,39 @@ energievergelijker staging calibrate --version <versie> [--postcode 9120]
 # 4. Bronversheid — staat er nieuwe data bij VREG?
 python scripts/check_bronnen.py          # exitcode 3 = ja
 python scripts/check_bronnen.py --bijwerken --versie <versie>
+
+# 5. Bijdrage energiefonds — tegen vlaanderen.be.
+python scripts/check_energiefonds.py                 # live
+python scripts/check_energiefonds.py --html <kopie>  # zonder netwerk
+
+# 6. Referentiefacturen — een betaalde afrekening nagerekend.
+pytest -q tests/test_referentiefactuur.py
+
+# 7. Homologatie van batterijen/omvormers (Synergrid C10/26).
+energievergelijker audit hardware --c10-26
+
+# 8. De SPP-gewogen injectie-index (nog niet sluitend, zie onder).
+python scripts/check_injectie_index.py
 ```
+
+## vtest.be is leidend, maar niet onfeilbaar
+
+De vergelijkingstool toont voor huishoudens géén "bijdrage op de energie",
+terwijl artikel 39 van de programmawet van 25/12/2021 ze op 1,9261 EUR/MWh zet
+en een echte eindafrekening ze ook aanrekent — als aparte regel náást de
+bijzondere accijns. De masterdata stond daardoor op nul en de kalibratie
+bevestigde die nul netjes.
+
+De rangorde is dus: **wetgeving en een betaalde factuur samen > vtest.be >
+secundaire bronnen.** Een reconstructie van een echte afrekening
+(`tests/test_referentiefactuur.py`) is de sterkste toets die dit repo heeft.
+
+Nog open: de injectie-index `M EPEX Spot Belgium/Belpex SPP_BE (kwartier)` is
+het maandgemiddelde Belpex gewogen met het zonneprofiel — 35% lager dan het
+rekenkundig gemiddelde. `scripts/check_injectie_index.py` toetst zes
+conventies; geen enkele reproduceert de gepubliceerde waarde. Zolang dat zo is
+rekent `formula_ct()` met de door VREG meegeleverde indexwaarde en nooit met
+een zelf berekende.
 
 ## Het kalibratierapport lezen
 
