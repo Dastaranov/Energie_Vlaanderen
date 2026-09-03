@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from decimal import Decimal as D
 
+from energie_vlaanderen.utility.normalizer import money
+
 import pytest
 
 from energie_vlaanderen.data.db_repository import DbDataRepository
@@ -194,3 +196,106 @@ class TestHerkomstVanTarieven:
             "select count(*) from data_version where geactiveerd_op is not null"
         )).scalar()
         assert actief == 1
+
+
+@pytest.mark.integration
+class TestKetenDatabankNaarBedrag:
+    """De hele keten databank → berekening, met een verzonnen dossier.
+
+    Deze test bestaat omdat de sterkste bewaking die dit project heeft — de
+    referentiefactuur nagerekend uit de databank — in CI overslaat: ze leest
+    `gebruiker.toml`, en dat draagt EAN, adres en meterstanden en staat terecht
+    niet in git. Van de 52 integratietests sloegen er daardoor 9 over, en dat
+    waren net de negen die de volle keten aflegden.
+
+    `tests/fixturen/dossiers/synthetisch_woning.toml` vult dat gat: verzonnen
+    waarden, geen persoonsgegevens, en een periode die de jaarwissel kruist
+    zodat beide tariefjaren nodig zijn.
+
+    De uitkomst is géén factuurreconstructie — de volumes zijn verzonnen. Wat ze
+    bewijst is dat de databank prijzen, formules, nettarieven van twee
+    jaargangen en heffingen draagt en dat daar een bedrag uit komt. Met lege
+    prijskolommen stopt de berekening met "Vast product mist afnameprijs".
+    """
+
+    @pytest.fixture
+    def resultaat(self, db_conn):
+        from datetime import date
+        from pathlib import Path
+
+        from energie_vlaanderen.gebruikers.berekening import Kostberekening
+        from energie_vlaanderen.gebruikers.models import EnergieType
+        from energie_vlaanderen.gebruikers.toml_io import lees_dossier
+        from energie_vlaanderen.heffingen.repository import HeffingenRepository
+
+        root = Path(__file__).resolve().parents[1]
+        dossier_pad = root / "tests" / "fixturen" / "dossiers" / "synthetisch_woning.toml"
+        if not dossier_pad.is_file():
+            pytest.skip(f"{dossier_pad.name} ontbreekt.")
+
+        repos = {jaar: DbDataRepository(db_conn, tariefjaar=jaar) for jaar in (2025, 2026)}
+        for jaar, repo in repos.items():
+            if len(repo.dnb) == 0:
+                pytest.skip(f"Geen nettarieven voor {jaar} in de databank.")
+
+        heffingen = HeffingenRepository.load(root / "config" / "heffingen")
+        dossier = lees_dossier(
+            dossier_pad, project_root=root, netbeheerders=repos[2026].netbeheerders
+        )
+        punt = dossier.punt(EnergieType.ELEKTRICITEIT)
+        return Kostberekening(
+            repos[2026], heffingen,
+            segment=str(dossier.gebruiker.segment),
+            nettarieven_per_jaar=repos,
+        ).bereken(
+            punt, dossier.meter_van(punt), dossier.contracten_van(punt),
+            dossier.opgaven_van(punt),
+            date(2025, 11, 1), date(2026, 3, 1),
+            extra_aannames=dossier.aannames,
+        )
+
+    def test_er_komt_een_leverancierskost_uit(self, resultaat):
+        """De assertie waar het om draait.
+
+        `energieprijs_kwh` stond een week lang leeg op alle 25.937 tariefrijen.
+        Met die toestand stopt deze berekening met "Vast product mist
+        afnameprijs" — nagegaan door de kolommen in een teruggerolde transactie
+        leeg te maken.
+        """
+        assert resultaat.totalen["supplier"] > D("0"), (
+            "Geen leverancierskost. Draagt de databank de energieprijzen? "
+            "Controleer met: energievergelijker db audit"
+        )
+
+    def test_de_leverancierskost_is_van_de_juiste_grootteorde(self, resultaat):
+        """Een bandbreedte en geen vast bedrag: een exacte waarde zou wijzigen
+        zodra de zaaddump ververst wordt, en dan is de reflex "de assertie
+        aanpassen tot het weer groen is" — precies wat hier nooit mag.
+
+        1.600 kWh bij een gangbaar vast tarief plus vaste vergoeding ligt
+        ruwweg tussen 10 en 35 c€/kWh alles inbegrepen.
+        """
+        per_kwh = resultaat.totalen["supplier"] / D("1600") * D("100")
+        assert D("10") < per_kwh < D("35"), f"{per_kwh:.2f} c€/kWh"
+
+    def test_de_heffingen_zijn_exact_af_te_leiden(self, resultaat):
+        """79,05 EUR = 1,6 MWh x (47,4811 bijzondere accijns + 1,9261 bijdrage
+        op de energie), het regime dat op 01/07/2023 inging en tot 01/08/2026
+        liep. Anders dan de leverancierskost hangt dit niet aan de zaaddump maar
+        aan `config/heffingen/`, dus hier kan een exact bedrag staan.
+        """
+        assert money(resultaat.totalen["levies"]) == D("79.05")
+
+    def test_de_periode_splitst_op_de_jaarwissel(self, resultaat):
+        """Twee deelperiodes, dus beide tariefjaren zijn gebruikt. Ze konden
+        aanvankelijk niet naast elkaar in de databank staan: de SCD2-upsert
+        weigerde een oudere jaargang na een nieuwere."""
+        from datetime import date
+
+        assert len(resultaat.regels) == 2
+        assert resultaat.regels[1].periode.van == date(2026, 1, 1)
+
+    def test_er_komt_een_netkost_uit(self, resultaat):
+        """`grid_cost()` gaf ooit stil 0,00 EUR terug wanneer elke lookup miste.
+        Een digitale meter in Beveren zat daarmee gratis op het net."""
+        assert resultaat.totalen["grid"] > D("0")

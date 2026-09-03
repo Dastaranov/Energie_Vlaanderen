@@ -1,0 +1,79 @@
+# Een verzonnen gebruikersdossier, bedoeld voor CI.
+#
+# De sterkste bewaking die dit project heeft — de referentiefactuur nagerekend
+# uit de databank — draaide alleen lokaal, want ze leest `gebruiker.toml` en dat
+# staat terecht niet in git: het draagt EAN, adres en meterstanden (Manifest
+# §5.2). Gevolg: van de 52 integratietests sloegen er 9 over in CI, en dat waren
+# net de negen die de hele keten databank → berekening afleggen.
+#
+# Dit bestand vult dat gat. Er staat niets persoonlijks in: het adres is een
+# postcode zonder straat, er is geen EAN, geen meterstand en geen meetbestand.
+# De waarden zijn gekozen om de rekenweg te dekken, niet om een werkelijk gezin
+# te beschrijven — de uitkomst is dus géén factuurreconstructie en hoort niet
+# als zodanig gelezen te worden.
+#
+# Wat het wél bewijst: dat de databank prijzen, formules, indexwaarden,
+# nettarieven van twee jaargangen en heffingen draagt, en dat er een bedrag
+# uitkomt. Met lege prijskolommen stopt de berekening met "Vast product mist
+# afnameprijs" — precies de fout die een week onzichtbaar bleef.
+
+[gebruiker]
+# 9120 Beveren (Waas): Fluvius Midden-Vlaanderen voor elektriciteit én gas.
+# Bewust een postcode zonder ambiguïteit — 2387 (Zondereigen/Baarle-Hertog)
+# heeft er twee en zou de gemeentenaam verplicht maken.
+postcode = "9120"
+gemeente = "Beveren (Waas)"
+segment = "Woning"
+
+[aansluiting]
+elektriciteit = true
+gas = false
+
+aansluitingsvermogen_kva = 9.2
+aantal_fasen = 1
+omvormer_kva = 0.0
+
+meter = "digitaal"
+registerschema = "enkelvoudig"
+terugdraaiend = false
+zonnepanelen = false
+
+# Zonder gemeten maandpieken valt de berekening terug op de schatting van
+# vtest.be (4,218 kW). Hier wordt een waarde meegegeven zodat het
+# capaciteitstarief van een vast getal uitgaat en de uitkomst stabiel blijft
+# tussen runs.
+gemeten_maandpiek_kw = 5.0
+
+[verbruik]
+# Een rond jaarverbruik, enkelvoudig register. Geen meetbestand: dat zou een
+# Fluvius-export vragen en die is persoonlijk.
+elektriciteit_kwh = 3500
+
+[[verbruiksopgave]]
+energie = "elektriciteit"
+periode_van = "2025-11-01"
+periode_tot = "2026-03-01"
+# De registers heten `afname_dag_kwh`/`afname_nacht_kwh`; een onbekende
+# sleutel wordt stil genegeerd en levert een opgave van 0 kWh op.
+afname_dag_kwh = 1600
+# `bron` is een enum (factuur/manueel/meting/schatting), geen vrije tekst.
+# "manueel" is hier het eerlijke antwoord: een handmatig opgegeven cijfer, geen
+# factuur en geen meting — het reist als zodanig mee tot in de exactheidsklasse.
+bron = "manueel"
+
+# Eén contract over de jaarwissel. Dat is met opzet: het dwingt de berekening
+# om beide tariefjaren te gebruiken (2025 en 2026), en die konden aanvankelijk
+# niet naast elkaar in de databank staan — de SCD2-upsert weigerde een oudere
+# jaargang na een nieuwere.
+#
+# ENGIE "Easy" is gekozen omdat het in de zaaddump voor beide jaren aanwezig is.
+# Wijzigt dat, dan faalt de test luidruchtig in plaats van stil een ander
+# product te nemen.
+[[contract.elektriciteit]]
+leverancier = "ENGIE"
+product = "Easy"
+type = "vast"
+van = "2025-11-01"
+tot = "2026-03-01"
+tariefkaart_van = "2025-11-01"
+bron = "verzonnen, voor CI"
