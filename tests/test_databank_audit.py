@@ -158,3 +158,50 @@ class TestVtestTegenWerkboek:
             "Geen enkele vaste vergoeding draagt meer dan twee decimalen; "
             "de precisie is vermoedelijk opnieuw weggerond."
         )
+
+
+class TestGoldenBinnenDeTransactie:
+    """De controle tegen het bronwerkboek staat binnen de importtransactie.
+
+    Ze stond vroeger ervóór, als aparte stap op de gestagede CSV's. Zonder die
+    bestanden is er vóór de import niets om tegen te vergelijken: de
+    tarieftabellen zijn cumulatief, dus data bestaat pas zodra ze ingevoegd is.
+
+    Binnen de transactie is dat geen bezwaar maar een verbetering. `audit
+    golden` was een losse stap die je gewoon kon overslaan — je kon publiceren
+    zonder haar ooit te draaien, net zoals `audit approve` ooit niets afdwong.
+    Nu rolt een afwijking de import terug en blijft er niets van over.
+    """
+
+    def test_de_import_kent_de_werkboekcontrole(self):
+        import inspect
+
+        from energie_vlaanderen.cli.db import import_version_into_db
+
+        params = inspect.signature(import_version_into_db).parameters
+        assert "golden_werkboeken" in params
+        assert "droogloop" in params
+
+    def test_zonder_werkboeken_draait_de_controle_niet(self):
+        """En dat hoort zichtbaar te zijn, niet stil. `_werkboeken_voor_golden`
+        waarschuwt wanneer het raw-manifest ontbreekt; stil overslaan zou een
+        publicatie laten doorgaan zonder dat iemand het merkt — precies de fout
+        die deze audit ooit zelf maakte toen ze op nul rijen "OK" meldde."""
+        from pathlib import Path
+
+        from energie_vlaanderen.cli.ingest import _werkboeken_voor_golden
+
+        class _Paden:
+            raw = Path("/bestaat/niet")
+
+        assert _werkboeken_voor_golden(_Paden(), "20260101T000000Z-deadbeef") == {}
+
+    def test_de_droogloop_rolt_terug_via_een_eigen_uitzondering(self):
+        """De terugrol gebeurt door een uitzondering binnen de transactie, niet
+        door achteraf te verwijderen. Verwijderen zou de SCD2-historiek niet
+        kunnen herstellen: een afgesloten periode blijft afgesloten."""
+        from energie_vlaanderen.cli.db import _Droogloop
+
+        fout = _Droogloop(["a", "b"])
+        assert fout.resultaten == ["a", "b"]
+        assert isinstance(fout, Exception)

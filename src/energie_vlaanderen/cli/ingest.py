@@ -717,6 +717,49 @@ def run_sync_market(args: argparse.Namespace, settings: Settings) -> int:
 # publish
 # ---------------------------------------------------------
 
+def _werkboeken_voor_golden(paths, version_id: str) -> dict:
+    """De bronwerkboeken van deze versie, voor de controle binnen de import.
+
+    Leeg wanneer de raw-map of het manifest ontbreekt: dan draait de
+    cel-voor-cel-controle niet, en dat is zichtbaar in de uitvoer. Stil
+    overslaan zou een publicatie laten doorgaan zonder dat iemand het merkt —
+    de fout die deze audit ooit zelf maakte toen ze op nul rijen "OK" meldde.
+    """
+    import json
+
+    from energie_vlaanderen.cli.helpers import tariefjaar_uit_manifest
+
+    raw_dir = paths.raw / version_id
+    manifest_pad = raw_dir / "manifest.json"
+    if not manifest_pad.is_file():
+        LOG.warning(
+            "Geen raw-manifest voor %s; de controle tegen het bronwerkboek "
+            "wordt overgeslagen.", version_id,
+        )
+        return {}
+    try:
+        manifest = json.loads(manifest_pad.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        LOG.warning("Raw-manifest onleesbaar (%s); controle overgeslagen.", exc)
+        return {}
+
+    werkboeken: dict = {}
+    for sleutel in ("vtest", "electricity_tariffs", "gas_tariffs"):
+        artefact = (manifest.get("artifacts") or {}).get(sleutel)
+        if not artefact:
+            continue
+        pad = raw_dir / artefact.get("stored_filename", "")
+        if not pad.is_file():
+            continue
+        werkboeken[sleutel] = pad
+        if sleutel.endswith("_tariffs"):
+            try:
+                werkboeken[f"{sleutel}_jaar"] = tariefjaar_uit_manifest(manifest, sleutel)
+            except Exception as exc:  # noqa: BLE001 - jaar onbekend is geen fout
+                LOG.warning("Tariefjaar voor %s niet te bepalen: %s", sleutel, exc)
+    return werkboeken
+
+
 def run_publish(args: argparse.Namespace, settings: Settings) -> int:
     """Publiceer een gestagede versie: naar versions/, naar de databank, en
     activeer ze.
@@ -736,6 +779,38 @@ def run_publish(args: argparse.Namespace, settings: Settings) -> int:
         paths.validate_version_id(version_id)
     except DataPathsError as exc:
         return fail("%s", exc)
+
+    # Droogloop: importeren, alle controles draaien, en dan terugrollen. Sinds
+    # de cel-voor-cel-controle binnen de importtransactie staat, is dit de
+    # manier om te zien wát een publicatie zou opleveren zonder haar te doen.
+    # Er wordt niets naar `versions/` gekopieerd en `current.txt` blijft staan.
+    if getattr(args, "dry_run", False):
+        from energie_vlaanderen.cli.db import _Droogloop, import_version_into_db
+
+        bron = paths.version_dir(version_id)
+        if not bron.is_dir():
+            bron = paths.staging / version_id
+        if not bron.is_dir():
+            return fail(
+                "Geen data voor versie %s — niet in versions/ en niet in "
+                "staging/.", version_id,
+            )
+        try:
+            import_version_into_db(
+                settings=settings, version_id=version_id, bron_dir=bron,
+                overwrite=True,
+                golden_werkboeken=_werkboeken_voor_golden(paths, version_id),
+                droogloop=True,
+            )
+        except _Droogloop as klaar:
+            print("Droogloop geslaagd — alle controles zijn gedraaid en de "
+                  "transactie is teruggerold.")
+            for res in klaar.resultaten:
+                print(f"  {res.domain:34s} {res.rows_inserted}")
+            return 0
+        except Exception as exc:
+            return fail("Droogloop mislukt: %s", exc)
+        return 0
 
     staging_dir = paths.staging / version_id
     if not staging_dir.is_dir():
@@ -808,6 +883,7 @@ def run_publish(args: argparse.Namespace, settings: Settings) -> int:
                 version_id=version_id,
                 bron_dir=version_dir,
                 overwrite=args.db_overwrite,
+                golden_werkboeken=_werkboeken_voor_golden(paths, version_id),
             )
         except Exception as exc:
             shutil.rmtree(version_dir, ignore_errors=True)

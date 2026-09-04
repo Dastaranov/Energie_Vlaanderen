@@ -483,6 +483,17 @@ def _add_version_group(subparsers: argparse._SubParsersAction) -> None:
         help="Herlaad de versie in de databank als ze er al in zit.",
     )
     add_json_flag(publish_parser)
+    publish_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Importeer, draai alle controles, en rol daarna terug. Toont wat "
+            "een publicatie zou opleveren zonder haar te doen. Nodig sinds de "
+            "controle tegen het bronwerkboek binnen de importtransactie staat: "
+            "vóór de import is er niets om tegen te vergelijken, want de "
+            "tarieftabellen zijn cumulatief."
+        ),
+    )
     publish_parser.set_defaults(handler=ingest.run_publish)
 
 

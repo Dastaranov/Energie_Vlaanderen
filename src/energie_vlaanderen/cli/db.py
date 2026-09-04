@@ -108,6 +108,8 @@ def import_version_into_db(
     bron_dir: Path,
     overwrite: bool = False,
     gemeente: bool = True,
+    golden_werkboeken: dict | None = None,
+    droogloop: bool = False,
 ) -> list:
     """Importeer één dataversie uit `bron_dir` naar de databank.
 
@@ -280,7 +282,104 @@ def import_version_into_db(
                 "Controleer met: energievergelijker db audit"
             )
 
+        # De cel-voor-cel-controle tegen het bronwerkboek staat óók binnen deze
+        # transactie. Ze stond vroeger ervóór, als aparte stap op de gestagede
+        # CSV's — maar zonder die bestanden is er vóór de import niets om tegen
+        # te vergelijken: de tarieftabellen zijn cumulatief, dus data bestaat
+        # pas zodra ze ingevoegd is.
+        #
+        # Binnen de transactie is dat geen bezwaar maar een verbetering: de
+        # controle kan niet overgeslagen worden, en een mislukte controle laat
+        # geen spoor na. Wie wil kijken zonder te publiceren gebruikt
+        # `version publish --dry-run`.
+        if golden_werkboeken:
+            fouten = _golden_binnen_transactie(conn, golden_werkboeken)
+            if fouten:
+                raise RuntimeError(
+                    "De databank wijkt af van het bronwerkboek; de import is "
+                    "teruggerold.\n" + "\n".join(f"  {r}" for r in fouten)
+                )
+
+        if droogloop:
+            # Alles gedaan, niets bewaard. Zo is te zien wát een publicatie zou
+            # opleveren zonder haar te doen — nodig sinds de controles binnen
+            # de transactie staan en er vóór de import niets te toetsen valt.
+            raise _Droogloop(results)
+
     return results
+
+
+class _Droogloop(Exception):
+    """Rolt de transactie terug nadat alle controles gedraaid hebben."""
+
+    def __init__(self, resultaten: list) -> None:
+        super().__init__("droogloop")
+        self.resultaten = resultaten
+
+
+def _golden_binnen_transactie(conn, werkboeken: dict) -> list[str]:
+    """Leg de zojuist geïmporteerde data naast de bronwerkboeken.
+
+    Geeft een lijst met leesbare bevindingen terug; leeg betekent geslaagd.
+    """
+    from energie_vlaanderen.audit.databank import (
+        nettarieven_als_frame,
+        vtest_tegen_werkboek,
+    )
+    from energie_vlaanderen.audit.golden import TariffGoldenAuditor
+
+    bevindingen: list[str] = []
+
+    vtest_xlsx = werkboeken.get("vtest")
+    if vtest_xlsx is not None and Path(vtest_xlsx).is_file():
+        resultaat = vtest_tegen_werkboek(conn, Path(vtest_xlsx))
+        if not resultaat.passed:
+            bevindingen.append(
+                f"vtest: {len(resultaat.mismatches)} afwijking(en) op "
+                f"{resultaat.verified_rows} vergelijkingen; eerste: "
+                + "; ".join(
+                    f"{m.row_key} {m.field} werkboek {m.xlsx_value} "
+                    f"vs databank {m.csv_value}"
+                    for m in resultaat.mismatches[:3]
+                )
+            )
+        elif resultaat.verified_rows == 0:
+            bevindingen.append("vtest: nul vergelijkingen — er is niets getoetst.")
+
+    auditor = TariffGoldenAuditor()
+    for energie, sleutel in (("electricity", "electricity_tariffs"),
+                             ("gas", "gas_tariffs")):
+        xlsx = werkboeken.get(sleutel)
+        if xlsx is None or not Path(xlsx).is_file():
+            continue
+        jaar = werkboeken.get(f"{sleutel}_jaar")
+        if jaar is None:
+            continue
+        richtingen = ("afname", "injectie")
+        if energie == "electricity":
+            richtingen = ("afname", "injectie", "hoogspanning")
+        for richting in richtingen:
+            frame = nettarieven_als_frame(
+                conn,
+                energie_type=("elektriciteit" if energie == "electricity" else "gas"),
+                richting=richting,
+                tariefjaar=int(jaar),
+            )
+            resultaat = auditor.audit(
+                staged_csv=Path("/dev/null"), source_xlsx=Path(xlsx),
+                energy_type=energie, direction=richting, version_id="",
+                staged_frame=frame,
+            )
+            if not resultaat.passed:
+                eerste = "; ".join(
+                    f"{m.field} {m.csv_value} vs {m.xlsx_value}"
+                    for m in resultaat.mismatches[:3]
+                )
+                bevindingen.append(
+                    f"{energie}_{richting}: {len(resultaat.mismatches)} "
+                    f"afwijking(en); eerste: {eerste}"
+                )
+    return bevindingen
 
 
 def mark_version_active_in_db(settings: Settings, version_id: str) -> None:
