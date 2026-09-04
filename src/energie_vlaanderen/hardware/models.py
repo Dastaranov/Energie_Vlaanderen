@@ -62,7 +62,7 @@ class BatterijSpec:
 class OmvormerSpec:
     """Nameplate-specificatie van één omvormermodel.
 
-    Bewust minimaal: enkel wat `calculation.omvormer.Omvormer` in de eerste
+    Bewust minimaal: enkel wat `calculation.omvormerSpec.Omvormer` in de eerste
     iteratie gebruikt (nameplate-identiteit + één vast Europees rendement,
     geen belastingscurve). Zie `docs/research/technische_data_batterijen_en_omvormers.md`
     voor het bredere veldenoverzicht dat hier bewust niet is overgenomen.

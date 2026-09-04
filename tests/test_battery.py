@@ -1,4 +1,4 @@
-"""Tests voor calculation/battery.py — bestond nog niet, ondanks dat de
+"""Tests voor calculation/batterySpec.py — bestond nog niet, ondanks dat de
 klasse al maanden in gebruik was via het demo-script.
 
 De cijfers die hier vastgelegd worden, zijn geen externe feiten maar
@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from energie_vlaanderen.calculation.battery import Battery
+from energie_vlaanderen.calculation.batterySpec import Battery
 from energie_vlaanderen.hardware.models import BatterijSpec
+
+
+pytestmark = pytest.mark.rekenen
 
 
 def _kale_batterij(**overrides) -> Battery:
@@ -244,3 +247,25 @@ class TestFromMasterdata:
         aangepast = Battery.from_masterdata(spec, state_of_charge=40.0, state_of_health=90.0)
         assert aangepast.state_of_charge == 40.0
         assert aangepast.state_of_health == 90.0
+
+
+class TestNulCycli:
+    """`max_cycle` staat in de noemer van het cyclusverlies.
+
+    Het verlies per cyclus is het bereik tot de EOL-drempel gedeeld door het
+    aantal cycli; bij nul brak dat af met een `ZeroDivisionError`. Dezelfde
+    fout als in `omvormerSpec`, en om dezelfde reden bij de bron geweigerd:
+    een batterij die nul cycli meegaat is geen batterij, en een
+    ZeroDivisionError verbergt dat het om een invoerprobleem gaat.
+    """
+
+    def test_nul_cycli_wordt_geweigerd_met_een_leesbare_melding(self):
+        with pytest.raises(ValueError, match="groter dan nul"):
+            _kale_batterij(max_cycle=0)
+
+    def test_negatieve_cycli_worden_ook_geweigerd(self):
+        with pytest.raises(ValueError, match="groter dan nul"):
+            _kale_batterij(max_cycle=-1)
+
+    def test_een_normale_batterij_blijft_werken(self):
+        assert _kale_batterij().max_cycle == 1000

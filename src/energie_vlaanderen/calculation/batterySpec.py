@@ -78,6 +78,12 @@ class Battery:
     # Vaste nameplate-specificaties: een ongeldige waarde hier is een fout in
     # de configuratie, geen simulatie-overshoot, en wordt geweigerd.
     _VASTE_VELDEN_ONDERGRENS_NUL = {"max_capacity", "max_charge_w", "max_discharge_w", "standby_power_w"}
+    # `max_cycle` staat in de noemer van het cyclusverlies: het verlies per
+    # cyclus is het bereik tot de EOL-drempel gedeeld door het aantal cycli.
+    # Bij nul brak dat af met een ZeroDivisionError — dezelfde fout als in
+    # `omvormerSpec`, en om dezelfde reden hier bij de bron geweigerd: een
+    # batterij die nul cycli meegaat, is geen batterij.
+    _VASTE_VELDEN_STRIKT_POSITIEF = {"max_cycle"}
     _VASTE_VELDEN_PERCENTAGE = {"minimum_capacity", "max_depth_of_discharge"}
 
     def __post_init__(self) -> None:
@@ -149,6 +155,11 @@ class Battery:
             geklemde_waarde = min(100.0, max(ondergrens, waarde))
             geclipt = geklemde_waarde != waarde
             waarde = geklemde_waarde
+        elif naam in self._VASTE_VELDEN_STRIKT_POSITIEF and float(waarde) <= 0:
+            raise ValueError(
+                f"{naam} moet groter dan nul zijn, kreeg {waarde}. Het "
+                "cyclusverlies wordt door dit getal gedeeld."
+            )
         elif naam in self._VASTE_VELDEN_ONDERGRENS_NUL and waarde < 0:
             raise ValueError(f"{naam} is een nameplate-specificatie en kan niet negatief zijn, kreeg {waarde}.")
         elif naam in self._VASTE_VELDEN_PERCENTAGE and not (0.0 <= waarde <= 100.0):

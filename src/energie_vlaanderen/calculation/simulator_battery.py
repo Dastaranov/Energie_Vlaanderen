@@ -1,4 +1,4 @@
-from energie_vlaanderen.calculation.battery import Battery
+from energie_vlaanderen.calculation.batterySpec import Battery
 from energie_vlaanderen.gebruikers.models import AssetType, GebruikersError
 from energie_vlaanderen.gebruikers.toml_io import lees_dossier
 from energie_vlaanderen.hardware.repository import BatterijRepository, HardwareError

@@ -41,6 +41,15 @@ class Omvormer:
         "totaal_geleverde_dc_energie_kwh"
     }
     _VASTE_VELDEN_PERCENTAGE = {"europees_rendement_pct"}
+    # Velden waar de fysica door deelt: de belasting is een percentage van het
+    # maximum, en zonder maximum bestaat dat percentage niet. Nul werd hier
+    # aanvaard omdat het niet negatief is, waarna `dc_naar_ac` afbrak met een
+    # ZeroDivisionError — een onbegrijpelijke fout op een invoerprobleem.
+    # Weigeren bij het aanmaken is duidelijker dan bij elke deling opnieuw
+    # bewaken: een omvormer van nul watt bestaat niet.
+    _VASTE_VELDEN_STRIKT_POSITIEF = {
+        "nominaal_ac_vermogen_w", "max_ac_vermogen_w", "max_dc_vermogen_w",
+    }
 
     def __post_init__(self) -> None:
         """Legt de nieuwstaat vast als eerste regel van de geschiedenis."""
@@ -71,6 +80,12 @@ class Omvormer:
             geklemde_waarde = min(100.0, max(ondergrens, float(waarde)))
             geclipt = geklemde_waarde != waarde
             waarde = geklemde_waarde
+        elif naam in self._VASTE_VELDEN_STRIKT_POSITIEF and float(waarde) <= 0:
+            raise ValueError(
+                f"{naam} moet groter dan nul zijn, kreeg {waarde}. Een omvormer "
+                "zonder vermogen bestaat niet, en de belasting is een percentage "
+                "van dit maximum."
+            )
         elif naam in self._VASTE_VELDEN_ONDERGRENS_NUL and waarde < 0:
             raise ValueError(f"{naam} is een nameplate-specificatie en kan niet negatief zijn, kreeg {waarde}.")
         elif naam in self._VASTE_VELDEN_PERCENTAGE and not (0.0 <= waarde <= 100.0):
