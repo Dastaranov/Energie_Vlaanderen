@@ -14,7 +14,6 @@ bedrag laten doorgaan.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
 
 from energie_vlaanderen.gebruikers.models import (
     AssetType,

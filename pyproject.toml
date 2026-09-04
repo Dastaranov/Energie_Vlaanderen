@@ -19,7 +19,10 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
-    "pytest>=8"
+    "pytest>=8",
+    # Zelfde versie lokaal als in CI, zodat de lintstap niet iets meldt wat
+    # hier niet te reproduceren is.
+    "ruff>=0.6",
 ]
 
 scrape = [
@@ -67,3 +70,34 @@ markers = [
     "cli: de commandoschil",
     "suite: controles op de organisatie van het pakket en de testsuite zelf",
 ]
+
+[tool.ruff]
+# Smal en gericht op defecten, niet op stijl. De brede regelsets van ruff
+# melden 778 dingen in dit repo; daar een poort van maken zou betekenen dat de
+# poort maanden rood staat en dus genegeerd wordt.
+#
+# Wat hier wél in staat, vond bij het aanzetten meteen drie echte dingen:
+# een test die twee keer gedefinieerd was (de eerste draaide nooit), een
+# `groupby` in de vtest-validator waarvan het resultaat nergens heen ging, en
+# `from unittest import result`, twee keer, per ongeluk.
+#
+# Stijlregels mogen er later bij, per set en met een opruiming ervoor.
+target-version = "py311"
+line-length = 100
+
+# `experiments/` is archief: code die uit src/ gehaald is en bewaard blijft,
+# niet onderhouden wordt en soms bewust stuk is. Linten wat je niet onderhoudt
+# levert alleen ruis op. Dat de bestanden die tests er nog uit importeren
+# blijven werken, bewaakt de testsuite zelf.
+exclude = ["experiments", "entso-e"]
+
+[tool.ruff.lint]
+select = [
+    "E9",   # syntaxfouten en onparseerbare bestanden
+    "F",    # pyflakes: onbekende namen, ongebruikte imports en variabelen,
+            # dubbele definities, kapotte f-strings
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Deze modules bestaan om herbruikbare namen door te geven.
+"src/energie_vlaanderen/cli/__init__.py" = ["F401"]

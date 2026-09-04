@@ -1370,6 +1370,15 @@ en toch stil minder. `--strict-markers` staat aan. `integration` staat daarnaast
 en niet in de plaats ervan: die tests hebben PostgreSQL of een volledige lokale
 dataset nodig.
 
+**Er staat ook een linter voor de tests in CI**, bewust smal: `E9` en `F`, dus
+syntaxfouten en pyflakes, geen stijl. De brede regelsets van ruff melden 778
+dingen in dit repo; daar een poort van maken betekent dat de poort maanden rood
+staat en dus genegeerd wordt. Wat er wél in zit, vond bij het aanzetten meteen
+drie echte dingen: een test die twee keer gedefinieerd was (de eerste draaide
+nooit), een `groupby` in de vtest-validator waarvan het resultaat nergens heen
+ging, en `from unittest import result` — twee keer, per ongeluk. `experiments/`
+valt erbuiten: dat is archief en soms bewust stuk.
+
 **De regel die hier wél telt: een test die een getal vastlegt, moet in het
 bestand zelf zeggen waar dat getal vandaan komt.**
 

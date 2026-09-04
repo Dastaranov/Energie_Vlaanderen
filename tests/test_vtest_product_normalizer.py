@@ -12,7 +12,6 @@ from decimal import Decimal
 import pytest
 
 from energie_vlaanderen.ingest.vtest.product_normalizer import (
-    NormalizedVTestProduct,
     VTestProductNormalizer,
     parse_comma_price,
     parse_date_range,

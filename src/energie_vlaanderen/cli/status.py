@@ -30,7 +30,7 @@ def vandaag() -> str:
 
 def project_versie() -> str:
     try:
-        from importlib.metadata import PackageNotFoundError, version
+        from importlib.metadata import version
 
         return version("energievergelijker-v3")
     except Exception:

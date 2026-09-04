@@ -6,7 +6,7 @@ import os
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, time as dt_time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 import pandas as pd

@@ -25,7 +25,7 @@ periode die op 01/08 begint, nooit bij allebei.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Iterable, Optional, Sequence

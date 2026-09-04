@@ -15,7 +15,6 @@ Tailscale-toegang is — consistent met `pytest -m "not integration"`.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import pytest
 
@@ -307,7 +306,7 @@ class TestImportNetbeheerderTarieven:
         """De einddatum van het ene jaar sluit aan op de begindatum van het
         volgende: 31/12 gevolgd door 01/01, geen dag ertussen en geen dag dubbel."""
         import sqlalchemy as sa
-        from datetime import date, timedelta
+        from datetime import timedelta
 
         from energie_vlaanderen.infrastructure.db.schema import netbeheerder_tarief
 
@@ -405,6 +404,15 @@ class TestImportVtestPostcodePrijs:
             .order_by(vtest_postcode_prijs.c.postcode)
         ).scalars().all()
         assert postcodes == ["9000", "9001", "9002", "9003", "9004", "9005", "9006", "9007"]
+
+        # Wat de importer zelf rapporteert moet met de databank overeenkomen:
+        # 1 contract + 8 postcodeprijzen. Deze assertie ontbrak -- `result`
+        # werd toegekend en nooit gebruikt, waardoor een importer die het
+        # verkeerde aantal meldt hier ongemerkt door zou komen.
+        assert result.rows_inserted == 9, (
+            f"importer meldt {result.rows_inserted} rijen, databank heeft "
+            f"{contracts} contract + {prijzen} prijsrijen"
+        )
 
     # -- contractmetadata ---------------------------------------------------
     #

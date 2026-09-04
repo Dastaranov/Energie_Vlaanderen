@@ -40,11 +40,9 @@ from energie_vlaanderen.gebruikers.models import (
     Meter,
     Meterregime,
     OpgaveBron,
-    Segment,
     Verbruiksopgave,
 )
 from energie_vlaanderen.gebruikers.periodes import Deelperiode
-from energie_vlaanderen.domain.models import Cost
 from energie_vlaanderen.heffingen.repository import HeffingenRepository
 from energie_vlaanderen.utility.normalizer import money
 

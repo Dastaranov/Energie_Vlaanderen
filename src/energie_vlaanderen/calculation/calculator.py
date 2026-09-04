@@ -7,7 +7,7 @@ from energie_vlaanderen.utility.constants import D
 from energie_vlaanderen.domain.models import Cost, Product, Profile
 from energie_vlaanderen.data.bron import TariefBron
 from energie_vlaanderen.heffingen.repository import HeffingenRepository
-from typing import Any, Literal
+from typing import Any
 
 class Calculator:
     def __init__(self, repo: TariefBron, vat=D("0.06"), heffingen: Optional[HeffingenRepository] = None):

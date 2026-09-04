@@ -108,15 +108,19 @@ class VTestHtmlDownloader:
         verbruiken op te vragen. Bij normale refine-runs blijft dit False,
         zodat vtest.be zijn eigen schattingsprofiel gebruikt.
         """
+        # Dit blok importeert om te *controleren* dat selenium er is, niet om
+        # te gebruiken -- vandaar de noqa's. Zonder deze controle komt het
+        # ontbreken van de scrape-extra pas veel later naar buiten, midden in
+        # een run, als een ImportError op een willekeurige plek.
         try:
-            from selenium import webdriver
-            from selenium.common.exceptions import NoSuchElementException
-            from selenium.webdriver.chrome.options import Options as ChromeOptions
-            from selenium.webdriver.firefox.options import Options as FirefoxOptions
-            from selenium.webdriver.common.by import By
-            from selenium.webdriver.common.keys import Keys
-            from selenium.webdriver.support import expected_conditions as EC
-            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium import webdriver  # noqa: F401
+            from selenium.common.exceptions import NoSuchElementException  # noqa: F401
+            from selenium.webdriver.chrome.options import Options as ChromeOptions  # noqa: F401
+            from selenium.webdriver.firefox.options import Options as FirefoxOptions  # noqa: F401
+            from selenium.webdriver.common.by import By  # noqa: F401
+            from selenium.webdriver.common.keys import Keys  # noqa: F401
+            from selenium.webdriver.support import expected_conditions as EC  # noqa: F401
+            from selenium.webdriver.support.ui import WebDriverWait  # noqa: F401
         except ImportError as exc:
             raise VTestDownloadError(
                 "selenium is niet geïnstalleerd. Voer 'pip install -e \".[scrape]\"' uit."
@@ -125,8 +129,6 @@ class VTestHtmlDownloader:
         driver = self._setup_driver(browser, headless)
         try:
             from selenium.webdriver.common.by import By
-            from selenium.webdriver.common.keys import Keys
-            from selenium.webdriver.support import expected_conditions as EC
             from selenium.webdriver.support.ui import WebDriverWait
 
             LOG.info("Navigeren naar %s ...", VTEST_URL)

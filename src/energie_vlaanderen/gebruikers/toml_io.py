@@ -41,7 +41,6 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Optional
-from uuid import uuid4
 
 from energie_vlaanderen.gebruikers.models import (
     Aanname,

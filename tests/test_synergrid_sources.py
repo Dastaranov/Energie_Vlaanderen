@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import pytest
 
-from energie_vlaanderen.ingest.sources import SourceDiscoveryError
 from energie_vlaanderen.ingest.synergrid_sources import SynergridSourceScraper
 from energie_vlaanderen.settings import Settings
 

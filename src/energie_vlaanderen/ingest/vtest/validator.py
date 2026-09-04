@@ -252,13 +252,6 @@ class VTestDataValidator:
                 )
             )
 
-        output_counts = (
-            source_keys
-            .groupby("source_sheet")
-            .size()
-            .to_dict()
-        )
-
         for sheet in parsed.sheets:
             expected = set(sheet.source_rows)
 

@@ -7,7 +7,6 @@ from pathlib import PurePosixPath
 from typing import Iterable
 from urllib.parse import unquote, urljoin, urlparse
 
-from typing import Protocol
 import requests
 from bs4 import BeautifulSoup
 

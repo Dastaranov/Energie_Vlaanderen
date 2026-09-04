@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from energie_vlaanderen.hardware.models import BatterijSpec
 from energie_vlaanderen.hardware.repository import (
     BatterijRepository,
     HardwareError,

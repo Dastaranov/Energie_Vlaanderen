@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
 
 from energie_vlaanderen.utility.constants import D
 

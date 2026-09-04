@@ -15,9 +15,9 @@ jobs:
         python-version: ["3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -28,6 +28,17 @@ jobs:
       # weggegooide prijsrijen en de SCD2-sleutel bewaken.
       - name: Installeer package
         run: pip install -e ".[test,db]"
+
+      # Smal en gericht op defecten: syntaxfouten en pyflakes, geen stijl. De
+      # selectie staat in pyproject.toml met de verantwoording erbij. Bij het
+      # aanzetten vond ze meteen een test die twee keer gedefinieerd was (de
+      # eerste draaide nooit), een `groupby` waarvan het resultaat nergens
+      # heen ging, en een per ongeluk geïmporteerde `unittest.result`.
+      #
+      # Vóór de tests, want een ongebruikte import of een dubbele definitie
+      # wijst vaak naar het soort verschuiving waar de tests daarna op vallen.
+      - name: Lint
+        run: ruff check .
 
       # De integratietests vereisen een lokale dataset onder data/, en die
       # staat niet in git. Ze worden hier dus expliciet overgeslagen in
@@ -42,9 +53,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
           cache: pip

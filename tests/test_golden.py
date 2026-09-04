@@ -8,7 +8,6 @@ weggemoffeld wordt — vandaar dat ze hier stuk voor stuk vastliggen.
 """
 from __future__ import annotations
 
-import io
 from decimal import Decimal
 from pathlib import Path
 
@@ -251,7 +250,7 @@ def test_audit_detects_price_mismatch(tmp_path: Path, monkeypatch: pytest.Monkey
     """Auditor reports a mismatch when a price differs between CSV and fresh data."""
     from energie_vlaanderen.audit.golden import VTestGoldenAuditor
     from energie_vlaanderen.ingest.vtest.normalizer import VTestDataNormalizer, NormalizedVTestData
-    from energie_vlaanderen.ingest.vtest.workbook import VTestWorkbookParser, ParsedVTestWorkbook, ParsedSheet
+    from energie_vlaanderen.ingest.vtest.workbook import VTestWorkbookParser, ParsedVTestWorkbook
 
     fresh_fixed = pd.DataFrame([{
         "year": 2026, "month": 1, "segment": "Woning", "energy": "Elektriciteit",

@@ -44,6 +44,7 @@ een tikfout in een markernaam breekt de verzameling in plaats van stil niets te
 selecteren.
 
 ```bash
+ruff check .                     # smal: E9 + F, zie pyproject.toml
 pytest -q                        # alles behalve de integratietests
 pytest -q -m rekenen             # één domein
 pytest -q -m "parsers or scrape" # de hele weg van bron naar CSV

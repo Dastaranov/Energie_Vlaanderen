@@ -262,15 +262,6 @@ def test_maps_exclusive_night_fixed_fee() -> None:
         "fixed_fee_exclusive_night"
     )
 
-def test_maps_exclusive_night_fixed_fee() -> None:
-    result = VTestDataNormalizer._component_key(
-        "Vaste vergoeding uitsluitend nachtmeter (€)"
-    )
-
-    assert result == (
-        "fixed_fee_exclusive_night"
-    )
-
 def test_maps_general_fixed_fee() -> None:
     result = VTestDataNormalizer._component_key(
         "Vaste vergoeding (€)"

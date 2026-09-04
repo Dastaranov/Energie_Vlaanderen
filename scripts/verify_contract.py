@@ -25,7 +25,6 @@ Exitcode 0 = alles OK, 1 = afwijkingen gevonden, 2 = contract niet gevonden.
 from __future__ import annotations
 
 import argparse
-import random
 import sys
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -462,7 +461,7 @@ def _druk_rapport(
             vlag_v = _OK if v.ok else _NOK
             print(f"       {vlag_v} {v.veld:<18} CSV: {v.csv_waarde:<14}  DB: {v.db_waarde:<14}", end="")
             if not v.ok:
-                print(f"  ← AFWIJKING")
+                print("  ← AFWIJKING")
             else:
                 print()
 

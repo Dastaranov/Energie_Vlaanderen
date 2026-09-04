@@ -305,7 +305,6 @@ def _nettarieven_uit_databank(conn) -> dict:
 
 def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     """Rekent het dossier door over `[--van, --tot)`, deelperiode per deelperiode."""
-    from energie_vlaanderen.data.paths import DataPaths
     from energie_vlaanderen.gebruikers.berekening import BerekeningError, Kostberekening
     from energie_vlaanderen.heffingen.repository import HeffingenRepository
 
@@ -322,7 +321,6 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
             dossier.bron,
         )
 
-    paden = DataPaths.from_settings(settings)
     versie = getattr(args, "version", None)
     # De databank is de bron. De CSV's dienen nog uitsluitend om haar te
     # vullen; alles ná de import leest de databank. Die knip staat hier hard in

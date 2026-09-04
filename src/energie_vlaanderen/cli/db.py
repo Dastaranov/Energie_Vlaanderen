@@ -704,7 +704,6 @@ def run_db_audit(args: argparse.Namespace, settings: Settings) -> int:
     bij staat, en hoort daarom in de pipeline en niet alleen in pytest — een
     integratietest die in CI overgeslagen wordt kan jarenlang niet draaien.
     """
-    import sqlalchemy as sa
 
     from energie_vlaanderen.audit.databank import DatabankAudit
     from energie_vlaanderen.infrastructure.db.connection import get_engine

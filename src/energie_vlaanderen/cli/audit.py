@@ -431,7 +431,7 @@ def run_audit_heffingen(args: argparse.Namespace, settings: Settings) -> int:
         print(f"Configmap : {config_dir}")
         print(f"Peildatum : {peildatum.isoformat()}")
         print(f"Tabellen  : {', '.join(sorted(repo.accijns_tabellen()))}")
-        print(f"Nettarieven: config/nettarieven/")
+        print("Nettarieven: config/nettarieven/")
         for bevinding in bevindingen:
             merk = {"fout": "FOUT", "waarschuwing": "LET OP", "info": "info"}[
                 bevinding.ernst

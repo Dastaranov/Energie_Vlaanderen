@@ -7,8 +7,6 @@ index lezen zou data aan de verkeerde kolom hangen zonder dat er iets faalt.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest import result
-from unittest import result
 
 import pandas as pd
 import pytest

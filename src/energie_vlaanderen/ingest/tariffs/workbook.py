@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 import pandas as pd
-from energie_vlaanderen.utility.normalizer import clean_text, nullify
+from energie_vlaanderen.utility.normalizer import clean_text
 
 LOG = logging.getLogger(__name__)
 
