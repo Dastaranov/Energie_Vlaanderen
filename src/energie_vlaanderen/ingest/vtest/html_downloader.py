@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import logging
 import time
 
@@ -40,6 +42,18 @@ class VTestHtmlDownloader:
     Port van Vl-Tarief-Sym/_archive/download_vtest_html_v2.py.
     Vereist: pip install -e ".[scrape]" (selenium>=4.0).
     """
+
+    # Hoe lang op één detailpaneel gewacht wordt. Ruim, want vtest.be haalt het
+    # per contract op met een POST; te krap zetten kost panelen op een trage dag.
+    DETAIL_TIMEOUT_SECONDEN = int(
+        os.environ.get("ENERGIEVERGELIJKER_VTEST_DETAIL_TIMEOUT", "30")
+    )
+    # Na zoveel mislukkingen op rij wordt het ophalen gestaakt. Losse missers
+    # komen voor; vijf achter elkaar is een storing, en dan is doorgaan alleen
+    # nog wachten -- op 350 contracten bijna drie uur.
+    DETAIL_MAX_OPEENVOLGENDE_FOUTEN = int(
+        os.environ.get("ENERGIEVERGELIJKER_VTEST_DETAIL_MAX_FOUTEN", "5")
+    )
 
     def download(
         self,
@@ -543,6 +557,15 @@ class VTestHtmlDownloader:
 
         Contracten die al verzameld zijn worden overgeslagen: de details zijn
         producteigenschappen en verschillen niet per postcode.
+
+        **Er zit een stroomonderbreker op.** Het ophalen is noodgedwongen
+        serieel en wacht per contract tot `DETAIL_TIMEOUT_SECONDEN`. Valt het
+        endpoint of de knop structureel uit, dan wordt dat volle budget voor
+        élk contract opgesoupeerd: op 350 contracten is dat bijna drie uur
+        wachten om vervolgens niets te hebben. Na
+        `DETAIL_MAX_OPEENVOLGENDE_FOUTEN` mislukkingen op rij wordt gestopt en
+        gemeld hoeveel panelen er ontbreken; één enkele mislukking blijft, zoals
+        eerder, gewoon een waarschuwing.
         """
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
@@ -559,6 +582,9 @@ class VTestHtmlDownloader:
             len(te_doen), len(knoppen),
         )
 
+        opeenvolgende_fouten = 0
+        mislukt: list[str] = []
+
         for index, knop in enumerate(te_doen, start=1):
             contract_id = knop.get_attribute("data-contractid")
             try:
@@ -571,23 +597,47 @@ class VTestHtmlDownloader:
                 # staan, en dan zouden de details van het vorige contract stil
                 # aan dit contract gehangen worden.
                 doel = f"#contractDetailsModal #contractdetail-{contract_id}"
-                WebDriverWait(driver, 30).until(
+                WebDriverWait(driver, VTestHtmlDownloader.DETAIL_TIMEOUT_SECONDEN).until(
                     lambda d, sel=doel: d.find_elements(By.CSS_SELECTOR, sel)
                 )
                 modal = driver.find_element(By.ID, "contractDetailsModal")
                 verzameling[contract_id] = modal.get_attribute("innerHTML") or ""
+                opeenvolgende_fouten = 0
             except Exception as exc:
                 # Eén onbereikbaar detailpaneel mag de hele run niet kosten;
                 # het ontbrekende contract blijft zichtbaar doordat het niet
                 # in de verzameling staat.
+                opeenvolgende_fouten += 1
+                mislukt.append(contract_id)
                 LOG.warning(
                     "Contractdetails voor %s niet opgehaald: %s", contract_id, exc
                 )
             finally:
                 VTestHtmlDownloader._sluit_modal(driver)
 
+            if opeenvolgende_fouten >= VTestHtmlDownloader.DETAIL_MAX_OPEENVOLGENDE_FOUTEN:
+                LOG.error(
+                    "Contractdetails: %d keer op rij mislukt; gestopt na %d van "
+                    "%d contracten. Dit ziet eruit als een storing bij vtest.be "
+                    "en niet als losse missers -- doorgaan zou %d x %.0fs staan "
+                    "wachten. %d paneel/panelen ontbreken.",
+                    opeenvolgende_fouten, index, len(te_doen),
+                    len(te_doen) - index, VTestHtmlDownloader.DETAIL_TIMEOUT_SECONDEN,
+                    len(mislukt),
+                )
+                break
+
             if index % 25 == 0:
                 LOG.info("Contractdetails: %d/%d ...", index, len(te_doen))
+
+        if mislukt:
+            LOG.warning(
+                "Contractdetails: %d van %d panelen niet opgehaald (%s%s). Die "
+                "contracten krijgen geen metadata; de import overschrijft "
+                "bestaande waarden niet met leegte.",
+                len(mislukt), len(te_doen),
+                ", ".join(mislukt[:5]), " ..." if len(mislukt) > 5 else "",
+            )
 
     @staticmethod
     def _sluit_modal(driver: object) -> None:

@@ -1246,6 +1246,14 @@ def import_netbeheerder_tarieven(
         # migratie 0017, een andere familie.
         geldig_tot = date(jaar, 12, 31)
 
+        # Eén opzoeking vooraf in plaats van één per rij (zie
+        # `_laad_netbeheerder_index`). Binnen één CSV komt een sleutel niet
+        # twee keer voor -- nagegaan op alle vijf de bestanden -- maar mocht
+        # dat ooit veranderen, dan valt die rij terug op een verse select in
+        # plaats van stil op een verouderde index.
+        index = _laad_netbeheerder_index(conn, energie_type, richting)
+        gezien: set[tuple] = set()
+
         for _, r in df.iterrows():
             prijs = _dec(r.get("Prijs_num"))
             if prijs is None:
@@ -1273,14 +1281,69 @@ def import_netbeheerder_tarieven(
                 "source_row": _int(r.get("source_row")),
                 "bron_versie": version_id,
             }
-            _scd2_upsert_netbeheerder(conn, row_data)
+            sleutel_van_rij = _nb_sleutel(row_data)
+            if sleutel_van_rij in gezien:
+                _scd2_upsert_netbeheerder(conn, row_data)      # verse select
+            else:
+                gezien.add(sleutel_van_rij)
+                _scd2_upsert_netbeheerder(conn, row_data, index)
             total += 1
 
     LOG.info("netbeheerder_tarief: %d rijen", total)
     return ImportResult(domain="netbeheerder_tarief", rows_inserted=total)
 
 
-def _scd2_upsert_netbeheerder(conn: sa.Connection, row_data: dict[str, Any]) -> None:
+_NB_SLEUTELKOLOMMEN = (
+    "netbeheerder_code", "energie_type", "contract_richting",
+    "klanttype", "tarieftype", "tariefdetail", "tariefnotering",
+)
+
+
+def _nb_sleutel(row_data: dict[str, Any]) -> tuple:
+    return tuple(
+        (row_data.get(k) or "") if k == "tariefnotering" else row_data.get(k)
+        for k in _NB_SLEUTELKOLOMMEN
+    )
+
+
+def _laad_netbeheerder_index(
+    conn: sa.Connection, energie_type: str, contract_richting: str | None
+) -> dict[tuple, list[tuple]]:
+    """Alle bestaande rijen voor deze energievorm en richting, in één query.
+
+    `_scd2_upsert_netbeheerder` deed per CSV-rij eerst een select en dan pas
+    een update of insert. Op 1.048 rijen zijn dat ruim tweeduizend rondritten
+    naar een databank aan de andere kant van een VPN: gemeten 6,9 s, oftewel
+    6,6 ms per rij, en dat loopt lineair op met elke extra jaargang.
+
+    De beslislogica blijft ongemoeid -- ze staat in twee eerdere fouten
+    beschreven en is te subtiel om terloops te herschrijven. Alleen de
+    opzoeking verhuist naar voren.
+    """
+    index: dict[tuple, list[tuple]] = {}
+    voorwaarde = netbeheerder_tarief.c.energie_type == energie_type
+    if contract_richting is not None:
+        voorwaarde = voorwaarde & (
+            netbeheerder_tarief.c.contract_richting == contract_richting
+        )
+    kolommen = [netbeheerder_tarief.c[k] for k in _NB_SLEUTELKOLOMMEN]
+    for rij in conn.execute(
+        sa.select(
+            netbeheerder_tarief.c.id,
+            netbeheerder_tarief.c.geldig_van,
+            netbeheerder_tarief.c.geldig_tot,
+            *kolommen,
+        ).where(voorwaarde).order_by(netbeheerder_tarief.c.geldig_van)
+    ):
+        index.setdefault(tuple(rij[3:]), []).append((rij[0], rij[1], rij[2]))
+    return index
+
+
+def _scd2_upsert_netbeheerder(
+    conn: sa.Connection,
+    row_data: dict[str, Any],
+    index: dict[tuple, list[tuple]] | None = None,
+) -> None:
     """SCD2-upsert voor netbeheerder_tarief.
 
     De "huidige" rij wordt gezocht op de hoogste `geldig_van` voor de sleutel,
@@ -1321,13 +1384,16 @@ def _scd2_upsert_netbeheerder(conn: sa.Connection, row_data: dict[str, Any]) -> 
         & (netbeheerder_tarief.c.tariefdetail == tariefdetail)
         & (netbeheerder_tarief.c.tariefnotering == tariefnotering)
     )
-    bestaand = conn.execute(
-        sa.select(
-            netbeheerder_tarief.c.id,
-            netbeheerder_tarief.c.geldig_van,
-            netbeheerder_tarief.c.geldig_tot,
-        ).where(sleutel).order_by(netbeheerder_tarief.c.geldig_van)
-    ).all()
+    if index is None:
+        bestaand = conn.execute(
+            sa.select(
+                netbeheerder_tarief.c.id,
+                netbeheerder_tarief.c.geldig_van,
+                netbeheerder_tarief.c.geldig_tot,
+            ).where(sleutel).order_by(netbeheerder_tarief.c.geldig_van)
+        ).all()
+    else:
+        bestaand = index.get(_nb_sleutel(row_data), [])
 
     # Zelfde periode: bijwerken in plaats van een nieuwe historiekrij. Blind
     # afsluiten en invoegen liet een herimport van dezelfde versie stuklopen op
@@ -1768,74 +1834,100 @@ def import_verbruiksprofielen(conn: sa.Connection, bron_dir: Path, version_id: s
 
 
 def _import_een_profielenbestand(conn: sa.Connection, csv_path: Path, version_id: str) -> int:
+    """Lees één profielen-CSV in, in blokken.
+
+    Hier stond `pd.read_csv(...).fillna("")` over het hele bestand.
+    RLP0N-elektriciteit is 58 MB en 770.880 rijen; gemeten piekte dat op 43 MB
+    aan Python-objecten, waar blokgewijs lezen op 6 MB blijft. De write was al
+    gechunkt -- alleen het lezen niet, en dat maakte die chunking grotendeels
+    zinloos.
+
+    In één doorloop, niet twee. De netbeheerders moeten gezaaid zijn vóór hun
+    waarden ingevoegd worden (foreign key), maar een nieuwe GLN kan in elk blok
+    opduiken; daarom wordt per blok gezaaid wat er nog niet is. Na het eerste
+    blok is dat vrijwel altijd niets -- er zijn 22 unieke netbeheerders op
+    770.880 rijen.
+    """
     profiel_type, energie_type, jaar = _profiel_meta_uit_bestandsnaam(csv_path.name)
-    df = pd.read_csv(csv_path, sep=_SEP, dtype=str, encoding=_ENC).fillna("")
-    if df.empty:
-        return 0
 
-    # Netbeheerders die deze CSV meebrengt en nog geen rij hebben, eerst
-    # zaaien/aanvullen met hun GLN — anders faalt de FK op
-    # verbruiksprofiel_waarde. _dnb_code() hergebruikt de bestaande
-    # Vlaamse code (bv. "Fluvius Antwerpen" -> "FA") wanneer die naam al in
-    # DNB_CODES voorkomt, en valt anders terug op de volledige naam als
-    # code — precies wat import_gemeente ook al doet.
-    unieke_nb = (
-        df[df["netbeheerder_gln"] != ""][["netbeheerder_gln", "netbeheerder_naam"]]
-        .drop_duplicates()
-    )
-    code_by_gln: dict[str, str] = {}
-    if not unieke_nb.empty:
-        nb_rows = []
-        for _, r in unieke_nb.iterrows():
-            gln = r["netbeheerder_gln"]
-            naam = r["netbeheerder_naam"] or gln
-            code = _dnb_code(naam)
-            code_by_gln[gln] = code
-            nb_rows.append({"code": code, "naam": naam, "gln": gln})
-
-        # `gln` draagt een UNIQUE-constraint (migratie 0016). Zou Synergrid
-        # ooit een netbeheerder een nieuwe GLN geven onder dezelfde naam
-        # (dus dezelfde afgeleide `code`), dan botst deze upsert met de rij
-        # die de oude GLN nog draagt — een IntegrityError die de hele import
-        # terugdraait. Dat is met opzet geen stille aanname: de code kent
-        # geen "welke GLN is de juiste" en hoort dat ook niet te gokken.
-        stmt = sa.dialects.postgresql.insert(netbeheerder).values(nb_rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["code"],
-            set_={"gln": stmt.excluded.gln, "bijgewerkt_op": sa.func.now()},
-        )
-        conn.execute(stmt)
-
-    # itertuples i.p.v. iterrows, en de batch in stukken van
-    # _PROFIELEN_CHUNK_SIZE meteen wegschrijven i.p.v. eerst alle ~770.000
-    # rijen (RLP0N-elektriciteit) als dict op te bouwen: dat laatste piekte
-    # op 1-2 GB voor niets, terwijl enkel de write al gechunkt was.
     totaal = 0
     batch: list[dict] = []
-    for r in df.itertuples(index=False):
-        gln = r.netbeheerder_gln or None
-        batch.append(
-            {
-                "version_id": version_id,
-                "profiel_type": profiel_type,
-                "energie_type": energie_type,
-                "jaar": jaar,
-                "netbeheerder_code": code_by_gln.get(gln, _GEEN_NETBEHEERDER_CODE),
-                "tijdstip": _ts(r.tijdstip),
-                "waarde": float(r.waarde) if r.waarde not in ("", "nan") else None,
-                "bron_bestand": csv_path.name,
-            }
-        )
-        if len(batch) >= _PROFIELEN_CHUNK_SIZE:
-            _upsert_verbruiksprofiel_batch(conn, batch)
-            totaal += len(batch)
-            batch = []
+    code_by_gln: dict[str, str] = {}
+
+    for blok in pd.read_csv(
+        csv_path, sep=_SEP, dtype=str, encoding=_ENC, chunksize=_PROFIELEN_CHUNK_SIZE
+    ):
+        blok = blok.fillna("")
+        _zaai_netbeheerders_uit_blok(conn, blok, code_by_gln)
+
+        # itertuples i.p.v. iterrows: dat laatste bouwt per rij een Series.
+        for r in blok.itertuples(index=False):
+            gln = r.netbeheerder_gln or None
+            batch.append(
+                {
+                    "version_id": version_id,
+                    "profiel_type": profiel_type,
+                    "energie_type": energie_type,
+                    "jaar": jaar,
+                    "netbeheerder_code": code_by_gln.get(gln, _GEEN_NETBEHEERDER_CODE),
+                    "tijdstip": _ts(r.tijdstip),
+                    "waarde": float(r.waarde) if r.waarde not in ("", "nan") else None,
+                    "bron_bestand": csv_path.name,
+                }
+            )
+            if len(batch) >= _PROFIELEN_CHUNK_SIZE:
+                _upsert_verbruiksprofiel_batch(conn, batch)
+                totaal += len(batch)
+                batch = []
 
     if batch:
         _upsert_verbruiksprofiel_batch(conn, batch)
         totaal += len(batch)
 
     return totaal
+
+
+def _zaai_netbeheerders_uit_blok(
+    conn: sa.Connection, blok: pd.DataFrame, code_by_gln: dict[str, str]
+) -> None:
+    """Zaai of vul de netbeheerders aan die in dit blok voorkomen.
+
+    `code_by_gln` groeit mee over de blokken heen; wat er al in staat, wordt
+    niet opnieuw weggeschreven.
+
+    `_dnb_code()` hergebruikt de bestaande Vlaamse code ("Fluvius Antwerpen" ->
+    "FA") wanneer die naam in DNB_CODES voorkomt, en valt anders terug op de
+    volledige naam als code -- precies wat `import_gemeente` ook doet.
+    """
+    if "netbeheerder_gln" not in blok.columns:
+        return
+    nieuw_in_blok = (
+        blok[(blok["netbeheerder_gln"] != "") & (~blok["netbeheerder_gln"].isin(code_by_gln))]
+        [["netbeheerder_gln", "netbeheerder_naam"]]
+        .drop_duplicates()
+    )
+    if nieuw_in_blok.empty:
+        return
+
+    rijen = []
+    for _, r in nieuw_in_blok.iterrows():
+        gln = r["netbeheerder_gln"]
+        naam = r["netbeheerder_naam"] or gln
+        code = _dnb_code(naam)
+        code_by_gln[gln] = code
+        rijen.append({"code": code, "naam": naam, "gln": gln})
+
+    # `gln` draagt een UNIQUE-constraint (migratie 0016). Zou Synergrid ooit een
+    # netbeheerder een nieuwe GLN geven onder dezelfde naam (dus dezelfde
+    # afgeleide `code`), dan botst deze upsert met de rij die de oude GLN draagt
+    # en draait de transactie terug. Dat is met opzet geen stille aanname: de
+    # code kent geen "welke GLN is de juiste" en hoort dat niet te gokken.
+    stmt = sa.dialects.postgresql.insert(netbeheerder).values(rijen)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["code"],
+        set_={"gln": stmt.excluded.gln, "bijgewerkt_op": sa.func.now()},
+    )
+    conn.execute(stmt)
 
 
 def _upsert_verbruiksprofiel_batch(conn: sa.Connection, batch: list[dict]) -> None:

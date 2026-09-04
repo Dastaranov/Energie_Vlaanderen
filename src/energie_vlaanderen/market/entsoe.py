@@ -43,12 +43,7 @@ class EntsoeMarketData:
         self.allow_fallback = allow_fallback
 
     def load(self, start: datetime, end: datetime, allow_api: bool = True) -> pd.DataFrame:
-        store = {}
-        if self.cache.exists():
-            try:
-                store = json.loads(self.cache.read_text(encoding="utf-8"))
-            except Exception:
-                store = {}
+        store = self._lees_cache()
 
         s_utc = self._aware(start)
         e_utc = self._aware(end)
@@ -75,10 +70,7 @@ class EntsoeMarketData:
             
             # Vraag de volledige periode in ÉÉN keer op bij de API!
             rows = self._fetch_met_terugval(s_utc, e_utc)
-            store[cache_key] = rows
-            
-            self.cache.parent.mkdir(parents=True, exist_ok=True)
-            self.cache.write_text(json.dumps(store, indent=2), encoding="utf-8")
+            self._schrijf_cache(store, rows)
 
         if not rows:
             return pd.DataFrame(columns=["timestamp", "price_eur_mwh"])
@@ -89,6 +81,70 @@ class EntsoeMarketData:
             df["price_eur_mwh"] = df["price"]
 
         return df[(df.timestamp >= s_utc) & (df.timestamp < e_utc)].sort_values("timestamp").drop_duplicates("timestamp")
+
+    # De sleutel waaronder de samengevoegde punten staan. Elke fetch voegde
+    # vroeger een eigen `period:`-sleutel toe met álle rijen van dat venster;
+    # overlappende vensters bewaarden dezelfde kwartieren dus meermaals, en de
+    # cache groeide zonder bovengrens. Er staat nu één rij per tijdstip.
+    _PUNTEN_SLEUTEL = "punten"
+
+    def _lees_cache(self) -> dict:
+        """Lees de cache, en zwijg niet over een kapot bestand.
+
+        Een brede `except` maakte hier van elke leesfout een lege cache. Gevolg:
+        onverklaarbaar extra netwerkverkeer, en corruptie die onzichtbaar bleef
+        omdat de volgende schrijfactie het bestand toch weer overschreef.
+        """
+        if not self.cache.exists():
+            return {}
+        try:
+            inhoud = json.loads(self.cache.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+            opzij = self.cache.with_suffix(self.cache.suffix + ".kapot")
+            LOG.warning(
+                "Marktprijscache %s is onleesbaar (%s). Het bestand is opzij "
+                "gezet als %s en er wordt opnieuw opgehaald.",
+                self.cache, exc, opzij.name,
+            )
+            try:
+                self.cache.replace(opzij)
+            except OSError:
+                LOG.warning("Kon %s niet hernoemen; hij wordt overschreven.", self.cache)
+            return {}
+        if not isinstance(inhoud, dict):
+            LOG.warning("Marktprijscache %s heeft een onverwachte vorm.", self.cache)
+            return {}
+        return inhoud
+
+    def _schrijf_cache(self, store: dict, nieuwe_rijen: list) -> None:
+        """Voeg de nieuwe rijen samen met wat er al is en schrijf atomair.
+
+        Atomair, omdat `write_text` op een cache van megabytes bij een
+        onderbreking een half bestand achterlaat -- precies de corruptie die
+        `_lees_cache` hierboven moet opvangen.
+        """
+        samen: dict[str, dict] = {}
+        for sleutel, rijen in store.items():
+            # `period:`-sleutels zijn de oude vorm; ze worden gelezen en daarna
+            # opgegaan in de samengevoegde lijst.
+            if sleutel != self._PUNTEN_SLEUTEL and not sleutel.startswith("period:"):
+                continue
+            if isinstance(rijen, list):
+                for rij in rijen:
+                    if rij.get("timestamp"):
+                        samen[rij["timestamp"]] = rij
+        for rij in nieuwe_rijen or ():
+            if rij.get("timestamp"):
+                samen[rij["timestamp"]] = rij
+
+        nieuw = {self._PUNTEN_SLEUTEL: [samen[t] for t in sorted(samen)]}
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        tijdelijk = self.cache.with_suffix(self.cache.suffix + ".tijdelijk")
+        try:
+            tijdelijk.write_text(json.dumps(nieuw), encoding="utf-8")
+            os.replace(tijdelijk, self.cache)
+        finally:
+            tijdelijk.unlink(missing_ok=True)
 
     @staticmethod
     def _uit_cache(store: dict, start_utc: datetime, end_utc: datetime):
@@ -107,7 +163,11 @@ class EntsoeMarketData:
         """
         samen: dict[str, dict] = {}
         for sleutel, rijen in store.items():
-            if not sleutel.startswith("period:") or not isinstance(rijen, list):
+            # "punten" is de samengevoegde vorm; "period:*" de oude, die nog in
+            # bestaande cachebestanden staat.
+            if sleutel != "punten" and not sleutel.startswith("period:"):
+                continue
+            if not isinstance(rijen, list):
                 continue
             for rij in rijen:
                 tijdstip = rij.get("timestamp")
