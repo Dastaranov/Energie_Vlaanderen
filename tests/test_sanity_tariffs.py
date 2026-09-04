@@ -13,7 +13,7 @@ import pytest
 
 from pathlib import Path
 
-from energie_vlaanderen.audit.sanity import SanityChecker
+from experiments.remove.audit_sanity import SanityChecker
 from energie_vlaanderen.data.paths import DataPaths
 from energie_vlaanderen.settings import Settings
 

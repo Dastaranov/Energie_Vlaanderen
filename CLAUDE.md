@@ -801,8 +801,10 @@ van de pagina in plaats van "controleer of vtest.be bereikbaar is".
 
 ### De golden-audit hangt aan het werkboek, niet aan het CSV
 
-`audit golden --bron databank` legt de **databank** cel voor cel naast het
-bronwerkboek. Dat was de voorwaarde om de CSV-weg te kunnen laten vallen: het
+`audit golden` legt de **databank** cel voor cel naast het bronwerkboek. Er was
+even een `--bron`-keuze; die is vervallen toen de CSV-weg wegviel, want het CSV
+vergelijken was dezelfde pipeline één stap eerder en dus geen onafhankelijke
+controle. Dat was de voorwaarde om de CSV-weg te kunnen laten vallen: het
 XLSX is de onafhankelijke bron, en welke kant ermee vergeleken wordt is een
 implementatiekeuze. Het CSV was dat nooit — het is dezelfde pipeline één stap
 eerder.

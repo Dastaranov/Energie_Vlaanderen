@@ -176,7 +176,7 @@ class TestSanityCheck:
     )
 
     def test_lege_detailkolommen_geven_een_bevinding(self, tmp_path):
-        from energie_vlaanderen.audit.sanity import SanityChecker
+        from experiments.remove.audit_sanity import SanityChecker
 
         paths, vtest = self._paths(tmp_path)
         (vtest / "vtest_products.csv").write_text(
@@ -189,7 +189,7 @@ class TestSanityCheck:
         assert not report.valid
 
     def test_gevulde_detailkolommen_geven_geen_bevinding(self, tmp_path):
-        from energie_vlaanderen.audit.sanity import SanityChecker
+        from experiments.remove.audit_sanity import SanityChecker
 
         paths, vtest = self._paths(tmp_path)
         (vtest / "vtest_products.csv").write_text(
@@ -202,7 +202,7 @@ class TestSanityCheck:
         """Het sociaal tarief verwijst naar de CREG en heeft geen tariefkaart.
         Alleen een kolom die voor élk contract leeg is, wijst op een
         ontbrekende scrape."""
-        from energie_vlaanderen.audit.sanity import SanityChecker
+        from experiments.remove.audit_sanity import SanityChecker
 
         paths, vtest = self._paths(tmp_path)
         (vtest / "vtest_products.csv").write_text(
@@ -222,7 +222,7 @@ class TestSanityCheck:
         776 gasrijen tegenover 99% op 1.709 elektriciteitsrijen. Ze meetellen
         zou een gas-only run vals laten falen.
         """
-        from energie_vlaanderen.audit.sanity import SanityChecker
+        from experiments.remove.audit_sanity import SanityChecker
 
         paths, vtest = self._paths(tmp_path)
         (vtest / "vtest_products.csv").write_text(
@@ -235,7 +235,7 @@ class TestSanityCheck:
         """Andersom moet het wél opvallen: staan er elektriciteitsrijen in en
         is de zonnepanelenvraag daar overal leeg, dan is het paneel niet
         opgehaald."""
-        from energie_vlaanderen.audit.sanity import SanityChecker
+        from experiments.remove.audit_sanity import SanityChecker
 
         paths, vtest = self._paths(tmp_path)
         zonder_doelgroep = (

@@ -9,7 +9,6 @@ import logging
 from energie_vlaanderen.audit.golden import GoldenAuditResult, TariffGoldenAuditor, VTestGoldenAuditor
 from energie_vlaanderen.audit.manager import ApprovalManager, AuditError
 from energie_vlaanderen.audit.sampler import DataSampler
-from energie_vlaanderen.audit.sanity import SanityChecker
 from energie_vlaanderen.cli.helpers import fail
 from energie_vlaanderen.cli.output import emit
 from energie_vlaanderen.data.paths import DataPaths
@@ -24,7 +23,7 @@ LOG = logging.getLogger("energievergelijker")
 # ---------------------------------------------------------
 
 def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
-    """Vergelijk gestagede CSVs cel voor cel met de bron-XLSX."""
+    """Vergelijk de databank cel voor cel met het bron-XLSX."""
     paths = DataPaths.from_settings(settings)
     store = RawStore(paths)
     version_id = args.version
@@ -57,13 +56,15 @@ def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
     vtest_dir = bron_dir / "vtest"
     tariffs_dir = bron_dir / "tariffs"
 
-    # Met --bron databank wordt de databank tegen het werkboek gelegd in plaats
-    # van het CSV. Het tariefjaar komt uit het verwerkingsrapport (dus uit de
-    # bestandsnaam van het werkboek) en niet uit het versie-id, dat het moment
-    # van downloaden draagt.
     # Altijd de databank. Het werkboek blijft de onafhankelijke bron; de CSV's
     # dienen nog uitsluitend om de databank te vullen en worden ná de import
-    # niet meer gelezen.
+    # niet meer gelezen. Er was hier ooit een `--bron`-keuze; die is met de knip
+    # vervallen, want de CSV-kant vergelijken was dezelfde pipeline één stap
+    # eerder en dus geen onafhankelijke controle.
+    #
+    # Het tariefjaar komt uit het verwerkingsrapport (dus uit de bestandsnaam
+    # van het werkboek) en niet uit het versie-id, dat het moment van
+    # downloaden draagt.
     uit_databank = True
     db_conn = None
     db_engine = None
