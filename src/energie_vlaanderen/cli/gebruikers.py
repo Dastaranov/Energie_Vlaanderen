@@ -9,16 +9,24 @@ periode). Alles wat daarbuiten valt is een bug en mag gewoon opgooien.
 from __future__ import annotations
 
 import argparse
+import logging
 from datetime import date
 from pathlib import Path
 
 from energie_vlaanderen.cli.helpers import fail
 from energie_vlaanderen.cli.output import emit, print_kv
-from energie_vlaanderen.gebruikers.models import EnergieType, GebruikersError
+from energie_vlaanderen.gebruikers.models import (
+    EnergieType,
+    Exactheidsklasse,
+    GebruikersError,
+)
 from energie_vlaanderen.gebruikers.toml_io import Dossier, lees_dossier
 from energie_vlaanderen.gebruikers.validation import controleer_dossier
 from energie_vlaanderen.settings import Settings
+from energie_vlaanderen.utility.constants import D
 from energie_vlaanderen.utility.normalizer import money
+
+LOG = logging.getLogger(__name__)
 
 
 def _pad(args: argparse.Namespace, settings: Settings) -> Path:
@@ -326,9 +334,21 @@ def _nettarieven_uit_databank(conn) -> dict:
 
 
 def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
-    """Rekent het dossier door over `[--van, --tot)`, deelperiode per deelperiode."""
+    """Rekent het dossier door over `[--van, --tot)`, aansluitingspunt per punt.
+
+    Elektriciteit en aardgas worden **apart** doorgerekend en apart getoond.
+    Het zijn twee EAN's, twee contracten en twee tariefwerelden; ze in één
+    bedrag persen laat de herkomst van elke post verdwijnen. Wie alleen gas
+    heeft, rekent alleen gas door — dat is geen uitzondering maar een gewoon
+    dossier.
+    """
     from energie_vlaanderen.gebruikers.berekening import BerekeningError, Kostberekening
+    from energie_vlaanderen.gebruikers.schatting import gasaandeel_uit_rlp0
     from energie_vlaanderen.heffingen.repository import HeffingenRepository
+    from energie_vlaanderen.nettarieven.transport import (
+        TransportTariefError,
+        TransportTariefRepository,
+    )
 
     import sqlalchemy as sa
 
@@ -338,10 +358,26 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     )
     from energie_vlaanderen.infrastructure.db.connection import get_engine
 
+    try:
+        heffingen = HeffingenRepository.load(settings.project_root / "config" / "heffingen")
+    except OSError as exc:
+        return fail("%s", exc)
+
+    # Het vervoerstarief van Fluxys staat in geen VREG-werkboek en komt uit
+    # config/nettarieven/. Zonder dat tarief weigert een gasberekening liever
+    # dan er ongeveer 25 EUR per jaar naast te zitten.
+    try:
+        transport = TransportTariefRepository.load(
+            settings.project_root / "config" / "nettarieven"
+        )
+    except (OSError, TransportTariefError) as exc:
+        transport = None
+        LOG.warning("Vervoerstarief niet geladen, gas kan niet gerekend worden: %s", exc)
+
     # De databank gaat vóór het dossier open, en niet andersom. Het dossier
-    # heeft het postcode->netbeheerderregister nodig om een aansluitingspunt
-    # aan een netbeheerder te hangen, en dat register hoort uit `gemeente` te
-    # komen -- de netbeheerder bepaalt immers welke nettarieven gelden.
+    # heeft het postcode->netbeheerderregister nodig om een aansluitingspunt aan
+    # een netbeheerder te hangen, en dat register hoort uit `gemeente` te komen
+    # — de netbeheerder bepaalt immers welke nettarieven gelden.
     db_engine = get_engine(settings.project_root)
     try:
         db_conn = db_engine.connect()
@@ -355,42 +391,25 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
         db_engine.dispose()
         return fail("%s", exc)
 
-    punt = dossier.punt(EnergieType.ELEKTRICITEIT)
-    if punt is None:
+    punten = [
+        punt for punt in dossier.aansluitingspunten
+        if punt.energie_type in (EnergieType.ELEKTRICITEIT, EnergieType.GAS)
+    ]
+    if not punten:
+        db_conn.close()
+        db_engine.dispose()
         return fail(
-            "Geen elektriciteitsaansluiting in %s; de netkost is vandaag enkel "
-            "voor elektriciteit-laagspanning uitgewerkt.",
+            "Geen elektriciteits- of aardgasaansluiting in %s. Zonder "
+            "aansluitingspunt is er geen netbeheerder en dus geen nettarief.",
             dossier.bron,
         )
 
     versie = getattr(args, "version", None)
-    # De databank is de bron. De CSV's dienen nog uitsluitend om haar te
-    # vullen; alles ná de import leest de databank. Die knip staat hier hard in
-    # plaats van als keuze: een terugvaloptie die niemand gebruikt, verrot, en
-    # een tweede weg naar hetzelfde antwoord is een tweede weg om uiteen te
-    # lopen.
-
-    try:
-        heffingen = HeffingenRepository.load(settings.project_root / "config" / "heffingen")
-    except OSError as exc:
-        return fail("%s", exc)
-
-    # De databank is de bron voor de berekening, en de enige. Ze draagt
-    # maandelijkse historiek waar een versiemap één momentopname draagt: een
-    # contract van april 2026 herberekenen kan daarom wél uit de databank en
-    # niet uit een enkele versiemap. De verbinding staat hierboven al open.
 
     # De getoonde dataversie komt uit de databank, niet van de schijf.
-    #
-    # Hier stond `paden.current_data_dir()`, en die werpt een fout zodra
-    # `data/current.txt` ontbreekt. Dat maakte een lokale dataset een
-    # voorwaarde voor een berekening die verder volledig uit de databank komt:
-    # een verse machine met een herstelde databank kon niets uitrekenen
-    # terwijl alle gegevens er waren. De waarde dient alleen om te tonen
-    # waarmee gerekend is.
-    #
-    # `current.txt` blijft de wijzer aan de bestandskant; welke versie actief
-    # is, weet de databank zelf.
+    # `current_data_dir()` stond hier en faalt zodra `data/current.txt`
+    # ontbreekt — dat maakte een lokale dataset een voorwaarde voor een
+    # berekening die verder volledig uit de databank komt.
     if versie:
         getoonde_versie = versie
     else:
@@ -398,6 +417,7 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
             "select version_id from data_version where status = 'active' "
             "order by geactiveerd_op desc nulls last limit 1"
         )).scalar()
+
     try:
         nettarieven = _nettarieven_uit_databank(db_conn)
     except DbDataRepositoryError as exc:
@@ -409,7 +429,7 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
         db_engine.dispose()
         return fail(
             "Geen nettarieven in de databank. Laad ze met "
-            "`energievergelijker db backfill --version <raw-id>`."
+            "`energievergelijker db import --version <id>`."
         )
     repo = nettarieven[max(nettarieven)]
 
@@ -423,36 +443,88 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     metingen = meetreeks.intervallen if meetreeks is not None else None
     markt = _laad_markt(settings, args.van, args.tot)
 
+    def _gasverdeler(van, tot):
+        return gasaandeel_uit_rlp0(db_conn, van, tot)
+
     rekenaar = Kostberekening(
         repo, heffingen,
         segment=str(dossier.gebruiker.segment),
         nettarieven_per_jaar=nettarieven,
+        transport=transport,
+        gasverdeler=_gasverdeler,
     )
-    try:
-        resultaat = rekenaar.bereken(
-            punt,
-            dossier.meter_van(punt),
-            dossier.contracten_van(punt),
-            dossier.opgaven_van(punt),
-            args.van,
-            args.tot,
-            omvormer_kva=omvormer_kva or 0,
-            extra_aannames=dossier.aannames,
-            markt=markt,
-            metingen=metingen,
-        )
-    except (BerekeningError, GebruikersError) as exc:
-        return fail("%s", exc)
-    finally:
-        if db_conn is not None:
-            db_conn.close()
-        if db_engine is not None:
-            db_engine.dispose()
 
-    totalen = resultaat.totalen
+    # Per aansluitingspunt één resultaat. Een fout op het ene punt laat het
+    # andere niet vervallen: wie gas én elektriciteit heeft en waarvan alleen
+    # het gascontract ontbreekt, hoort de elektriciteitskost gewoon te zien —
+    # mét de melding waarom gas ontbreekt, want dan is het totaal onvolledig.
+    resultaten: list[tuple] = []
+    mislukt: list[tuple[str, str]] = []
+    try:
+        for punt in punten:
+            try:
+                resultaten.append((punt, rekenaar.bereken(
+                    punt,
+                    dossier.meter_van(punt),
+                    dossier.contracten_van(punt),
+                    dossier.opgaven_van(punt),
+                    args.van,
+                    args.tot,
+                    omvormer_kva=omvormer_kva or 0,
+                    extra_aannames=dossier.aannames,
+                    markt=markt,
+                    # De Fluvius-export in het dossier is de elektriciteitsreeks;
+                    # ze aan een gaspunt meegeven zou elektriciteitskwartieren
+                    # als gasvolume laten doorgaan.
+                    metingen=(
+                        metingen
+                        if punt.energie_type is EnergieType.ELEKTRICITEIT
+                        else None
+                    ),
+                )))
+            except (BerekeningError, GebruikersError) as exc:
+                mislukt.append((str(punt.energie_type), str(exc)))
+    finally:
+        db_conn.close()
+        db_engine.dispose()
+
+    if not resultaten:
+        for soort, melding in mislukt:
+            LOG.error("%s: %s", soort, melding)
+        return fail("Geen enkel aansluitingspunt kon doorgerekend worden.")
+
+    totalen = {
+        sleutel: sum((r.totalen[sleutel] for _, r in resultaten), D("0"))
+        for sleutel in resultaten[0][1].totalen
+    }
+
+    def _regelblok(punt, resultaat) -> None:
+        deel = resultaat.totalen
+        print()
+        adres = f"{punt.postcode} {punt.gemeente or ''}".strip()
+        print(f"  == {str(punt.energie_type).upper()}  ({adres})")
+        for regel in resultaat.regels:
+            print(
+                f"  {regel.periode.van} .. {regel.periode.tot} "
+                f"({regel.periode.dagen:3d} d)  {regel.leverancier} — {regel.product_naam}"
+            )
+            print(
+                f"      leverancier {regel.kost.supplier:9.2f}  net {regel.kost.grid:8.2f}  "
+                f"heffingen {regel.kost.levies:8.2f}  btw {regel.kost.vat:7.2f}  "
+                f"totaal {regel.kost.total:9.2f}"
+            )
+            print(f"      geknipt door: {', '.join(regel.periode.redenen)}")
+        print(
+            f"      subtotaal {deel['totaal']:.2f} EUR   "
+            f"(leverancier {deel['supplier']:.2f} + net {deel['grid']:.2f} + "
+            f"heffingen {deel['levies']:.2f} + btw {deel['vat']:.2f}"
+            + (f" - injectie {deel['injection_credit']:.2f}" if deel["injection_credit"] else "")
+            + ")"
+        )
 
     def _text() -> None:
-        print_kv("Periode", f"{resultaat.van} .. {resultaat.tot}")
+        eerste = resultaten[0][1]
+        print_kv("Periode", f"{eerste.van} .. {eerste.tot}")
         print_kv(
             "Dataversie",
             (getoonde_versie or "(geen actieve versie)") + "  [databank]",
@@ -472,19 +544,14 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
             "Marktprijzen",
             f"{len(markt)} punten" if markt is not None else "geen (enkel voor dynamische producten nodig)",
         )
-        print_kv("Exactheid", resultaat.exactheidsklasse)
-        print()
-        for regel in resultaat.regels:
-            print(
-                f"  {regel.periode.van} .. {regel.periode.tot} "
-                f"({regel.periode.dagen:3d} d)  {regel.leverancier} — {regel.product_naam}"
-            )
-            print(
-                f"      leverancier {regel.kost.supplier:9.2f}  net {regel.kost.grid:8.2f}  "
-                f"heffingen {regel.kost.levies:8.2f}  btw {regel.kost.vat:7.2f}  "
-                f"totaal {regel.kost.total:9.2f}"
-            )
-            print(f"      geknipt door: {', '.join(regel.periode.redenen)}")
+        print_kv(
+            "Exactheid",
+            Exactheidsklasse.zwakste([r.exactheidsklasse for _, r in resultaten]),
+        )
+
+        for punt, resultaat in resultaten:
+            _regelblok(punt, resultaat)
+
         print()
         print(
             f"  TOTAAL {totalen['totaal']:.2f} EUR   "
@@ -497,60 +564,90 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
             )
             + ")"
         )
-        if resultaat.aannames:
+        if len(resultaten) > 1:
+            print(
+                "    = " + " + ".join(
+                    f"{str(punt.energie_type)} {r.totalen['totaal']:.2f}"
+                    for punt, r in resultaten
+                )
+            )
+
+        alle_aannames = [a for _, r in resultaten for a in r.aannames]
+        if alle_aannames:
             print()
             print("  Dit bedrag steunt op:")
-            for aanname in resultaat.aannames:
+            for aanname in alle_aannames:
                 merk = "geverifieerd" if aanname.geverifieerd else "NIET geverifieerd"
                 print(f"    - {aanname.veld} = {aanname.waarde}  [{merk}] {aanname.bron}")
-        for waarschuwing in tuple(meetwaarschuwingen) + resultaat.warnings:
+        alle_warnings = tuple(meetwaarschuwingen) + tuple(
+            w for _, r in resultaten for w in r.warnings
+        )
+        for waarschuwing in dict.fromkeys(alle_warnings):
             print(f"  ! {waarschuwing}")
+        # Een punt dat niet doorgerekend kon worden verdwijnt niet stil: het
+        # totaal hierboven is dan onvolledig, en dat hoort erbij te staan.
+        for soort, melding in mislukt:
+            print(f"  ! {soort} niet doorgerekend: {melding}")
 
     emit(
         args,
         text_fn=_text,
         json_obj={
-            "van": resultaat.van.isoformat(),
-            "tot": resultaat.tot.isoformat(),
+            "van": args.van.isoformat(),
+            "tot": args.tot.isoformat(),
             "dataversie": getoonde_versie,
             "meetintervallen": 0 if metingen is None else len(metingen),
             "marktpunten": 0 if markt is None else len(markt),
-            "exactheidsklasse": str(resultaat.exactheidsklasse),
+            "exactheidsklasse": str(
+                Exactheidsklasse.zwakste([r.exactheidsklasse for _, r in resultaten])
+            ),
             # Afronden gebeurt hier en niet eerder: Manifest §7 wil dat de
             # berekening met volle precisie doorrekent en pas op een duidelijk
             # bepaald facturatiemoment afrondt. Dat moment is de uitvoer.
             "totalen": {k: str(money(v)) for k, v in totalen.items()},
-            "regels": [
+            # Per energiedrager, want dat is hoe een factuur ze ook toont.
+            "per_energiedrager": [
                 {
-                    "van": r.periode.van.isoformat(),
-                    "tot": r.periode.tot.isoformat(),
-                    "dagen": r.periode.dagen,
-                    "leverancier": r.leverancier,
-                    "product": r.product_naam,
-                    "redenen": list(r.periode.redenen),
-                    "supplier_eur": str(money(r.kost.supplier)),
-                    "grid_eur": str(money(r.kost.grid)),
-                    "levies_eur": str(money(r.kost.levies)),
-                    "vat_eur": str(money(r.kost.vat)),
-                    "totaal_eur": str(money(r.kost.total)),
+                    "energie_type": str(punt.energie_type),
+                    "postcode": punt.postcode,
+                    "gemeente": punt.gemeente,
+                    "exactheidsklasse": str(resultaat.exactheidsklasse),
+                    "totalen": {k: str(money(v)) for k, v in resultaat.totalen.items()},
+                    "regels": [
+                        {
+                            "van": r.periode.van.isoformat(),
+                            "tot": r.periode.tot.isoformat(),
+                            "dagen": r.periode.dagen,
+                            "leverancier": r.leverancier,
+                            "product": r.product_naam,
+                            "redenen": list(r.periode.redenen),
+                            "supplier_eur": str(money(r.kost.supplier)),
+                            "grid_eur": str(money(r.kost.grid)),
+                            "levies_eur": str(money(r.kost.levies)),
+                            "vat_eur": str(money(r.kost.vat)),
+                            "totaal_eur": str(money(r.kost.total)),
+                        }
+                        for r in resultaat.regels
+                    ],
+                    "aannames": [
+                        {
+                            "veld": a.veld,
+                            "waarde": a.waarde,
+                            "bron": a.bron,
+                            "geverifieerd": a.geverifieerd,
+                        }
+                        for a in resultaat.aannames
+                    ],
+                    "warnings": list(resultaat.warnings),
                 }
-                for r in resultaat.regels
+                for punt, resultaat in resultaten
             ],
-            "aannames": [
-                {
-                    "veld": a.veld,
-                    "waarde": a.waarde,
-                    "bron": a.bron,
-                    "geverifieerd": a.geverifieerd,
-                }
-                for a in resultaat.aannames
+            "niet_doorgerekend": [
+                {"energie_type": soort, "reden": melding} for soort, melding in mislukt
             ],
-            "warnings": list(resultaat.warnings),
         },
     )
     return 0
-
-
 def datum(waarde: str) -> date:
     """argparse-type voor een ISO-datum, met een leesbare foutmelding."""
     try:

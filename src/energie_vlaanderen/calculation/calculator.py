@@ -336,7 +336,9 @@ class Calculator:
             return energy+fixed+extras,warnings
         raise ValueError(f"Onbekend tarieftype: {product.kind}")
 
-    def levies_gesplitst(self,p:Profile,jaar:int,maand:int)->tuple[Decimal,Decimal]:
+    def levies_gesplitst(
+        self, p: Profile, jaar: int, maand: int, energievorm: str = "elektriciteit"
+    ) -> tuple[Decimal, Decimal]:
         """Splits de heffingen in wat met het verbruik meeschaalt en wat met de tijd.
 
         De accijns en de bijdrage op de energie volgen de kWh, en hun schijven
@@ -348,6 +350,12 @@ class Calculator:
         Ze samen teruggeven zou een van beide verkeerd verdelen zodra de
         meetperiode geen volledig jaar beslaat — en dat is bij een afrekening
         eerder regel dan uitzondering.
+
+        **Het energiefonds is een elektriciteitsheffing.** Op aardgas wordt het
+        niet aangerekend; de referentiefactuur drukt onder "Toeslagen" voor gas
+        alleen de bijzondere accijns en de bijdrage op de energie af, samen
+        112,54 EUR. Het hier toch meerekenen zou een gasfactuur een post geven
+        die er niet op staat.
         """
         if self.heffingen is None:
             raise ValueError(
@@ -360,8 +368,12 @@ class Calculator:
         else:
             accijns_categorie,fonds_categorie="zakelijk_laagspanning","niet_residentieel"
         bijzondere_accijns,energiebijdrage=self.heffingen.bereken_accijns_en_energiebijdrage(
-            "elektriciteit",accijns_categorie,p.afname_kwh,date(jaar,maand,1))
-        energiefonds=self.heffingen.energiefonds_per_jaar("laag",fonds_categorie,jaar)
+            energievorm,accijns_categorie,p.afname_kwh,date(jaar,maand,1))
+        energiefonds=(
+            self.heffingen.energiefonds_per_jaar("laag",fonds_categorie,jaar)
+            if energievorm == "elektriciteit"
+            else D("0")
+        )
         return bijzondere_accijns+energiebijdrage, energiefonds
 
     def levies(self,p:Profile,jaar:int,maand:int)->Decimal:

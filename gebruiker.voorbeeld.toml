@@ -11,6 +11,10 @@ postcode = "9300"
 gemeente = "Aalst"        # nodig zodra één postcode meerdere netbeheerders kent
 segment = "Woning"        # Woning of Onderneming
 
+# Elektriciteit en gas worden apart doorgerekend en apart getoond. Zet er één
+# op `false` en er wordt alleen die andere gerekend — een dossier met alleen
+# gas is geen uitzondering. Elk actief punt heeft wel zijn eigen
+# [[verbruiksopgave]] en [[contract.<energie>]] nodig.
 [aansluiting]
 elektriciteit = true
 gas = false

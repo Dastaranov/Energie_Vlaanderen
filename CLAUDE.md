@@ -395,6 +395,51 @@ samengesteld. Wat er ná de fix nog geopend wordt: `gebruiker.toml`,
 `config/heffingen/*.toml`, de marktprijscache, `.env`, en de eigen
 Fluvius-meterexport onder `data/referentie/`.
 
+### Gas en elektriciteit worden apart doorgerekend
+
+`gebruiker bereken` weigerde een dossier zonder elektriciteitsaansluiting. Het
+rekent nu **elk aansluitingspunt apart door** en toont ze apart: twee EAN's,
+twee contracten, twee tariefwerelden. Ze in één bedrag persen zou de herkomst
+van elke post laten verdwijnen. Wie alleen gas heeft is geen uitzondering maar
+een gewoon dossier.
+
+```bash
+energievergelijker gebruiker bereken --van 2025-05-01 --tot 2026-05-01
+```
+
+Op een gasdossier van 12.181 kWh (de referentiefactuur): netkost **215,25**
+tegenover 215,24 en heffingen **112,54** tegenover 112,54 — exact. De
+leverancierskost hangt af van hoeveel tariefkaartperiodes het dossier
+declareert; met de drie van de factuur komt ze op 664,88 tegenover 662,11.
+
+**Een fout op het ene punt laat het andere niet vervallen.** Ontbreekt het
+gascontract, dan verschijnt de elektriciteitskost gewoon, met de reden waarom
+gas ontbreekt eronder — want dan is het totaal onvolledig en dat hoort erbij te
+staan.
+
+Vier dingen die daarbij vastliggen:
+
+- **`zoek_product()` kreeg de energievorm mee.** Die stond vast op
+  "Elektriciteit", en "ENGIE Easy" bestaat in beide energievormen: een
+  gascontract kreeg daardoor de elektriciteitsprijs, 0,172 in plaats van
+  0,050 EUR/kWh — drie keer te veel, zonder foutmelding.
+- **Het energiefonds is een elektriciteitsheffing** en wordt op gas niet
+  aangerekend. `levies_gesplitst()` kent nu de energievorm.
+- **De Fluvius-export gaat niet naar het gaspunt.** Die reeks is
+  elektriciteit; ze aan gas meegeven zou elektriciteitskwartieren als gasvolume
+  laten doorgaan.
+- **Injectie op een gasaansluiting is een harde fout**, geen nul. Gas kent geen
+  teruglevering; het is bijna zeker een verwisseld aansluitingspunt.
+
+**De RLP0-verdeling is een derde tijdas**, en ze reist mee als `Aanname`.
+`schatting.gasaandeel_uit_rlp0()` geeft naast het aandeel een `Aanname` terug
+met het gebruikte profieljaar. Staat dat jaar niet in de databank — er is
+vandaag alleen 2026 — dan valt ze terug op het dichtstbijzijnde jaar en wordt
+de aanname `geverifieerd = false`: de seizoensvorm herhaalt zich, maar dat is
+een aanname en geen meting. De aandelen van de deelperiodes sommeren over de
+opgave tot 1; `tests/test_gas_nettarief.py` bewaakt dat, want anders verdwijnt
+of verdubbelt er volume bij elke contractwissel.
+
 ### Aardgas: drie grootheden die niet hetzelfde schalen
 
 `grid_cost()` dekte enkel elektriciteit-laagspanning. `gas_grid_cost()` dekt nu

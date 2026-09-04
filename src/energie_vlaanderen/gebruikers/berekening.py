@@ -204,6 +204,8 @@ class Kostberekening:
         *,
         segment: str = "Woning",
         nettarieven_per_jaar: Optional[dict[int, TariefBron]] = None,
+        transport=None,
+        gasverdeler=None,
     ) -> None:
         """`nettarieven_per_jaar` koppelt een tariefjaar aan zijn dataversie.
 
@@ -220,6 +222,16 @@ class Kostberekening:
         self.data_repo = data_repo
         self.heffingen = heffingen
         self.segment = segment
+        # Het vervoerstarief van Fluxys staat in geen VREG-werkboek en dus ook
+        # niet in `data_repo`; het komt uit config/nettarieven/. Zonder deze
+        # repository weigert een gasberekening -- 25 EUR per jaar stil laten
+        # vallen is precies wat dit project niet doet.
+        self.transport = transport
+        # De verdeler van een gasjaarverbruik over de tariefperiodes. Bij gas
+        # is naar dagen verdelen geen benadering maar een systematische fout
+        # (zie `schatting.gasaandeel_uit_rlp0`). Als callable meegegeven zodat
+        # deze klasse geen databankverbinding hoeft te kennen.
+        self.gasverdeler = gasverdeler
         self.nettarieven_per_jaar = dict(nettarieven_per_jaar or {})
         self.calculator = Calculator(data_repo, heffingen=heffingen)
         self._calculators: dict[int, Calculator] = {
@@ -249,6 +261,7 @@ class Kostberekening:
         contract: Leveringscontract,
         periode: Deelperiode,
         richting: str = "Afname",
+        energie: str = "Elektriciteit",
     ) -> Product:
         """Het product waarmee deze deelperiode gerekend wordt.
 
@@ -260,13 +273,18 @@ class Kostberekening:
         de accijnzen — en die volgen het contract niet.
         """
         peil = contract.peil_tariefkaart() if contract.prijs_bevriest else periode.van
+        # De energievorm hoort in de opzoeking. Stond die vast op
+        # "Elektriciteit", dan kreeg een gascontract van dezelfde leverancier
+        # met dezelfde productnaam ("ENGIE Easy" bestaat in beide) gewoon de
+        # elektriciteitsprijs: 0,172 in plaats van 0,050 EUR/kWh, oftewel drie
+        # keer te veel, zonder foutmelding.
         kandidaten = self.data_repo.products(
-            peil.year, peil.month, self.segment, energy="Elektriciteit", direction=richting
+            peil.year, peil.month, self.segment, energy=energie, direction=richting
         )
         if not kandidaten:
             raise BerekeningError(
                 f"Geen productdata voor {peil.year}-{peil.month:02d} "
-                f"({self.segment}, elektriciteit, {richting.casefold()}). De "
+                f"({self.segment}, {energie.casefold()}, {richting.casefold()}). De "
                 "V-test-export in deze dataversie dekt die maand niet; de "
                 "berekening stopt in plaats van een tarief van een andere maand "
                 "te gebruiken."
@@ -348,11 +366,18 @@ class Kostberekening:
         en kan een dynamisch product exact gerekend worden. `markt` is de
         day-ahead-reeks (`timestamp`, `price_eur_mwh`) die daarvoor nodig is.
         """
-        if punt.energie_type is not EnergieType.ELEKTRICITEIT:
+        if punt.energie_type is EnergieType.GAS:
+            if self.transport is None:
+                raise BerekeningError(
+                    "Een gasberekening vereist het vervoerstarief "
+                    "(`TransportTariefRepository.load(config/nettarieven)`). "
+                    "Het staat in geen VREG-werkboek en zou anders stil "
+                    "wegvallen — ongeveer 25 EUR per jaar."
+                )
+        elif punt.energie_type is not EnergieType.ELEKTRICITEIT:
             raise BerekeningError(
-                f"Kostberekening voor {punt.energie_type} wordt nog niet "
-                "ondersteund: `grid_cost()` dekt enkel elektriciteit-"
-                "laagspanning."
+                f"Kostberekening voor {punt.energie_type} wordt niet "
+                "ondersteund: enkel elektriciteit-laagspanning en aardgas."
             )
         if not opgaven:
             raise BerekeningError(
@@ -375,7 +400,14 @@ class Kostberekening:
                 )
             opgave = self._opgave_voor(opgaven, periode)
             warnings.extend(self._toets_opgave_tegen_meting(opgave, metingen))
-            aandeel, verdeel_aanname = dagaandeel(opgave, periode)
+            if punt.energie_type is EnergieType.GAS and self.gasverdeler:
+                # Het VREG-werkboek schrijft voor dat de gemeten kWh met het
+                # reëel lastprofiel RLP0 over de tariefperiodes verdeeld worden,
+                # niet naar dagen. Gas is winterzwaar; naar dagen verdelen legt
+                # te weinig volume in het duurdere tariefjaar.
+                aandeel, verdeel_aanname = self._gasaandeel(opgave, periode)
+            else:
+                aandeel, verdeel_aanname = dagaandeel(opgave, periode)
             resultaat = self._reken_periode(
                 punt, meter, periode, opgave, aandeel,
                 omvormer_kva=omvormer_kva, markt=markt, metingen=metingen,
@@ -409,6 +441,27 @@ class Kostberekening:
             aannames=tuple(aannames),
             warnings=tuple(dict.fromkeys(warnings)),
         )
+
+    def _gasaandeel(
+        self, opgave: Verbruiksopgave, periode: Deelperiode
+    ) -> tuple[Decimal, Aanname]:
+        """Welk deel van het opgavevolume in deze deelperiode valt, via RLP0.
+
+        Dezelfde vorm als `dagaandeel()`, maar met het gasprofiel in plaats van
+        de kalender: het aandeel van de deelperiode gedeeld door dat van de
+        volledige opgave, zodat de deelperiodes over de opgave heen tot 1
+        sommeren. Dat invariant is wat `tests/test_gebruikers_berekening.py`
+        bewaakt: knippen mag het totaal niet veranderen.
+        """
+        deel, aanname = self.gasverdeler(periode.van, periode.tot)
+        geheel, _ = self.gasverdeler(opgave.periode_van, opgave.periode_tot)
+        if geheel <= 0:
+            raise BerekeningError(
+                f"Het RLP0-gasprofiel geeft nul gewicht aan de opgaveperiode "
+                f"{opgave.periode_van}..{opgave.periode_tot}; verdelen is dan "
+                "niet mogelijk."
+            )
+        return deel / geheel, aanname
 
     # ------------------------------------------------------------------
     # Eén deelperiode
@@ -447,7 +500,9 @@ class Kostberekening:
           rechtstreeks op de periode gerekend.
         """
         contract = periode.contract
-        product = self.zoek_product(contract, periode, "Afname")
+        gas = punt.energie_type is EnergieType.GAS
+        energie = "Gas" if gas else "Elektriciteit"
+        product = self.zoek_product(contract, periode, "Afname", energie)
 
         jaarverbruik = {
             "afname_dag_kwh": opgave.afname_dag_kwh,
@@ -490,14 +545,34 @@ class Kostberekening:
 
         # Netkost op de volumes van deze periode, met de vaste jaarposten naar
         # rato van de dagen.
-        grid = rekenaar.grid_cost(periodeprofiel, dagen=periode.dagen)
+        if gas:
+            # De tariefgroep (T1..T4) volgt het *jaar*verbruik, de vaste term en
+            # het databeheer de dagen, en de volumetrische termen het volume van
+            # deze periode. Drie grootheden, drie schalen.
+            grid = rekenaar.gas_grid_cost(
+                periodeprofiel,
+                jaarprofiel.afname_kwh,
+                periodeprofiel.afname_kwh,
+                dagen=periode.dagen,
+            )
+            # Het vervoerstarief van Fluxys, dat de netbeheerder doorrekent maar
+            # niet vaststelt. Staat in geen werkboek en dus niet in `grid_cost`.
+            vervoer = self.transport.tarief(
+                "aardgas",
+                "niet_zakelijk" if self.segment == "Woning" else "zakelijk_laagspanning",
+                periode.van,
+            )
+            grid += vervoer.eur_per_kwh * periodeprofiel.afname_kwh
+        else:
+            grid = rekenaar.grid_cost(periodeprofiel, dagen=periode.dagen)
 
         # Heffingen: de accijnsschijven zijn progressief over het jaarverbruik,
         # dus die worden op het volledige opgavevolume berekend en daarna naar
         # het volumeaandeel geschaald. Het energiefonds is een maandbedrag en
-        # volgt de kalender.
+        # volgt de kalender — en bestaat enkel voor elektriciteit.
         verbruiksheffing, energiefonds = rekenaar.levies_gesplitst(
-            jaarprofiel, product.year, product.month
+            jaarprofiel, product.year, product.month,
+            "aardgas" if gas else "elektriciteit",
         )
         levies = verbruiksheffing * aandeel + energiefonds * tijddeel
 
@@ -509,6 +584,12 @@ class Kostberekening:
         credit = D("0")
         aannames = list(volume_aannames)
         injectie_kwh = periodeprofiel.injectie_kwh
+        if gas and injectie_kwh > 0:
+            raise BerekeningError(
+                "Er staat injectie op een aardgasaansluiting. Gas kent geen "
+                "teruglevering; dit is bijna zeker een verwisseld "
+                "aansluitingspunt in het dossier."
+            )
         if injectie_kwh > 0:
             if meter is not None and meter.terugdraaiend:
                 raise BerekeningError(

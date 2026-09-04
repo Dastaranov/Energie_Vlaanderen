@@ -1,0 +1,26 @@
+# Een dossier met uitsluitend aardgas. Geen elektriciteit, geen meetbestand,
+# geen zonnepanelen — het minimum om een gasfactuur na te rekenen.
+[gebruiker]
+postcode = "9472"
+gemeente = "Iddergem"
+segment = "Woning"
+
+[aansluiting]
+elektriciteit = false
+gas = true
+meter = "digitaal"
+
+[[verbruiksopgave]]
+energie = "gas"
+periode_van = "2025-05-01"
+periode_tot = "2026-05-01"
+bron = "factuur"
+afname_dag_kwh = 12181
+
+[[contract.gas]]
+leverancier = "ENGIE"
+product = "Easy"
+type = "vast"
+van = "2025-05-01"
+tot = "2026-05-01"
+tariefkaart_van = "2025-10-28"

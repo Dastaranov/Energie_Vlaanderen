@@ -26,7 +26,7 @@ nationaal profiel op uurresolutie met de gasdag die om 06:00 CET begint.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional
@@ -281,3 +281,118 @@ def dekkingsgraad(metingen: pd.DataFrame, van: date, tot: date) -> Decimal:
         return D("0")
     aandeel = D(str(len(binnen))) / D(str(verwacht))
     return min(aandeel, D("1"))
+
+
+def gasaandeel_uit_rlp0(
+    conn,
+    van: date,
+    tot: date,
+    jaar_profiel: int | None = None,
+) -> tuple[Decimal, Aanname]:
+    """Welk deel van een jaarverbruik gas in `[van, tot)` valt, volgens RLP0.
+
+    Het VREG-werkboek schrijft dit voor: "Voor de effectief toe te passen
+    tarieven dienen de gemeten kWh over de verschillende tariefperioden
+    verdeeld te worden op basis van het reëel lastprofiel RLP0."
+
+    Naar dagen verdelen is bij aardgas geen benadering maar een systematische
+    fout. Over 25/06/2025-30/04/2026 valt 53,8% van het volume in de 120 dagen
+    van januari tot april, waar dagen 32,9% zouden geven — en die maanden
+    liggen in het duurdere tariefjaar. Wie naar dagen verdeelt, rekent te
+    weinig aan.
+
+    Er komt een `Aanname` mee terug, en die hoort er: het profiel is dat van
+    een gemiddelde aansluiting, niet van deze. Voor een huis met een
+    warmtepomp of een gasfornuis-only aansluiting is de vorm anders. Zodra er
+    een gasmeetreeks is, hoort die voor te gaan.
+    """
+    import sqlalchemy as sa
+
+    beschikbaar = sorted(
+        int(r[0])
+        for r in conn.execute(
+            sa.text(
+                "select distinct jaar from verbruiksprofiel_waarde "
+                "where energie_type = 'gas' and profiel_type = 'rlp0n'"
+            )
+        )
+    )
+    if not beschikbaar:
+        raise SchattingError(
+            "Geen RLP0N-gasprofiel in de databank. Zonder profiel is het "
+            "jaarverbruik niet over de tariefperiodes te verdelen; laad het "
+            "met `synergrid download` en `staging parse --only profielen`."
+        )
+
+    gevraagd = jaar_profiel if jaar_profiel is not None else tot.year
+    # Synergrid publiceert per jaar, maar niet elk jaar staat in de databank.
+    # Weigeren zou een berekening over 2025 onmogelijk maken terwijl alleen het
+    # profiel van 2026 er is -- en de seizoensvorm van gasverbruik herhaalt
+    # zich. Het dichtstbijzijnde jaar wordt gebruikt, en dát wordt gezegd: de
+    # aanname reist mee tot in het eindbedrag.
+    jaar_profiel = (
+        gevraagd if gevraagd in beschikbaar
+        else min(beschikbaar, key=lambda j: (abs(j - gevraagd), j))
+    )
+
+    rijen = conn.execute(
+        sa.text(
+            """
+            select tijdstip at time zone 'Europe/Brussels' as lokaal, waarde
+              from verbruiksprofiel_waarde
+             where energie_type = 'gas'
+               and profiel_type = 'rlp0n'
+               and jaar = :jaar
+            """
+        ),
+        {"jaar": jaar_profiel},
+    ).all()
+
+    # Het profiel is een kalenderjaar; het venster kan een jaargrens kruisen.
+    # De vorm herhaalt zich, dus elk tijdstip wordt op zijn dag-van-het-jaar
+    # gelegd en zo tegen het venster gehouden.
+    totaal = Decimal("0")
+    binnen = Decimal("0")
+    dagen_in_venster = {
+        (van + timedelta(days=i)).timetuple().tm_yday
+        for i in range((tot - van).days)
+    }
+    for lokaal, waarde in rijen:
+        w = Decimal(str(waarde))
+        totaal += w
+        if lokaal.timetuple().tm_yday in dagen_in_venster:
+            binnen += w
+
+    if totaal <= 0:
+        raise SchattingError(
+            f"Het RLP0N-gasprofiel voor {jaar_profiel} sommeert tot {totaal}; "
+            "verdelen is dan niet mogelijk."
+        )
+
+    aandeel = binnen / totaal
+    naar_dagen = Decimal((tot - van).days) / Decimal("365")
+    ander_jaar = jaar_profiel != gevraagd
+    return aandeel, Aanname(
+        veld="gasverdeling_over_de_tariefperiodes",
+        waarde=f"{aandeel:.4f}",
+        bron=f"RLP0N-gasprofiel {jaar_profiel} (Synergrid), uit de databank",
+        # Het profiel zelf is geverifieerde brondata; het toepassen op een
+        # ánder jaar is dat niet.
+        geverifieerd=not ander_jaar,
+        beinvloedt_bedrag=True,
+        motivering=(
+            f"Het jaarverbruik is met het reëel lastprofiel RLP0 over de "
+            f"periode verdeeld, zoals het VREG-werkboek voorschrijft: "
+            f"{aandeel:.1%} valt in dit venster tegenover {naar_dagen:.1%} bij "
+            "een verdeling naar dagen. Het profiel is dat van een gemiddelde "
+            "aansluiting, niet van deze."
+            + (
+                f" Het profiel van {jaar_profiel} is gebruikt voor een periode "
+                f"in {gevraagd}; die jaargang staat niet in de databank. De "
+                "seizoensvorm van gasverbruik herhaalt zich, maar het is een "
+                "aanname."
+                if ander_jaar
+                else ""
+            )
+        ),
+    )

@@ -28,6 +28,7 @@ Alle bedragen hieronder komen van één betaalde ENGIE-eindafrekening
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -253,3 +254,102 @@ class TestGeenStilleNul:
         bron = self._Bron([self._rij("GAS_T1", "Vaste term", "EUR/jaar", 15.41)])
         with pytest.raises(ValueError, match="GAS_T1"):
             Calculator(bron).gas_grid_cost(self._profiel(), D("12181"), D("12181"))
+
+
+@pytest.mark.integration
+class TestEenDossierMetAlleenGas:
+    """Gas en elektriciteit staan los van elkaar.
+
+    Het zijn twee EAN's, twee contracten en twee tariefwerelden. Wie alleen gas
+    heeft is geen uitzondering maar een gewoon dossier — `gebruiker bereken`
+    weigerde dat eerder met "de netkost is vandaag enkel voor
+    elektriciteit-laagspanning uitgewerkt".
+
+    Het dossier hieronder is synthetisch maar de cijfers komen uit de
+    referentiefactuur: 12.181 kWh over 2025-05-01..2026-05-01 bij Fluvius
+    Midden-Vlaanderen.
+    """
+
+    DOSSIER = ROOT / "tests" / "fixturen" / "dossiers" / "alleen_gas.toml"
+
+    @pytest.fixture
+    def resultaat(self, db_conn):
+        import argparse
+
+        from energie_vlaanderen.cli.gebruikers import _lees
+        from energie_vlaanderen.gebruikers.berekening import Kostberekening
+        from energie_vlaanderen.gebruikers.models import EnergieType
+        from energie_vlaanderen.gebruikers.schatting import gasaandeel_uit_rlp0
+        from energie_vlaanderen.heffingen.repository import HeffingenRepository
+        from energie_vlaanderen.nettarieven.transport import TransportTariefRepository
+        from energie_vlaanderen.settings import Settings
+        from energie_vlaanderen.data.db_repository import DbDataRepository
+
+        settings = Settings.load()
+        args = argparse.Namespace(toml=str(self.DOSSIER))
+        dossier = _lees(args, settings, db_conn)
+
+        jaren = {}
+        for jaar in (2025, 2026):
+            repo = DbDataRepository(db_conn, tariefjaar=jaar)
+            if len(repo.dnb) == 0:
+                pytest.skip(f"Geen nettarieven voor {jaar} in de databank.")
+            jaren[jaar] = repo
+
+        rekenaar = Kostberekening(
+            jaren[2026],
+            HeffingenRepository.load(ROOT / "config" / "heffingen"),
+            segment="Woning",
+            nettarieven_per_jaar=jaren,
+            transport=TransportTariefRepository.load(ROOT / "config" / "nettarieven"),
+            gasverdeler=lambda van, tot: gasaandeel_uit_rlp0(db_conn, van, tot),
+        )
+        punt = dossier.punt(EnergieType.GAS)
+        assert punt is not None, "het dossier hoort een gaspunt te hebben"
+        return rekenaar.bereken(
+            punt,
+            dossier.meter_van(punt),
+            dossier.contracten_van(punt),
+            dossier.opgaven_van(punt),
+            date(2025, 5, 1),
+            date(2026, 5, 1),
+            extra_aannames=dossier.aannames,
+        )
+
+    def test_de_netkost_komt_uit_op_de_factuur(self, resultaat):
+        """215,24 EUR: distributiekosten 196,24 plus vervoerstarief 19,00."""
+        assert abs(resultaat.totalen["grid"] - D("215.24")) < D("0.10")
+
+    def test_de_heffingen_komen_exact_uit(self, resultaat):
+        """112,54 EUR: bijzondere accijns 100,39 plus bijdrage energie 12,15.
+
+        Zonder energiefonds — dat is een elektriciteitsheffing en staat niet op
+        een gasfactuur.
+        """
+        assert abs(resultaat.totalen["levies"] - D("112.54")) < D("0.01")
+
+    def test_er_is_geen_injectie_op_gas(self, resultaat):
+        assert resultaat.totalen["injection_credit"] == D("0")
+
+    def test_de_verdeling_over_de_deelperiodes_sommeert_tot_een(self, resultaat):
+        """Het invariant van dit domein: knippen mag het totaal niet veranderen.
+
+        De RLP0-aandelen van de deelperiodes horen samen 1 te zijn over de
+        volledige opgaveperiode. Wijkt dat af, dan verdwijnt of verdubbelt er
+        volume bij elke contractwissel.
+        """
+        aandelen = [
+            D(a.waarde)
+            for a in resultaat.aannames
+            if a.veld == "gasverdeling_over_de_tariefperiodes"
+        ]
+        assert aandelen, "geen RLP0-verdeling in de aannames"
+        assert abs(sum(aandelen) - D("1")) < D("0.001"), (
+            f"de aandelen sommeren tot {sum(aandelen)}, niet tot 1"
+        )
+
+    def test_de_verdeling_reist_mee_als_aanname(self, resultaat):
+        """Het profiel is dat van een gemiddelde aansluiting, niet van deze.
+        Dat hoort in het resultaat te staan, niet in de code te blijven."""
+        velden = {a.veld for a in resultaat.aannames}
+        assert "gasverdeling_over_de_tariefperiodes" in velden
