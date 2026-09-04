@@ -139,9 +139,18 @@ class VTestPipeline:
 
         target.mkdir(parents=True, exist_ok=True)
 
+        # Naar tijdelijke bestanden, en pas omwisselen als alles gelukt is.
+        # Hier stond `shutil.rmtree(target)` in de foutafhandeling -- op precies
+        # de map waarvan het commentaar hierboven zegt dat de refine-output er
+        # niet uit mag verdwijnen. Eén schrijffout wiste dan een Selenium-scrape
+        # van een half uur plus alle opgehaalde contractdetails.
+        tijdelijk = [pad.with_suffix(pad.suffix + ".tijdelijk")
+                     for pad in (fixed_csv, variable_csv, report_json)]
+        tmp_fixed, tmp_variable, tmp_report = tijdelijk
+
         try:
-            self._write_frame(normalized.fixed, fixed_csv)
-            self._write_frame(normalized.variable_dynamic, variable_csv)
+            self._write_frame(normalized.fixed, tmp_fixed)
+            self._write_frame(normalized.variable_dynamic, tmp_variable)
 
             report = {
                 "schema_version": 1,
@@ -181,14 +190,20 @@ class VTestPipeline:
                 ],
             }
 
-            temporary = report_json.with_suffix(".tmp")
-            temporary.write_text(
+            tmp_report.write_text(
                 json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
-            os.replace(temporary, report_json)
+
+            # Alles is geschreven; nu pas de drie artefacten op hun plaats.
+            os.replace(tmp_fixed, fixed_csv)
+            os.replace(tmp_variable, variable_csv)
+            os.replace(tmp_report, report_json)
         except Exception:
-            shutil.rmtree(target, ignore_errors=True)
+            # Alleen ons eigen gerommel opruimen. De map blijft staan, met
+            # alles wat er van andere stappen in zit.
+            for pad in tijdelijk:
+                pad.unlink(missing_ok=True)
             raise
 
         return VTestPipelineResult(

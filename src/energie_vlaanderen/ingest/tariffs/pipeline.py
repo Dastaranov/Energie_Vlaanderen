@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,11 +84,20 @@ class TariffPipeline:
 
         target.mkdir(parents=True, exist_ok=True)
 
+        # Naar tijdelijke bestanden, en pas omwisselen als alles gelukt is.
+        # Met `--overwrite` werden de bestaande CSV's eerder meteen overschreven
+        # en bij een fout halverwege ook nog opgeruimd: een schrijffout op het
+        # derde bestand kostte dan ook de twee geldige die er al stonden.
+        wissels: list[tuple[Path, Path]] = []
         try:
-            self._write_frame(afname_out, afname_csv)
-            self._write_frame(injectie_out, injectie_csv)
-            if hoogspanning_csv is not None:
-                self._write_frame(hoogspanning_out, hoogspanning_csv)
+            for frame, doel in (
+                (afname_out, afname_csv),
+                (injectie_out, injectie_csv),
+                *(((hoogspanning_out, hoogspanning_csv),) if hoogspanning_csv else ()),
+            ):
+                tijdelijk = doel.with_suffix(doel.suffix + ".tijdelijk")
+                self._write_frame(frame, tijdelijk)
+                wissels.append((tijdelijk, doel))
 
             report = {
                 "version_id": version_id,
@@ -104,12 +113,19 @@ class TariffPipeline:
             }
             if hoogspanning_csv is not None:
                 report["hoogspanning_rows"] = len(hoogspanning_out)
-            report_json.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            tmp_report = report_json.with_suffix(report_json.suffix + ".tijdelijk")
+            tmp_report.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            wissels.append((tmp_report, report_json))
+
+            # Alles is geschreven; nu pas op hun plaats.
+            for bron, doel in wissels:
+                os.replace(bron, doel)
 
         except Exception:
-            for f in outputs + [report_json]:
-                if f.exists():
-                    f.unlink(missing_ok=True)
+            # Alleen de tijdelijke bestanden. Wat er al stond -- van een vorige,
+            # geslaagde run -- blijft ongemoeid.
+            for bron, _ in wissels:
+                bron.unlink(missing_ok=True)
             raise
 
         return TariffPipelineResult(

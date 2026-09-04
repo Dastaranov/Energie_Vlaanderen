@@ -21,6 +21,8 @@ def _load_dotenv(project_root: Path) -> None:
 
 def get_dsn(project_root: Path | None = None) -> str:
     """Bouw de PostgreSQL DSN op uit omgevingsvariabelen (met .env als fallback)."""
+    import sqlalchemy as sa
+
     if project_root:
         _load_dotenv(project_root)
 
@@ -30,7 +32,22 @@ def get_dsn(project_root: Path | None = None) -> str:
     user = os.environ.get("DB_USER", "endsor")
     password = os.environ.get("DB_PASSWORD", "")
 
-    return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{name}"
+    # Via `URL.create` en niet via een f-string: een wachtwoord met @, :, /, ?,
+    # # of % breekt anders de URL of wordt verkeerd geparsed -- @ splitst
+    # gebruiker van host, % start een percent-escape. Dat geeft geen foutmelding
+    # over het wachtwoord maar een onbegrijpelijke verbindingsfout.
+    #
+    # `render_as_string` codeert wat gecodeerd moet worden; `make_url()` aan de
+    # andere kant (dump.py leest er host, gebruiker en wachtwoord uit voor psql)
+    # decodeert het weer.
+    return sa.engine.URL.create(
+        "postgresql+psycopg",
+        username=user,
+        password=password or None,
+        host=host,
+        port=int(port),
+        database=name,
+    ).render_as_string(hide_password=False)
 
 
 def get_engine(project_root: Path | None = None) -> "sqlalchemy.Engine":

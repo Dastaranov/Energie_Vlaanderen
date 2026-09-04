@@ -22,6 +22,16 @@ DEFAULT_SYNERGRID_PROFIELEN_PAGE = (
     "statistieken-gegevens/profielen-slp-spp-rlp"
 )
 
+# 50 MiB liet nauwelijks marge voor het SPP-productieprofiel van Synergrid
+# (~49,7 MiB voor 2026) — een volgend jaar met meer netbeheerders of meer
+# historiek kwam er zo overheen. 100 MiB geeft ademruimte zonder de eigenlijke
+# bescherming (een oneindige of foute download) te verzwakken.
+#
+# Eén constante, en geen tweede getal in `Settings.load()`: die stond op 50 MiB
+# terwijl de dataclass 100 MiB zei, en `load()` is de weg die de CLI gebruikt.
+# De gedocumenteerde limiet gold dus nergens.
+DEFAULT_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+
 DEFAULT_ALLOWED_DOWNLOAD_HOSTS = (
     "assets.vlaamsenutsregulator.be",
     "www.synergrid.be",
@@ -98,11 +108,7 @@ class Settings:
     )
 
     request_timeout_seconds: float = 60.0
-    # 50 MiB liet nauwelijks marge voor het SPP-productieprofiel van
-    # Synergrid (~49,7 MiB voor 2026) — een volgend jaar met meer DNB's of
-    # meer historiek kwam er zo overheen. 100 MiB geeft ademruimte zonder de
-    # eigenlijke bescherming (een oneindige/foute download) te verzwakken.
-    max_download_bytes: int = 100 * 1024 * 1024
+    max_download_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES
     download_chunk_bytes: int = 1024 * 1024
 
     user_agent: str = "EnergieVergelijker/3.0"
@@ -183,7 +189,7 @@ class Settings:
 
         max_download_text = env.get(
             "ENERGIEVERGELIJKER_MAX_DOWNLOAD_BYTES",
-            str(50 * 1024 * 1024),
+            str(DEFAULT_MAX_DOWNLOAD_BYTES),
         )
 
         try:
