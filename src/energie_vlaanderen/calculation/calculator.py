@@ -5,12 +5,12 @@ from typing import Optional
 import pandas as pd
 from energie_vlaanderen.utility.constants import D
 from energie_vlaanderen.domain.models import Cost, Product, Profile
-from energie_vlaanderen.data.repository import DataRepository
+from energie_vlaanderen.data.bron import TariefBron
 from energie_vlaanderen.heffingen.repository import HeffingenRepository
 from typing import Any, Literal
 
 class Calculator:
-    def __init__(self, repo: DataRepository, vat=D("0.06"), heffingen: Optional[HeffingenRepository] = None):
+    def __init__(self, repo: TariefBron, vat=D("0.06"), heffingen: Optional[HeffingenRepository] = None):
         self.repo=repo; self.vat=vat; self.heffingen=heffingen
 
     def grid_cost(self,p:Profile,dagen:int=365)->Decimal:

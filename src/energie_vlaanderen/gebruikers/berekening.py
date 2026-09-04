@@ -29,7 +29,7 @@ from typing import Optional, Sequence
 import pandas as pd
 
 from energie_vlaanderen.calculation.calculator import Calculator
-from energie_vlaanderen.data.repository import DataRepository
+from energie_vlaanderen.data.bron import TariefBron
 from energie_vlaanderen.domain.models import Cost, Product, Profile
 from energie_vlaanderen.gebruikers.models import (
     Aanname,
@@ -199,11 +199,11 @@ class Kostberekening:
 
     def __init__(
         self,
-        data_repo: DataRepository,
+        data_repo: TariefBron,
         heffingen,
         *,
         segment: str = "Woning",
-        nettarieven_per_jaar: Optional[dict[int, DataRepository]] = None,
+        nettarieven_per_jaar: Optional[dict[int, TariefBron]] = None,
     ) -> None:
         """`nettarieven_per_jaar` koppelt een tariefjaar aan zijn dataversie.
 
