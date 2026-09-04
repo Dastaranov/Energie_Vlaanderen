@@ -444,6 +444,27 @@ was. De normalizer valt nu terug op kolom 0.
 Migratie 0023 ruimt beide op: een SCD2-upsert kent invoegen en afsluiten, geen
 *verhuizen*, dus een herimport laat de oude sleutels naast de nieuwe staan.
 
+### De nettarieven werden op zes decimalen afgerond
+
+VREG publiceert de distributienettarieven met **zeven** decimalen.
+`netbeheerder_tarief.prijs` stond op `Numeric(14, 6)`, dus 0,0230382 werd stil
+0,023038 en 0,0000145 werd 0,000015. Geen randgeval: 186 van de 272 gasrijen en
+513 van de 776 elektriciteitsrijen in het werkboek van 2026 dragen zeven
+decimalen.
+
+Dezelfde fout als `vaste_vergoeding_jaar` in migratie 0022, en de moeite om
+dezelfde reden. Het bedrag is verwaarloosbaar — het grootste verlies is
+5e-7 EUR/kWh — maar het is afronding van *brondata*, en het maakt een exacte
+audit op deze kolom onmogelijk: de cel-voor-celvergelijking meldde 186
+verschillen waarvan er geen enkele echt was. Een tolerantie inbouwen zou de
+kolom juist onbewaakt laten.
+
+Migratie 0024 verbreedt naar `Numeric(15, 7)`; de integerruimte blijft acht
+cijfers. Na de herimport is gas cel voor cel gelijk aan het werkboek (256 van
+256 rijen, nul verschillen) en verschilt elektriciteit alleen nog in de
+drijvende-kommaruis van het werkboek zelf (`0.12364839999999999` tegenover de
+correct opgeslagen `0.1236484`).
+
 ### De gasheffingen stonden onvolledig
 
 Dezelfde referentiefactuur legde drie gaten bloot in de handgeschreven

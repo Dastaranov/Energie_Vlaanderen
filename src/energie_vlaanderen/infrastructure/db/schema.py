@@ -268,7 +268,10 @@ netbeheerder_tarief = sa.Table(
     # Leeg wordt "" en niet NULL: PostgreSQL ziet NULLs in een unieke sleutel
     # als onderling verschillend, waardoor een echt dubbel er alsnog in mag.
     sa.Column("tariefnotering", sa.Text, nullable=False, server_default=""),
-    sa.Column("prijs", sa.Numeric(14, 6), nullable=True),
+    # Zeven decimalen, niet zes: VREG publiceert de nettarieven zo, en 186 van
+    # de 272 gasrijen en 513 van de 776 elektriciteitsrijen dragen er ook echt
+    # zeven. Op `Numeric(14, 6)` werd 0,0230382 stil 0,023038 (migratie 0024).
+    sa.Column("prijs", sa.Numeric(15, 7), nullable=True),
     sa.Column("geldig_van", sa.Date, nullable=False),
     sa.Column("geldig_tot", sa.Date, nullable=True),
     sa.Column("source_sheet", sa.Text, nullable=True),
