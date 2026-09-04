@@ -15,9 +15,54 @@ onbereikbaar paneel mag de run niet kosten.
 """
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 
 pytestmark = pytest.mark.scrape
+
+
+@pytest.fixture(autouse=True)
+def _selenium_stub(monkeypatch):
+    """Vervang selenium door een stuk of wat lege huls.
+
+    `_verzamel_contractdetails` importeert `By` en `WebDriverWait` binnenin.
+    CI installeert de scrape-extra niet -- de testworkflow draait op
+    `[test,db]` -- dus zonder deze stub faalt dit bestand daar op een
+    ModuleNotFoundError terwijl het lokaal groen is. Precies de divergentie
+    die een test waardeloos maakt: hij bewaakt dan alleen de machine van
+    degene die hem schreef.
+
+    De stub is bovendien scherper dan het echte pakket: `WebDriverWait` roept
+    de conditie hier onmiddellijk aan, zodat een test die per ongeluk op een
+    echte timeout zou wachten, dat meteen laat zien in plaats van na 30 s.
+    """
+    class _By:
+        CSS_SELECTOR = "css selector"
+        ID = "id"
+
+    class _WebDriverWait:
+        def __init__(self, driver, timeout):
+            self._driver = driver
+            self.timeout = timeout
+
+        def until(self, conditie):
+            return conditie(self._driver)
+
+    modules = {
+        "selenium": types.ModuleType("selenium"),
+        "selenium.webdriver": types.ModuleType("selenium.webdriver"),
+        "selenium.webdriver.common": types.ModuleType("selenium.webdriver.common"),
+        "selenium.webdriver.common.by": types.ModuleType("selenium.webdriver.common.by"),
+        "selenium.webdriver.support": types.ModuleType("selenium.webdriver.support"),
+        "selenium.webdriver.support.ui": types.ModuleType("selenium.webdriver.support.ui"),
+    }
+    modules["selenium.webdriver.common.by"].By = _By
+    modules["selenium.webdriver.support.ui"].WebDriverWait = _WebDriverWait
+    for naam, module in modules.items():
+        monkeypatch.setitem(sys.modules, naam, module)
+    yield
 
 
 class _Knop:
