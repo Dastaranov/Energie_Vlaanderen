@@ -82,6 +82,7 @@ overgeslagen wanneer die er niet zijn, en draaien in CI tegen de zaaddump
 | `test_config.py` | `Settings`, de projectwortel en de netbeheerderlijst; elke ongeldige ondergrens wordt geweigerd in plaats van overgenomen. |
 | `test_settings_dotenv.py` | `.env` wordt echt gelezen. Stond eerder alleen in de documentatie, waardoor `market sync` zonder API-sleutel draaide. |
 | `test_market_fallback.py` | De terugval van ENTSO-E op energy-charts is luidruchtig en elke rij draagt haar herkomst. |
+| `test_tariefkaarten.py` | Het tariefkaartarchief: dezelfde kaart één keer op schijf, een gewijzigde kaart naast de oude, en HTML achter een `.pdf`-URL wordt geweigerd in plaats van als kaart bewaard. |
 
 ## `parsers` — werkboeken lezen en normaliseren
 

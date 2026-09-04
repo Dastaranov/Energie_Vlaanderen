@@ -956,6 +956,68 @@ is een all-in prijs (`0,1097 + 0,00114 x Epex DAM`) met daarbovenop een
 personeelskorting. Er is niets aan af te leiden, en de juiste uitkomst is dus
 geen bedrag maar een fout.
 
+### Het tariefkaartarchief
+
+Een variabel contract bevriest bij ondertekening zijn **formule**, niet zijn
+prijs: de vaste vergoeding en de coëfficiënten liggen vast in de kaartversie
+die de klant tekende, en alleen de index beweegt nog. De V-test-export levert
+per maand de kaart die op dat moment *verkocht* wordt. Op een echte
+Eneco-afrekening scheelde alleen al de vaste vergoeding 11,74 EUR per jaar
+(61,321 in de export tegenover 49,59 op de kaart van de klant); bij ENGIE
+"Direct Online" week bovendien de indexcoëfficiënt af (0,0954 tegenover
+0,0996), en de Eneco-kaart uit 2023 gebruikt zelfs een *kwartaal*index waar de
+export een maandindex noemt.
+
+Dat is geen rekenfout maar een ontbrekend gegeven, en het verschilt van de
+index in één beslissend opzicht: **een index valt uit de day-ahead historiek
+altijd nog terug te rekenen, een tariefkaart is weg zodra de leverancier hem
+vervangt.** Vandaag archiveren is de enige manier om een contract van vandaag
+over drie jaar nog exact na te rekenen.
+
+`ingest/tariefkaarten.py` haalt de kaarten op uit
+`vtest_contract.link_tariefkaart` van de lopende snapshots en legt ze
+**inhoudsgeadresseerd** weg in `data/tariefkaarten/` (buiten git). Dat lost
+twee dingen tegelijk op: leveranciers delen één kaart over meerdere producten,
+en een kaart die wijzigt krijgt vanzelf een nieuw pad zodat de oude blijft
+staan. `scripts/archiveer_tariefkaarten.py` draait het.
+
+Stand op 2026-09-04: **281 van de 351** kaarten binnen, 128 MB.
+
+**Niet elke link wijst naar een PDF.** 83 van de 351 kwamen uit op een
+productoverzicht. De resolver haalt die pagina op, verzamelt de kandidaatlinks
+mét hun ankertekst en matcht op productnaam én energievorm — over de tekst en
+de URL, want Odoo levert de kaart als `/web/content/…/1772/file` waar de
+bestandsnaam niets zegt en het anker "Tariefkaart_Flow_EL". Dat loste er 27 op.
+**Bij twijfel wordt er niets gekozen**: een verkeerde kaart geeft een
+berekening die klopt op de verkeerde formule, en dan faalt er niets. De
+overwogen links reizen mee naar het foutenregister, zodat het uitzoekwerk per
+leverancier een opzoeking wordt en geen heronderzoek.
+
+Twee valstrikken die daarbij vastliggen. "Flow" bestaat in beide energievormen
+op dezelfde pagina — dezelfde fout als `zoek_product()` die vastzat op
+"Elektriciteit". En een historiekpagina draagt oude kaarten: Aspiravi zet er 21
+maandkaarten op, die horen in een archief thuis maar niet als "de kaart van dit
+contract vandaag".
+
+**Luminus zet een UTF-8 BOM vóór de PDF-kop.** Een toets op byte 0 wees
+daardoor 35 geldige kaarten af als "geen PDF" — echte kaarten van 214 kB die
+pdfinfo en pdftotext zonder morren lezen. ISO 32000-1 §7.5.2 laat de kop binnen
+de eerste 1024 bytes toe; er wordt nu daar gezocht en de offset wordt bewaard.
+
+**Het register wordt tussentijds weggeschreven.** Dit zijn 350 verzoeken naar
+evenveel externe sites en het duurt minuten; een run die halverwege afgebroken
+wordt — en dat gebeurde — had anders wél de documenten op schijf maar geen
+enkele waarneming, en de volgende run telde ze allemaal opnieuw als "nieuw".
+Daarmee is de eerste-waarnemingsdatum weg, en dat is nu net wat dit archief
+onderscheidt van een map met PDF's.
+
+Wat er overblijft, is per leverancier van vorm en staat met kandidaatlinks in
+`index.json`: 56 landingspagina's waar de generieke match niet eenduidig is
+(vooral de Energy Together-familie, waar Pro-varianten dezelfde kaart delen) en
+14 HTTP 404's van Ecofix, dat naar een leeg portaal verwijst. Sommige
+leveranciers houden zelf een kaartarchief bij; dat is per leverancier te
+bekijken.
+
 ### Injectie
 
 Het injectiekrediet komt uit dezelfde V-test-export als de afnameprijzen, maar

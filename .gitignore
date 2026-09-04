@@ -246,6 +246,15 @@ data/*.json
 data/referentie/*
 !data/referentie/LEESMIJ.md
 
+# Het tariefkaartarchief: de PDF's die leveranciers publiceren en vervangen.
+# Auteursrechtelijk materiaal van derden, honderden bestanden, en afgeleide
+# data — net als de rest van `data/` blijft het lokaal. Het register
+# (`index.json`) blijft er bewust ook buiten: het beschrijft wát er lokaal
+# staat, en dat verschilt per machine. Wat er uit een kaart overgenomen wordt,
+# hoort met bronvermelding en hash in de databank terecht te komen.
+data/tariefkaarten/*
+!data/tariefkaarten/LEESMIJ.md
+
 # Datasheets en homologatielijsten: fabrikants-PDF's en het Synergrid
 # C10/26-werkboek. Samen tientallen MB binair, en de PDF's zijn
 # auteursrechtelijk beschermd materiaal van derden. Net als de rest van `data/`
