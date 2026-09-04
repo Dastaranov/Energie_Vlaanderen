@@ -89,7 +89,93 @@ class DatabankAudit:
         bevindingen += self._lege_kolommen()
         bevindingen += self._tarieven_zijn_bruikbaar()
         bevindingen += self._energievorm_is_consistent()
+        bevindingen += self._plausibiliteit()
         return DatabankRapport(bevindingen=tuple(bevindingen))
+
+    # -- 4. plausibiliteit -------------------------------------------------
+
+    def _plausibiliteit(self) -> list[Bevinding]:
+        """De regels die `audit sanity` op de gestagede CSV's toepaste.
+
+        Ze staan hier omdat de CSV's verdwijnen, maar ook omdat ze hier meer
+        waard zijn: `db audit` draait binnen de importtransactie, dus een
+        onmogelijke waarde houdt de publicatie tegen in plaats van te wachten
+        tot iemand `audit sanity` aanroept. Die stap kon overgeslagen worden.
+
+        De drempels zijn ongewijzigd overgenomen; alleen de bron verschilt.
+        """
+        gevonden: list[Bevinding] = []
+
+        # Een vaste vergoeding van meer dan 500 EUR/jaar bestaat niet op de
+        # residentiële markt; zo'n waarde wijst op een kolomverschuiving.
+        for tabel in ("tarief_afname", "tarief_injectie"):
+            if not self._tabel_bestaat(tabel):
+                continue
+            absurd = self.conn.execute(sa.text(
+                f"select count(*) from {tabel} "  # noqa: S608
+                "where vaste_vergoeding_jaar > 500"
+            )).scalar() or 0
+            if absurd:
+                gevonden.append(Bevinding(
+                    tabel=tabel, regel="Max vaste vergoeding overschreden",
+                    melding=(
+                        f"{absurd} rij(en) met een vaste vergoeding boven 500 "
+                        "EUR/jaar. Dat bestaat niet op deze markt en wijst op "
+                        "een verschoven kolom."
+                    ),
+                ))
+
+            # Een negatieve energieprijs kan (marktprijzen worden negatief),
+            # maar niet in deze orde van grootte: dat is geen tarief meer.
+            extreem = self.conn.execute(sa.text(
+                f"select count(*) from {tabel} "  # noqa: S608
+                "where energieprijs_kwh < -100"
+            )).scalar() or 0
+            if extreem:
+                gevonden.append(Bevinding(
+                    tabel=tabel, regel="Extreem negatieve prijs",
+                    melding=f"{extreem} rij(en) met een prijs onder -100.",
+                ))
+
+        # Nettarieven zijn gereguleerd en nooit negatief.
+        if self._tabel_bestaat("netbeheerder_tarief"):
+            totaal = self.conn.execute(
+                sa.text("select count(*) from netbeheerder_tarief")
+            ).scalar() or 0
+            if totaal == 0:
+                gevonden.append(Bevinding(
+                    tabel="netbeheerder_tarief", regel="Tariefdata ontbreekt",
+                    melding=(
+                        "Geen enkele nettariefrij. Zonder nettarieven komt de "
+                        "netkost stil op nul uit."
+                    ),
+                ))
+            negatief = self.conn.execute(sa.text(
+                "select count(*) from netbeheerder_tarief where prijs < 0"
+            )).scalar() or 0
+            if negatief:
+                gevonden.append(Bevinding(
+                    tabel="netbeheerder_tarief", regel="Geen negatieve tarieven",
+                    melding=f"{negatief} nettarief/tarieven met een negatieve prijs.",
+                ))
+
+        # Een verbruiks- of opwekprofiel is een fysieke grootheid en kan niet
+        # onder nul. Marktprijzen wél — vandaar de beperking tot RLP en SPP.
+        if self._tabel_bestaat("marktcurve"):
+            onmogelijk = self.conn.execute(sa.text(
+                "select count(*) from marktcurve "
+                "where curve_type in ('RLP', 'SPP') and waarde < 0"
+            )).scalar() or 0
+            if onmogelijk:
+                gevonden.append(Bevinding(
+                    tabel="marktcurve", regel="RLP/SPP altijd positief",
+                    melding=(
+                        f"{onmogelijk} profielwaarde(n) onder nul. Een verbruiks- "
+                        "of opwekprofiel is een fysieke grootheid; negatief kan niet."
+                    ),
+                ))
+
+        return gevonden
 
     # -- 1. kolommen die nooit helemaal leeg mogen zijn --------------------
 

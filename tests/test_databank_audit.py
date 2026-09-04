@@ -205,3 +205,61 @@ class TestGoldenBinnenDeTransactie:
         fout = _Droogloop(["a", "b"])
         assert fout.resultaten == ["a", "b"]
         assert isinstance(fout, Exception)
+
+
+@pytest.mark.integration
+class TestPlausibiliteit:
+    """De regels die `audit sanity` op de gestagede CSV's toepaste.
+
+    Ze staan nu in `DatabankAudit`, en dat is meer dan een verhuizing: die
+    draait binnen de importtransactie, dus een onmogelijke waarde houdt de
+    publicatie tegen. `audit sanity` was een losse stap die je kon overslaan.
+
+    Elke regel wordt hier uitgelokt in een teruggerolde transactie — een
+    controle waarvan niet vaststaat dát ze afgaat, is geen controle.
+    """
+
+    @pytest.mark.parametrize("regel,sql", [
+        (
+            "Max vaste vergoeding overschreden",
+            "update tarief_afname set vaste_vergoeding_jaar = 999 "
+            "where id = (select min(id) from tarief_afname)",
+        ),
+        (
+            "Extreem negatieve prijs",
+            "update tarief_afname set energieprijs_kwh = -500 "
+            "where id = (select min(id) from tarief_afname)",
+        ),
+        (
+            "Geen negatieve tarieven",
+            "update netbeheerder_tarief set prijs = -1 "
+            "where id = (select min(id) from netbeheerder_tarief)",
+        ),
+        (
+            "RLP/SPP altijd positief",
+            "update marktcurve set waarde = -1 "
+            "where id = (select min(id) from marktcurve where curve_type = 'RLP')",
+        ),
+    ])
+    def test_de_regel_gaat_af(self, db_conn, regel, sql):
+        import sqlalchemy as sa
+
+        from energie_vlaanderen.audit.databank import DatabankAudit
+
+        db_conn.execute(sa.text(sql))
+        regels = {b.regel for b in DatabankAudit(db_conn).run().fouten}
+        assert regel in regels, f"{regel} werd niet opgemerkt"
+
+    def test_de_echte_data_haalt_alle_regels(self, db_conn):
+        """En omgekeerd: op de dataset zoals ze er nu bij staat gaat geen enkele
+        plausibiliteitsregel af. Anders is de test hierboven waardeloos — dan
+        zou hij ook slagen zonder de uitlokking."""
+        from energie_vlaanderen.audit.databank import DatabankAudit
+
+        plausibiliteit = {
+            "Max vaste vergoeding overschreden", "Extreem negatieve prijs",
+            "Geen negatieve tarieven", "RLP/SPP altijd positief",
+            "Tariefdata ontbreekt",
+        }
+        regels = {b.regel for b in DatabankAudit(db_conn).run().bevindingen}
+        assert not (regels & plausibiliteit), regels & plausibiliteit
