@@ -148,6 +148,14 @@ overgeslagen wanneer die er niet zijn, en draaien in CI tegen de zaaddump
 | `test_calculator_heffingen.py` | De heffingenkoppeling in `calculate()`, met een DNB-tabel waarin elk tarief expliciet 0 is zodat alleen de heffingen overblijven. |
 | `test_maandpiek.py` | De geschatte maandpiek (4,218 kW) en de wettelijke ondergrens (2,5 kW) zijn twee getallen. Ze waren er lang één. |
 | `test_tariefbron.py` | De CSV-bron en de databankbron voldoen aan hetzelfde contract; afwijken zou nergens gemeld worden. |
+
+Drie bestanden hierboven importeren `DataRepository` uit
+`experiments/remove/data_repository.py` in plaats van uit `src/`. Dat is geen
+vergissing: er wordt niet meer uit CSV's gerekend, dus die lezer hoort niet in
+de productiecode — maar `test_referentiefactuur.py` rekent dezelfde factuur wél
+nog langs beide wegen na, en dat twee onafhankelijke paden op dezelfde euro
+uitkomen is precies wat de overstap naar de databank rechtvaardigt. Het getal
+overhouden en de vergelijking weggooien zou de waarde van die test omkeren.
 | `test_referentiefactuur.py` | De volledige engine tegen een echte ENGIE-eindafrekening, inclusief de verklaring van elk restverschil. |
 | `test_battery.py` | De batterij bewaakt haar eigen grenzen: laadtoestand, cyclustelling, en een nameplate van nul die vroeger deelde door nul. |
 | `test_omvormer.py` | Dezelfde zelfbewaking voor de omvormer — drie vermogensvelden die strikt positief moeten zijn. |

@@ -90,7 +90,13 @@ energievergelijker audit heffingen                     # structuur, offline
 energievergelijker staging calibrate --version <id>    # ~13 min, Selenium
 python scripts/check_tarieven.py --versie <id>         # config vs. vtest.be
 python scripts/check_bronnen.py                        # nieuwe VREG-/Synergrid-bestanden?
+python scripts/verify_contract.py --leverancier ...    # een contract: CSV vs. databank
 ```
+
+`verify_contract.py` vergelijkt één leverancierscontract rij voor rij tussen de
+gestagede CSV's en de databank (exitcode 1 bij een afwijking, 2 als het contract
+niet gevonden is). Het is het handmatige tegenhangertje van `audit golden`, en
+het was het gereedschap waarmee de overstap naar de databank nagerekend is.
 
 `config/bronregister.toml` legt vast welke bronbestanden de pipeline verwerkt
 heeft; `.github/workflows/bronbewaking.yml` vergelijkt dat dagelijks met de
@@ -335,6 +341,30 @@ zowel Zondereigen (gas: Fluvius Kempen) als Baarle-Hertog (gas: Enexis Netbeheer
 `NetbeheerderRegister.dnb_for()` eist daar de gemeentenaam en weigert te gokken;
 `dnb_met_tarieven()` stopt bovendien op Enexis, dat geen tarieven in deze dataset
 heeft.
+
+### De CSV-lezer staat niet meer in `src/`
+
+`data/repository.py` las de gestagede CSV's rechtstreeks in `Product`-objecten.
+Sinds de knip is de databank de enige bron waaruit gerekend wordt, en werd die
+klasse in productiecode nergens meer geconstrueerd — de CLI draait op
+`DbDataRepository`. Zolang ze in `src/` stond, was ze een staande uitnodiging om
+de regel te omzeilen; ze staat nu in `experiments/remove/data_repository.py`.
+
+**De tests die haar gebruiken blijven bestaan, en dat is geen inconsistentie.**
+`test_referentiefactuur.py` rekent dezelfde factuur langs beide wegen na en komt
+op hetzelfde bedrag uit; `test_tariefbron.py` toetst dat beide bronnen aan
+`TariefBron` voldoen. Die twee paden náást elkaar zijn juist het bewijs dat de
+overstap veilig was — één ervan weggooien houdt het getal over en gooit de
+vergelijking weg.
+
+`infrastructure/csv.py` (RobustCsvParser) is om dezelfde reden verhuisd: niets
+in het repo verwees er nog naar.
+
+`DataRepositoryError` is uit `KNOWN_EXCEPTIONS` van de CLI gehaald — niets in
+`src/` werpt hem nog. Zijn opvolger `DbDataRepositoryError` staat er bewust
+*niet* in de plaats: die import trekt SQLAlchemy binnen, en de
+masterdata-controles in CI draaien met een installatie zonder de `db`-extra.
+`cli/gebruikers.py` vangt hem af op de enige plek die hem kan werpen.
 
 ### Het tariefjaar komt uit het werkboek, niet uit het versie-id
 
@@ -1107,7 +1137,8 @@ domain/          # Pure data models: Profile, Product, Cost
 settings.py      # Settings dataclass, env-var loading, project root discovery
 data/
   paths.py       # DataPaths: versioned data directory layout (raw/, staging/, versions/, current.txt)
-  repository.py  # DataRepository: reads canonicalized vtest CSVs into Product objects
+  bron.py        # TariefBron: het protocol dat de rekenengine van een gegevensbron vraagt
+  db_repository.py # DbDataRepository: de enige bron waaruit gerekend wordt
 calculation/
   calculator.py  # Calculator: grid_cost(), supplier_cost(), full cost breakdown
 ingest/
@@ -1174,7 +1205,6 @@ nettarieven/
                  # tijdsas, geverifieerd-vlag, harde fout in plaats van een stille 0. Elektriciteit
                  # heeft dit gat niet — het Elia-transport zit al in de ODV-post van het werkboek.
 infrastructure/
-  csv.py         # Low-level CSV helpers
   db/            # SQLAlchemy Core schema.py + importer.py; Alembic migrations in db/migrations/versions/
                  # importer.py schrijft de SCD2-historiek gebatcht: de beslissing (welke periodes
                  # bestaan al, welke komen erbij) gebeurt in Python, het verschil gaat er in twee

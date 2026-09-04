@@ -202,7 +202,7 @@ class TestVolledigeSimulatie:
         import json
 
         from energie_vlaanderen.data.paths import DataPaths
-        from energie_vlaanderen.data.repository import DataRepository
+        from experiments.remove.data_repository import DataRepository
         from energie_vlaanderen.gebruikers.berekening import Kostberekening
         from energie_vlaanderen.gebruikers.models import EnergieType
         from energie_vlaanderen.gebruikers.toml_io import lees_dossier

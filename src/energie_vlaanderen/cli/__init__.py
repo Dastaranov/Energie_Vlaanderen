@@ -22,7 +22,6 @@ import logging
 import sys
 
 from energie_vlaanderen.data.paths import DataPathsError
-from energie_vlaanderen.data.repository import DataRepositoryError
 from energie_vlaanderen.ingest.downloader import DownloadError
 from energie_vlaanderen.ingest.raw_store import RawStoreError
 from energie_vlaanderen.ingest.sources import SourceDiscoveryError
@@ -110,9 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 # Excepties die zowel main() als de interactieve shell op dezelfde manier
 # afvangen: een verwachte, gebruikersgerichte fout (exitcode 2), geen bug.
+# `DbDataRepositoryError` staat hier bewust niet bij: die import trekt
+# SQLAlchemy binnen, en de masterdata-controles (`audit heffingen`,
+# `audit hardware`) draaien in CI met een installatie zonder de db-extra.
+# `cli/gebruikers.py` vangt hem af op de enige plek die hem kan werpen.
 KNOWN_EXCEPTIONS = (
     DataPathsError,
-    DataRepositoryError,
     FileNotFoundError,
     SourceDiscoveryError,
     ValueError,

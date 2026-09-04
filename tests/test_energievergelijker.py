@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from energie_vlaanderen.calculation.calculator import Calculator
-from energie_vlaanderen.data.repository import DataRepository, DataRepositoryError
+from experiments.remove.data_repository import DataRepository, DataRepositoryError
 from energie_vlaanderen.domain.models import Cost, Product, Profile
 from energie_vlaanderen.settings import Settings
 

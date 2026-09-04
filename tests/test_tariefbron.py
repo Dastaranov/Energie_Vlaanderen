@@ -16,7 +16,7 @@ import pytest
 
 from energie_vlaanderen.data.bron import TariefBron
 from energie_vlaanderen.data.db_repository import DbDataRepository
-from energie_vlaanderen.data.repository import DataRepository
+from experiments.remove.data_repository import DataRepository
 
 BRONNEN = (DataRepository, DbDataRepository)
 
