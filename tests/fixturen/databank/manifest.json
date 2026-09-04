@@ -1,6 +1,6 @@
 {
-  "gemaakt_op": "2026-09-03T21:31:03.512158+00:00",
-  "alembic_revisie": "0021",
+  "gemaakt_op": "2026-09-04T05:20:46.246683+00:00",
+  "alembic_revisie": "0022",
   "actieve_dataversie": "20260903T172618Z-f82afd0a",
   "met_zware_tabellen": false,
   "rijen": {
@@ -21,5 +21,5 @@
     "vtest_postcode_prijs": 8263
   },
   "bestand": "referentie.sql.gz",
-  "bytes": 544366
+  "bytes": 498561
 }
