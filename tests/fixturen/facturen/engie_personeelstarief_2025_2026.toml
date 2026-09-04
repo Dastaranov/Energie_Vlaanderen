@@ -184,6 +184,12 @@ gemiddelde_transportkost_eur_kwh = "0.0015601"
 #
 # De bovenste schijf is uit drie facturen afgeleid en niet uit een wettekst;
 # `geverifieerd` hoort daar dus op false te staan tot ze bevestigd is.
+#
+# Let op bij het doorvoeren: `tests/test_referentiefactuur.py` eist de
+# gasheffingen van de eerste referentiefactuur exact op 112,54 EUR bij
+# 12.181 kWh. Met het tweeschijvenmodel wordt dat 112,53. Eén cent, maar in
+# een test die exactheid claimt — hij hoort mee aangepast te worden, niet
+# als onverwachte rode test ontdekt.
 [aardgas.heffingen]
 bijdrage_op_de_energie_eur = "14.20"
 bijzondere_accijns_eur = "118.79"

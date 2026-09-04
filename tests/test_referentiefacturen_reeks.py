@@ -149,6 +149,12 @@ class TestDeGasaccijnsIsProgressief:
     Deze test legt de waarneming vast, niet de oplossing: de bovenste schijf is
     uit drie punten afgeleid en niet uit een wettekst. Zodra de masterdata
     gecorrigeerd is, hoort hier een test bij die het model zelf toetst.
+
+    **Wie die correctie doet, moet `test_referentiefactuur.py` mee aanpassen.**
+    Die test eist de gasheffingen van de eerste referentiefactuur exact op
+    112,54 EUR bij 12.181 kWh. Met het tweeschijvenmodel wordt dat 112,53 — één
+    cent, in een test die vandaag exactheid claimt. Geen mysterieuze rode test
+    dus, maar een verwacht gevolg.
     """
 
     # (volume kWh, aangerekende accijns EUR, bron)
@@ -311,6 +317,42 @@ class TestHetExclusiefNachtregisterWordtGeprijsd:
         with pytest.raises(ValueError, match="uitsluitend nacht"):
             rekenaar.supplier_cost(product, self._profiel(2076))
 
+    def test_een_formule_zonder_indexwaarde_valt_terug_met_een_waarschuwing(
+        self, rekenaar
+    ):
+        """Dezelfde terugval als bij dag en nacht, en dezelfde waarschuwing.
+
+        Op de huidige data komt deze tak niet voor: alle 2.855
+        `exclusive_night`-rijen dragen ofwel een berekende prijs ofwel een index
+        mét waarde. Ze stil laten afwijken van dag/nacht is precies hoe zo'n
+        verschil later onopgemerkt binnenkomt.
+        """
+        product = self._product("variabel", met_exclusief_nacht=True)
+        # Een formule met een indexnaam maar zonder waarde: `formula_ct` zou er
+        # stil de z-term uit halen.
+        product.formulas["exclusive_night"] = {
+            "z": D("99"), "a": D("1"),
+            "index_A": {"name": "onbekend", "value": None},
+        }
+        bedrag, waarschuwingen = rekenaar.supplier_cost(product, self._profiel(2076))
+        assert any("uitsluitend nacht" in w for w in waarschuwingen)
+        # 10 ct/kWh uit `components`, niet de 99 uit de formule.
+        zonder, _ = rekenaar.supplier_cost(product, self._profiel(0))
+        assert money(bedrag - zonder) == D("207.60")
+
+    def test_de_melding_noemt_de_juiste_oorzaak(self, rekenaar):
+        """Een formule zonder indexwaarde is iets anders dan een product dat
+        het register niet aanbiedt; op dezelfde melding uitkomen zou het tweede
+        als een productkenmerk laten lezen."""
+        product = self._product("variabel", met_exclusief_nacht=True)
+        product.formulas["exclusive_night"] = {
+            "z": D("99"), "a": D("1"),
+            "index_A": {"name": "onbekend", "value": None},
+        }
+        del product.components["exclusive_night"]
+        with pytest.raises(ValueError, match="geen indexwaarde"):
+            rekenaar.supplier_cost(product, self._profiel(2076))
+
     def test_zonder_volume_wordt_er_niets_geeist(self, rekenaar):
         """Een product zonder exclusief-nachttarief blijft bruikbaar voor een
         aansluiting die dat register niet heeft — anders zou de correctie de
@@ -461,9 +503,16 @@ class TestEnecoNetkostUitDeDatabank:
         h = eneco["elektriciteit"]["heffingen"]
         accijns = D(h["bijzondere_accijns_eur"])
         fonds = D(h["bijdrage_energiefonds_totaal_eur"])
+        factuur = D(eneco["elektriciteit"]["componenten"]["heffingen_eur"])
         onze = money(resultaat.totalen["levies"])
+
+        # Wat er wél uitkomt: de bijzondere accijns.
         assert abs(onze - accijns) <= D("0.05")
-        assert abs((onze + fonds) - (accijns + fonds)) <= D("0.05")
+        # En het gat is de bijdrage energiefonds, niet meer en niet minder.
+        # Dit moet het ontbrekende bedrag tegen `fonds` leggen; `fonds` aan
+        # beide kanten optellen zou een tautologie zijn die ook bij een
+        # energiefonds van nul slaagt.
+        assert abs((factuur - onze) - fonds) <= D("0.05")
 
 
 @pytest.mark.integration

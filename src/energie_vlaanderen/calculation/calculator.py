@@ -263,7 +263,8 @@ class Calculator:
         return total
 
     @staticmethod
-    def _exclusief_nachtprijs(product:Product,p:Profile,prijs:Optional[Decimal])->Decimal:
+    def _exclusief_nachtprijs(product:Product,p:Profile,prijs:Optional[Decimal],
+                              *,heeft_formule:bool=False)->Decimal:
         """De ct/kWh voor het register 'uitsluitend nacht' — of een fout.
 
         Dit register werd door `supplier_cost` nooit geprijsd: de vaste en de
@@ -285,10 +286,18 @@ class Calculator:
         """
         if p.afname_exclusief_nacht_kwh<=0: return D("0")
         if prijs is None:
+            # Twee oorzaken, en ze vragen om verschillend werk: een product dat
+            # dit register niet aanbiedt, tegenover een formule waarvan de
+            # indexwaarde ontbreekt. Ze op dezelfde melding laten uitkomen zou
+            # het tweede geval als een productkenmerk laten lezen.
+            reden = (
+                "wel een formule maar geen indexwaarde en geen berekende prijs"
+                if heeft_formule else "geen prijs"
+            )
             raise ValueError(
-                f"Product {product.name!r} van {product.supplier} heeft geen "
-                f"prijs voor het register 'uitsluitend nacht', terwijl het "
-                f"profiel er {p.afname_exclusief_nacht_kwh} kWh op draagt. "
+                f"Product {product.name!r} van {product.supplier} heeft {reden} "
+                f"voor het register 'uitsluitend nacht', terwijl het profiel er "
+                f"{p.afname_exclusief_nacht_kwh} kWh op draagt. "
                 "Die kWh zouden anders gratis zijn."
             )
         return prijs
@@ -311,7 +320,8 @@ class Calculator:
         if product.kind.startswith("vast"):
             d=product.components.get("day",product.components.get("single")); n=product.components.get("night",d)
             if d is None: raise ValueError("Vast product mist afnameprijs")
-            x=self._exclusief_nachtprijs(product,p,product.components.get("exclusive_night"))
+            x=self._exclusief_nachtprijs(product,p,product.components.get("exclusive_night"),
+                                         heeft_formule=False)
             return (p.afname_dag_kwh*d+p.afname_nacht_kwh*(n or d)
                     +p.afname_exclusief_nacht_kwh*x)/D("100")+fixed+extras,warnings
         if product.kind.startswith("variabel"):
@@ -326,9 +336,24 @@ class Calculator:
             if fn and not self.heeft_indexwaarde(fn):
                 n=product.components.get("night",d)
             fx=product.formulas.get("exclusive_night")
-            x=self.formula_ct(fx) if fx and self.heeft_indexwaarde(fx) else None
-            if x is None: x=product.components.get("exclusive_night")
-            x=self._exclusief_nachtprijs(product,p,x)
+            if fx and self.heeft_indexwaarde(fx):
+                x=self.formula_ct(fx)
+            else:
+                # Dezelfde terugval als bij dag en nacht hierboven, mét dezelfde
+                # waarschuwing: een berekende prijs uit de bron is iets anders
+                # dan een prijs die wij uit de formule afleiden, en dat verschil
+                # hoort zichtbaar te blijven. Vandaag komt deze tak niet voor —
+                # alle 2.855 `exclusive_night`-rijen dragen ofwel een prijs
+                # ofwel een index mét waarde — maar de tak stil laten afwijken
+                # van dag/nacht is precies hoe zo'n verschil later onopgemerkt
+                # binnenkomt.
+                x=product.components.get("exclusive_night")
+                if fx and x is not None:
+                    warnings.append(
+                        "Prijs voor 'uitsluitend nacht' gebruikt de aangeleverde "
+                        "berekende Prijs omdat de indexwaarde ontbreekt."
+                    )
+            x=self._exclusief_nachtprijs(product,p,x,heeft_formule=bool(fx))
             return (p.afname_dag_kwh*d+p.afname_nacht_kwh*n
                     +p.afname_exclusief_nacht_kwh*x)/D("100")+fixed+extras,warnings
         if product.kind.startswith("dynamisch"):
