@@ -346,18 +346,6 @@ def _add_audit_group(subparsers: argparse._SubParsersAction) -> None:
         help="Vergelijk gestagede CSVs cel voor cel met de bron-XLSX.",
     )
     add_version_arg(golden_parser)
-    golden_parser.add_argument(
-        "--bron",
-        choices=("bestanden", "databank"),
-        default="bestanden",
-        help=(
-            "Welke verwerkte kant tegen het bronwerkboek gelegd wordt. "
-            "'bestanden' leest de gestagede CSV's, 'databank' de tabellen. "
-            "Het werkboek blijft in beide gevallen de onafhankelijke bron — "
-            "alleen de kant die ermee vergeleken wordt verschilt. Nodig zodra "
-            "de CSV-weg verdwijnt."
-        ),
-    )
     add_json_flag(golden_parser)
     golden_parser.set_defaults(handler=audit.run_audit_golden)
 
@@ -698,18 +686,6 @@ def _add_gebruiker_group(subparsers: argparse._SubParsersAction) -> None:
     bereken_parser.add_argument(
         "--version",
         help="Dataversie om mee te rekenen. Standaard de actieve versie.",
-    )
-    bereken_parser.add_argument(
-        "--bron",
-        choices=("databank", "bestanden"),
-        default="databank",
-        help=(
-            "Waar de tarieven vandaan komen. De databank is de standaard: die "
-            "draagt maandelijkse historiek, terwijl een versiemap één "
-            "momentopname bevat — een contract van april 2026 herberekenen kan "
-            "daarom wel uit de databank en niet uit een enkele versiemap. "
-            "'bestanden' leest de gestagede CSV's en verdwijnt zodra die weg zijn."
-        ),
     )
     bereken_parser.add_argument(
         "--geen-metingen",

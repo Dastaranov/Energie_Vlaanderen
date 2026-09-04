@@ -19,7 +19,6 @@ from energie_vlaanderen.cli.helpers import (
 )
 from energie_vlaanderen.cli.output import emit, print_json
 from energie_vlaanderen.data.paths import DataPaths, DataPathsError
-from energie_vlaanderen.data.repository import DataRepository, DataRepositoryError
 from energie_vlaanderen.ingest.curves.pipeline import CurvesPipeline, CurvesPipelineError
 from energie_vlaanderen.ingest.downloader import ArtifactDownloader
 from energie_vlaanderen.ingest.raw_store import RawStore
@@ -862,12 +861,23 @@ def run_publish(args: argparse.Namespace, settings: Settings) -> int:
         shutil.rmtree(version_dir, ignore_errors=True)
         return fail("Kopiëren van staging naar versions mislukt: %s", exc)
 
-    # Valideer de kopie via DataRepository
-    try:
-        DataRepository(version_dir)
-    except DataRepositoryError as exc:
+    # Toets de kopie op aanwezigheid, niet op inhoud. De inhoud wordt hierna
+    # tegen het bronwerkboek gelegd binnen de importtransactie; dat is een
+    # sterkere controle dan wat hier stond.
+    #
+    # Vroeger gebeurde dat door een `DataRepository` op de kopie te bouwen — een
+    # CSV-lezer uit het rekenpad. Die weg is dicht: de CSV's dienen nog
+    # uitsluitend om de databank te vullen, en niets ná de import leest ze.
+    ontbrekend = [
+        naam for naam in ("vtest/master_vast.csv", "vtest/master_var_dyn.csv")
+        if not (version_dir / naam).is_file()
+    ]
+    if ontbrekend:
         shutil.rmtree(version_dir, ignore_errors=True)
-        return fail("Gepubliceerde versie is ongeldig en werd teruggedraaid: %s", exc)
+        return fail(
+            "Gepubliceerde versie is onvolledig en werd teruggedraaid; "
+            "ontbrekend: %s", ", ".join(ontbrekend),
+        )
 
     # Importeer naar de databank vóór de activatie. De databank is het
     # eindstation; als die de versie niet heeft, mag current.txt er niet naar

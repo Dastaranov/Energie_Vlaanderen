@@ -61,7 +61,10 @@ def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
     # van het CSV. Het tariefjaar komt uit het verwerkingsrapport (dus uit de
     # bestandsnaam van het werkboek) en niet uit het versie-id, dat het moment
     # van downloaden draagt.
-    uit_databank = getattr(args, "bron", "bestanden") == "databank"
+    # Altijd de databank. Het werkboek blijft de onafhankelijke bron; de CSV's
+    # dienen nog uitsluitend om de databank te vullen en worden ná de import
+    # niet meer gelezen.
+    uit_databank = True
     db_conn = None
     db_engine = None
     tariefjaar = None
@@ -300,53 +303,59 @@ def run_set_golden(args: argparse.Namespace, settings: Settings) -> int:
 # ---------------------------------------------------------
 
 def run_audit_sanity(args: argparse.Namespace, settings: Settings) -> int:
-    paths = DataPaths.from_settings(settings)
-    checker = SanityChecker(paths)
+    """De plausibiliteitscontrole, tegen de databank.
 
+    Ze las de gestagede CSV's. Die dienen nog uitsluitend om de databank te
+    vullen; alles ná de import leest de databank, en deze controle hoort daar
+    dus ook bij.
+
+    De regels zijn niet gewijzigd maar wél verhuisd naar `DatabankAudit`, en
+    dat is meer dan een verplaatsing: die draait binnen de importtransactie,
+    zodat een onmogelijke waarde de publicatie tegenhoudt. Deze losse aanroep
+    kon overgeslagen worden — dezelfde zwakte die `audit golden` had.
+
+    Twee implementaties van dezelfde regel naast elkaar houden is hoe ze uit
+    elkaar gaan lopen, dus dit commando is nu één schil om die ene.
+    """
+    from energie_vlaanderen.audit.databank import DatabankAudit
+    from energie_vlaanderen.infrastructure.db.connection import get_engine
+
+    engine = get_engine(settings.project_root)
     try:
-        report = checker.check_version(args.version)
-    except RuntimeError as exc:
-        return fail("Sanity check mislukt om te starten: %s", exc)
+        with engine.connect() as conn:
+            rapport = DatabankAudit(conn).run()
+    except Exception as exc:
+        return fail("Geen verbinding met de databank: %s", exc)
 
     def _text() -> None:
-        if report.valid:
-            print(f"✅ Sanity check GESLAAGD voor versie {args.version}!")
-            print(
-                "Alle geteste datasets voldoen aan de harde business rules "
-                "(geen onlogische extremen of onmogelijke waarden gevonden)."
-            )
-        else:
-            print(f"❌ Sanity check GEFAALD voor versie {args.version}!")
-            print(
-                f"Er zijn {len(report.violations)} schendingen gevonden die "
-                f"kritiek zijn voor een correcte berekening:\n"
-            )
-            for viol in report.violations:
-                row_info = f" (rij {viol.row_index})" if viol.row_index is not None else ""
-                print(f"  - [{viol.file}{row_info}] RULE '{viol.rule}': {viol.message}")
-            print(
-                "\nDit bestand moet gerepareerd worden (parser of data) voordat "
-                "de goedkeuring ('audit-approve') kan doorgaan."
-            )
+        if not rapport.bevindingen:
+            print("Sanity check geslaagd: geen onmogelijke of onlogische waarden.")
+            return
+        for bevinding in rapport.fouten:
+            print(f"[FOUT]   [{bevinding.tabel}] {bevinding.regel}")
+            print(f"         {bevinding.melding}")
+        for bevinding in rapport.waarschuwingen:
+            print(f"[LET OP] [{bevinding.tabel}] {bevinding.regel}")
+            print(f"         {bevinding.melding}")
+        if not rapport.fouten:
+            print("\nGeen fouten; de waarschuwingen gaan over data die de bron "
+                  "niet levert.")
 
     emit(
         args,
         text_fn=_text,
         json_obj={
-            "version_id": args.version,
-            "valid": report.valid,
-            "violations": [
-                {
-                    "file": viol.file,
-                    "row_index": viol.row_index,
-                    "rule": viol.rule,
-                    "message": viol.message,
-                }
-                for viol in report.violations
+            "geslaagd": rapport.geslaagd,
+            "fouten": len(rapport.fouten),
+            "waarschuwingen": len(rapport.waarschuwingen),
+            "bevindingen": [
+                {"tabel": b.tabel, "regel": b.regel,
+                 "ernst": b.ernst, "melding": b.melding}
+                for b in rapport.bevindingen
             ],
         },
     )
-    return 0 if report.valid else 2
+    return 0 if rapport.geslaagd else 2
 
 
 # ---------------------------------------------------------

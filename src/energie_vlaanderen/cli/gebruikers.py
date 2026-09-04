@@ -282,48 +282,6 @@ def _laad_markt(settings: Settings, van: date, tot: date):
     return None if df.empty else df
 
 
-def _nettarieven_per_jaar(settings: Settings, vtest_dir) -> dict:
-    """Alle beschikbare tariefjaren, elk met hun eigen dataversie.
-
-    De distributienettarieven worden per kalenderjaar goedgekeurd, maar een
-    afrekening loopt zelden gelijk met het kalenderjaar: een verbruiksperiode
-    van juni tot april kruist de jaarwissel. Zonder deze kaart zou zo'n periode
-    met de tarieven van één jaar doorgerekend worden.
-
-    Elke dataversie draagt haar tariefjaar in `tariffs_*_report.json` (uit de
-    bestandsnaam van het VREG-werkboek, niet uit het versie-id). Bij meerdere
-    versies voor hetzelfde jaar wint de nieuwste — versie-id's beginnen met een
-    tijdstempel. De productdata komt uit `vtest_dir`; alleen de tariefmap
-    verschilt per jaar.
-    """
-    import json
-
-    from energie_vlaanderen.data.paths import DataPaths
-    from energie_vlaanderen.data.repository import DataRepository
-    from energie_vlaanderen.nettarieven.netbeheerder import standaard_gemeente_csv
-
-    paden = DataPaths.from_settings(settings)
-    kandidaten = sorted(paden.versions.glob("*")) + sorted(paden.staging.glob("*"))
-
-    per_jaar: dict[int, Path] = {}
-    for map_ in kandidaten:
-        tariff_dir = map_ / "tariffs"
-        for rapport in sorted(tariff_dir.glob("tariffs_*_report.json")):
-            try:
-                jaar = json.loads(rapport.read_text(encoding="utf-8")).get("tarief_jaar")
-            except (OSError, json.JSONDecodeError):
-                continue
-            if isinstance(jaar, int):
-                # Nieuwste wint: de lus loopt oplopend door de versie-id's.
-                per_jaar[jaar] = tariff_dir
-
-    gemeente_csv = standaard_gemeente_csv(settings.data_root)
-    return {
-        jaar: DataRepository(vtest_dir, gemeente_csv=gemeente_csv, tariff_dir=tariff_dir)
-        for jaar, tariff_dir in per_jaar.items()
-    }
-
-
 def _nettarieven_uit_databank(conn) -> dict:
     """Eén repository per tariefjaar dat de databank draagt.
 
@@ -348,7 +306,6 @@ def _nettarieven_uit_databank(conn) -> dict:
 def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     """Rekent het dossier door over `[--van, --tot)`, deelperiode per deelperiode."""
     from energie_vlaanderen.data.paths import DataPaths
-    from energie_vlaanderen.data.repository import DataRepository, DataRepositoryError
     from energie_vlaanderen.gebruikers.berekening import BerekeningError, Kostberekening
     from energie_vlaanderen.heffingen.repository import HeffingenRepository
 
@@ -367,7 +324,11 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
 
     paden = DataPaths.from_settings(settings)
     versie = getattr(args, "version", None)
-    uit_databank = getattr(args, "bron", "databank") == "databank"
+    # De databank is de bron. De CSV's dienen nog uitsluitend om haar te
+    # vullen; alles ná de import leest de databank. Die knip staat hier hard in
+    # plaats van als keuze: een terugvaloptie die niemand gebruikt, verrot, en
+    # een tweede weg naar hetzelfde antwoord is een tweede weg om uiteen te
+    # lopen.
 
     try:
         heffingen = HeffingenRepository.load(settings.project_root / "config" / "heffingen")
@@ -381,49 +342,34 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     # daarom wél uit de databank en niet uit een enkele versiemap.
     db_engine = None
     db_conn = None
-    if uit_databank:
-        from energie_vlaanderen.data.db_repository import (
-            DbDataRepository,
-            DbDataRepositoryError,
-        )
-        from energie_vlaanderen.infrastructure.db.connection import get_engine
 
-        db_engine = get_engine(settings.project_root)
-        try:
-            db_conn = db_engine.connect()
-        except Exception as exc:
-            return fail(
-                "Geen verbinding met de databank: %s\n\n"
-                "De berekening leest sinds kort uit de databank. Met "
-                "`--bron bestanden` gaat ze via de gestagede CSV's.", exc,
-            )
-        data_dir = paden.version_dir(versie) if versie else paden.current_data_dir()
-        try:
-            nettarieven = _nettarieven_uit_databank(db_conn)
-        except DbDataRepositoryError as exc:
-            db_conn.close()
-            db_engine.dispose()
-            return fail("%s", exc)
-        if not nettarieven:
-            db_conn.close()
-            db_engine.dispose()
-            return fail(
-                "Geen nettarieven in de databank. Laad ze met "
-                "`energievergelijker db backfill --version <raw-id>`."
-            )
-        repo = nettarieven[max(nettarieven)]
-    else:
-        data_dir = paden.version_dir(versie) if versie else paden.current_data_dir()
-        if data_dir is None or not Path(data_dir).is_dir():
-            return fail(
-                "Geen actieve dataversie gevonden. Draai `energievergelijker "
-                "version publish --version <id>` of geef --version mee."
-            )
-        try:
-            repo = DataRepository.from_settings(settings, data_dir)
-        except (DataRepositoryError, OSError) as exc:
-            return fail("%s", exc)
-        nettarieven = _nettarieven_per_jaar(settings, Path(data_dir))
+    from energie_vlaanderen.data.db_repository import (
+        DbDataRepository,  # noqa: F401 - via _nettarieven_uit_databank
+        DbDataRepositoryError,
+    )
+    from energie_vlaanderen.infrastructure.db.connection import get_engine
+
+    db_engine = get_engine(settings.project_root)
+    try:
+        db_conn = db_engine.connect()
+    except Exception as exc:
+        return fail("Geen verbinding met de databank: %s", exc)
+
+    data_dir = paden.version_dir(versie) if versie else paden.current_data_dir()
+    try:
+        nettarieven = _nettarieven_uit_databank(db_conn)
+    except DbDataRepositoryError as exc:
+        db_conn.close()
+        db_engine.dispose()
+        return fail("%s", exc)
+    if not nettarieven:
+        db_conn.close()
+        db_engine.dispose()
+        return fail(
+            "Geen nettarieven in de databank. Laad ze met "
+            "`energievergelijker db backfill --version <raw-id>`."
+        )
+    repo = nettarieven[max(nettarieven)]
 
     omvormer_kva = next(
         (a.omvormer_kva for a in dossier.assets if a.omvormer_kva is not None),
@@ -468,7 +414,7 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
         print_kv(
             "Dataversie",
             (Path(data_dir).name if data_dir else "(uit de databank)")
-            + ("  [databank]" if uit_databank else "  [bestanden]"),
+            + "  [databank]",
         )
         print_kv(
             "Meetdata",
