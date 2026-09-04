@@ -54,6 +54,11 @@ topologie = "ac_gekoppeld"
 merk = ""
 model = ""
 
+# Een onbekende sleutel wordt geweigerd, niet genegeerd. `afname_kwh` in plaats
+# van `afname_dag_kwh` leverde eerder een opgave van 0 kWh op — en dus een
+# berekening die klopte op een verkeerd getal. De foutmelding noemt de
+# dichtstbijzijnde bekende sleutel.
+
 [verbruik]
 # Handmatig doorgegeven jaarverbruik. Wordt als "manueel" geboekt en dus
 # gereconstrueerd, niet exact: het is de beste beschikbare opgave, maar niet

@@ -114,6 +114,86 @@ class Dossier:
 # ---------------------------------------------------------------------------
 
 
+# Welke sleutels elke sectie kent. Een sleutel die hier niet in staat wordt
+# geweigerd in plaats van genegeerd.
+#
+# Dat is niet overdreven strengheid. `afname_kwh` schrijven in plaats van
+# `afname_dag_kwh` leverde een verbruiksopgave van 0 kWh op, en daarmee een
+# berekening die netjes 21,40 EUR teruggaf in plaats van 291,56 — geen fout,
+# geen waarschuwing, alleen een bedrag dat te laag was. Dezelfde foutklasse als
+# elke andere stille nul in dit project: het valt pas op als iemand het cijfer
+# wantrouwt.
+#
+# `resolutie` en `ontbrekende_data` staan hier omdat de documentatie en
+# `gebruiker.voorbeeld.toml` ze noemen; ze worden vandaag door niets gelezen.
+# Ze weigeren zou bestaande bestanden breken, ze weglaten zou ze onzichtbaar
+# maken — vandaar dat ze toegestaan zijn met deze vermelding.
+_SLEUTELS: dict[str, frozenset[str]] = {
+    "gebruiker": frozenset({"postcode", "gemeente", "segment", "naam"}),
+    "aansluiting": frozenset({
+        "elektriciteit", "gas", "ean_elektriciteit", "ean_gas",
+        "aansluitingsvermogen_kva", "aantal_fasen", "meter", "registerschema",
+        "zonnepanelen", "terugdraaiend", "gemeten_maandpiek_kw", "omvormer_kva",
+        "pv_kwp", "batterij", "omvormer",
+    }),
+    "aansluiting.batterij": frozenset({"merk", "model", "topologie"}),
+    "aansluiting.omvormer": frozenset({"merk", "model"}),
+    "verbruik": frozenset({
+        "jaar", "periode_van", "periode_tot", "bron", "fluvius_csv",
+        "resolutie", "ontbrekende_data",
+        "afname_dag_kwh", "afname_nacht_kwh", "afname_exclusief_nacht_kwh",
+        "injectie_dag_kwh", "injectie_nacht_kwh",
+    }),
+    "verbruiksopgave": frozenset({
+        "energie", "periode_van", "periode_tot", "bron",
+        "afname_dag_kwh", "afname_nacht_kwh", "afname_exclusief_nacht_kwh",
+        "injectie_dag_kwh", "injectie_nacht_kwh",
+    }),
+    "contract": frozenset({
+        "leverancier", "product", "type", "van", "startdatum", "tot",
+        "vreg_id", "tariefkaart_van", "bron", "injectie_product",
+    }),
+}
+
+# `[huidig_contract.*]` beschrijft hetzelfde als `[[contract.*]]`, alleen zonder
+# einddatum. Dezelfde sleutels dus.
+_SLEUTELS["huidig_contract"] = _SLEUTELS["contract"]
+
+
+def _controleer_sleutels(data: Mapping[str, Any], sectie: str) -> None:
+    """Weiger een sleutel die deze sectie niet kent.
+
+    De sectienaam mag een achtervoegsel dragen (`contract.elektriciteit`,
+    `huidig_contract.gas`); de sleutels zijn dezelfde.
+    """
+    import difflib
+
+    basis = sectie.split(".")[0]
+    toegestaan = _SLEUTELS.get(sectie) or _SLEUTELS.get(basis)
+    if toegestaan is None or not isinstance(data, Mapping):
+        return
+
+    onbekend = sorted(set(data) - toegestaan)
+    if not onbekend:
+        return
+
+    meldingen = []
+    for sleutel in onbekend:
+        # De fout is bijna altijd een typfout of een half onthouden veldnaam,
+        # dus de dichtstbijzijnde bekende sleutel erbij scheelt zoekwerk.
+        gelijkend = difflib.get_close_matches(sleutel, sorted(toegestaan), n=1, cutoff=0.6)
+        meldingen.append(
+            f"{sleutel!r}" + (f" (bedoelde je {gelijkend[0]!r}?)" if gelijkend else "")
+        )
+
+    raise GebruikersError(
+        f"[{sectie}] kent de sleutel(s) {', '.join(meldingen)} niet. "
+        "Een onbekende sleutel wordt geweigerd en niet genegeerd: stil "
+        "overslaan levert een berekening op die klopt op een verkeerd getal. "
+        f"Toegestaan: {', '.join(sorted(toegestaan))}."
+    )
+
+
 def _sectie(data: Mapping[str, Any], naam: str, *, verplicht: bool = True) -> Mapping[str, Any]:
     waarde = data.get(naam)
     if waarde is None:
@@ -220,8 +300,11 @@ def lees_dossier(
 
     gebruiker_raw = _sectie(ruw, "gebruiker")
     aansluiting_raw = _sectie(ruw, "aansluiting")
+    _controleer_sleutels(aansluiting_raw, "aansluiting")
     verbruik_raw = _sectie(ruw, "verbruik", verplicht=False)
+    _controleer_sleutels(verbruik_raw, "verbruik")
 
+    _controleer_sleutels(gebruiker_raw, "gebruiker")
     postcode = _tekst(gebruiker_raw, "postcode", "gebruiker", verplicht=True)
     gemeente = _tekst(gebruiker_raw, "gemeente", "gebruiker")
     segment = _segment(_tekst(gebruiker_raw, "segment", "gebruiker") or "Woning")
@@ -397,7 +480,9 @@ def lees_dossier(
         )
 
     batterij_raw = _sectie(aansluiting_raw, "batterij", verplicht=False)
+    _controleer_sleutels(batterij_raw, "aansluiting.batterij")
     omvormer_raw = _sectie(aansluiting_raw, "omvormer", verplicht=False)
+    _controleer_sleutels(omvormer_raw, "aansluiting.omvormer")
     merk = _tekst(batterij_raw, "merk", "aansluiting.batterij")
     model = _tekst(batterij_raw, "model", "aansluiting.batterij")
     if merk and model and elek_punt is not None:
@@ -533,6 +618,7 @@ def _contract_uit(
 ) -> Leveringscontract:
     if not isinstance(rij, Mapping):
         raise GebruikersError(f"[{sectie}] moet een TOML-sectie zijn.")
+    _controleer_sleutels(rij, sectie)
     soort = _keuze(
         _tekst(rij, "type", sectie, verplicht=True), Contracttype, sectie, "type"
     )
@@ -645,6 +731,8 @@ def _opgave_uit(rij: Mapping[str, Any], punten, sectie: str) -> Verbruiksopgave:
     """Eén `[[verbruiksopgave]]`-sectie."""
     if not isinstance(rij, Mapping):
         raise GebruikersError(f"[[{sectie}]] moet een TOML-sectie zijn.")
+
+    _controleer_sleutels(rij, sectie)
 
     van = _datum(rij, "periode_van", sectie, verplicht=True)
     tot = _datum(rij, "periode_tot", sectie, verplicht=True)

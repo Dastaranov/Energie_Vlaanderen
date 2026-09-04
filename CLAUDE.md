@@ -298,6 +298,16 @@ betaalt die vaste componenten één keer per deelperiode: een contractwissel in
 dit bewaakt staat in `tests/test_gebruikers_berekening.py`: **knippen mag het
 totaal niet veranderen.**
 
+**Een onbekende sleutel in `gebruiker.toml` wordt geweigerd, niet genegeerd.**
+`afname_kwh` schrijven in plaats van `afname_dag_kwh` leverde een
+`[[verbruiksopgave]]` van 0 kWh op. De berekening liep gewoon door en gaf
+21,40 EUR terug waar 291,56 hoorde te staan — geen fout, geen waarschuwing,
+alleen een bedrag dat te laag was. Het viel enkel op omdat het cijfer wantrouwen
+wekte. `toml_io._SLEUTELS` legt per sectie vast wat er mag staan; de melding
+noemt de dichtstbijzijnde bekende sleutel, want de fout is bijna altijd een
+typfout. `resolutie` en `ontbrekende_data` staan in die lijst omdat de
+documentatie ze noemt, al leest niets ze vandaag.
+
 **Exactheidsklasse en aannames zijn types, geen rapportage.** `Exactheidsklasse`
 (exact / gereconstrueerd / geschat / scenario, Manifest §5.8) en `Aanname`
 (veld, waarde, bron, geverifieerd, beinvloedt_bedrag) reizen mee tot in het

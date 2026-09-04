@@ -44,10 +44,9 @@ zonnepanelen = false
 # tussen runs.
 gemeten_maandpiek_kw = 5.0
 
-[verbruik]
-# Een rond jaarverbruik, enkelvoudig register. Geen meetbestand: dat zou een
-# Fluvius-export vragen en die is persoonlijk.
-elektriciteit_kwh = 3500
+# Geen [verbruik]-sectie: het jaarverbruik staat in de opgave hieronder. Er
+# stond hier eerst `elektriciteit_kwh = 3500` — een sleutel die niet bestaat en
+# die stil genegeerd werd. Sinds de sleutelcontrole weigert het dossier zoiets.
 
 [[verbruiksopgave]]
 energie = "elektriciteit"
