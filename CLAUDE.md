@@ -981,17 +981,34 @@ twee dingen tegelijk op: leveranciers delen één kaart over meerdere producten,
 en een kaart die wijzigt krijgt vanzelf een nieuw pad zodat de oude blijft
 staan. `scripts/archiveer_tariefkaarten.py` draait het.
 
-Stand op 2026-09-04: **281 van de 351** kaarten binnen, 128 MB.
+Stand op 2026-09-04: **302 van de 351** kaarten binnen, 133 MB.
 
 **Niet elke link wijst naar een PDF.** 83 van de 351 kwamen uit op een
 productoverzicht. De resolver haalt die pagina op, verzamelt de kandidaatlinks
 mét hun ankertekst en matcht op productnaam én energievorm — over de tekst en
 de URL, want Odoo levert de kaart als `/web/content/…/1772/file` waar de
-bestandsnaam niets zegt en het anker "Tariefkaart_Flow_EL". Dat loste er 27 op.
+bestandsnaam niets zegt en het anker "Tariefkaart_Flow_EL". Dat lost er 48 op.
 **Bij twijfel wordt er niets gekozen**: een verkeerde kaart geeft een
 berekening die klopt op de verkeerde formule, en dan faalt er niets. De
-overwogen links reizen mee naar het foutenregister, zodat het uitzoekwerk per
-leverancier een opzoeking wordt en geen heronderzoek.
+overwogen links reizen mee naar het foutenregister, en
+`archiveer_tariefkaarten.py --kandidaten` leest ze terug — zonder netwerk,
+want ze staan er al. Het uitzoekwerk per leverancier is daarmee een opzoeking
+geworden en geen heronderzoek.
+
+Uit die dump kwamen drie regels, en het zijn regels en geen uitzonderingen
+omdat ze bij meerdere leveranciers tegelijk gelden:
+
+- **`_NG` is "natural gas".** De Energy Together-sites labelen
+  `Tariefkaart_APEX Online_NG` naast `_EL`; een gasherkenning die alleen op
+  "gas" zocht liet bij een elektriciteitscontract beide kandidaten staan.
+- **Een exacte naam wint van een deelstring.** "PRIME" zit ook in "PRIME Plus",
+  "Flex" in "FlexPro", "Variabel" in "VariabelPro".
+- **Gelijke kandidaten zijn geen dubbelzinnigheid.** Dezelfde kaart staat er
+  onder twee id's met dezelfde ankertekst (`…/1751/file` en `…/1757/file`,
+  beide "Tariefkaart_NOVA_NG"). Op naam niet te scheiden, en kiezen zou een gok
+  zijn — maar zodra ze byte voor byte gelijk zijn, ís er niets te kiezen. Geen
+  versoepeling van de regel maar de toepassing ervan: verschillen ze, dan
+  blijft het een fout.
 
 Twee valstrikken die daarbij vastliggen. "Flow" bestaat in beide energievormen
 op dezelfde pagina — dezelfde fout als `zoek_product()` die vastzat op
@@ -1011,12 +1028,14 @@ enkele waarneming, en de volgende run telde ze allemaal opnieuw als "nieuw".
 Daarmee is de eerste-waarnemingsdatum weg, en dat is nu net wat dit archief
 onderscheidt van een map met PDF's.
 
-Wat er overblijft, is per leverancier van vorm en staat met kandidaatlinks in
-`index.json`: 56 landingspagina's waar de generieke match niet eenduidig is
-(vooral de Energy Together-familie, waar Pro-varianten dezelfde kaart delen) en
-14 HTTP 404's van Ecofix, dat naar een leeg portaal verwijst. Sommige
-leveranciers houden zelf een kaartarchief bij; dat is per leverancier te
-bekijken.
+Wat er overblijft zijn 49 stuks, en het zijn er geen die met een betere regel
+op te lossen zijn: 17 HTTP 404's (Ecofix wijst naar een leeg portaal, ENGIE's
+professionals-pagina naar een verlopen API-route), en 32 pagina's die hun
+kaarten pas na uitvoering van JavaScript tonen (Servolt, Smappee Smiles) of ze
+alleen onder een interne code voeren zonder productnaam (Wase Wind:
+`WW-VD-HHKZ-2601` tot `-2607`). Die vragen een browser of een afspraak met de
+leverancier, geen scraper. Sommige leveranciers houden zelf een kaartarchief
+bij; dat is per leverancier te bekijken.
 
 ### Injectie
 

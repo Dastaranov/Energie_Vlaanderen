@@ -161,7 +161,10 @@ def _plat(tekst: str) -> str:
 
 
 def _is_gasachtig(tekst: str) -> bool:
-    return bool(re.search(r"\bgas\b|_gas|aardgas", tekst, re.I))
+    # `_NG` is "natural gas" en niet iets met elektriciteit. De Energy
+    # Together-sites labelen hun kaarten `Tariefkaart_APEX Online_NG` naast
+    # `_EL`; zonder deze herkenning bleven beide over en werd er niets gekozen.
+    return bool(re.search(r"\bgas\b|_gas|aardgas|_ng\b|_ng_", tekst, re.I))
 
 
 def _is_elektrischachtig(tekst: str) -> bool:
@@ -235,7 +238,24 @@ def kies_kandidaat(
 
     if len(treffers) == 1:
         return treffers[0], kandidaten
-    return None, treffers or kandidaten
+
+    # Een exacte naam wint van een deelstring. "PRIME" zit ook in "PRIME Plus",
+    # "Flex" in "FlexPro" en "Variabel" in "VariabelPro" — zonder deze regel
+    # levert elk van die drie twee kandidaten en wordt er niets gekozen,
+    # terwijl de juiste er letterlijk tussen staat.
+    exact = [k for k in treffers if doel in _naamdelen(k.label)]
+    if len(exact) == 1:
+        return exact[0], kandidaten
+    return None, (exact or treffers or kandidaten)
+
+
+def _naamdelen(label: str) -> set[str]:
+    """De losse naamdelen van een ankertekst, genormaliseerd.
+
+    "Tariefkaart_APEX Online_EL" levert {"tariefkaart", "apexonline", "el"}.
+    Splitsen op `_` en niet op spaties: de productnaam zelf bevat spaties.
+    """
+    return {_plat(deel) for deel in (label or "").split("_") if deel.strip()}
 
 
 class TariefkaartArchief:
@@ -406,6 +426,38 @@ class TariefkaartArchief:
         kandidaten = kandidaten_uit_pagina(html, bron.url)
         return kies_kandidaat(kandidaten, bron.product, bron.energie_type)
 
+    # Hoeveel kandidaten er hoogstens uitgeprobeerd worden om te zien of ze
+    # hetzelfde document zijn. Vier is ruim voor de gevallen die het oplost
+    # (dubbele Odoo-id's voor één kaart) en laag genoeg om een historiekpagina
+    # met 21 links niet leeg te trekken.
+    MAX_ONTDUBBEL = 4
+
+    def _ontdubbel(self, kandidaten: list) -> tuple:
+        """Meerdere kandidaten die hetzelfde document blijken te zijn.
+
+        De Energy Together-sites dragen dezelfde kaart onder twee verschillende
+        id's (`.../1751/file` en `.../1757/file`, beide met de ankertekst
+        "Tariefkaart_NOVA_NG"). Op naam is dat niet te scheiden, en kiezen zou
+        een gok zijn — maar zodra ze byte voor byte gelijk zijn, is er niets te
+        kiezen: het ís één kaart.
+
+        Dat is geen versoepeling van de regel maar de toepassing ervan. Er
+        wordt pas iets bewaard als vaststaat dát het hetzelfde document is;
+        verschillen ze, dan blijft het een fout.
+        """
+        if not 2 <= len(kandidaten) <= self.MAX_ONTDUBBEL:
+            return None, None
+        uitslagen = []
+        for kandidaat in kandidaten:
+            try:
+                uitslagen.append((kandidaat, self.haal_op(kandidaat.url)))
+            except Exception:  # noqa: BLE001 - een onbereikbare kandidaat telt niet mee
+                return None, None
+        digests = {u[1][0] for u in uitslagen}
+        if len(digests) != 1:
+            return None, None
+        return uitslagen[0][0], uitslagen[0][1]
+
     # -- de lus -----------------------------------------------------------
 
     def archiveer(
@@ -469,11 +521,22 @@ class TariefkaartArchief:
                         keuze, overwogen = self._via_landingspagina(bron)
                     except Exception as tweede:  # noqa: BLE001
                         eerste = tweede
+                uitslag = None
+                if keuze is None and overwogen:
+                    # Zijn de kandidaten hetzelfde document, dan valt er niets
+                    # te kiezen en is de dubbelzinnigheid geen dubbelzinnigheid.
+                    # `_ontdubbel` heeft ze dan al opgehaald.
+                    keuze, uitslag = self._ontdubbel(overwogen)
+                    if keuze is not None:
+                        overwogen = []
+
                 if keuze is None:
                     exc = eerste
                 else:
                     try:
-                        digest, bytes_, content_type, kop_offset = self.haal_op(keuze.url)
+                        if uitslag is None:
+                            uitslag = self.haal_op(keuze.url)
+                        digest, bytes_, content_type, kop_offset = uitslag
                         document_url = keuze.url
                         via_landingspagina = True
                         exc = None

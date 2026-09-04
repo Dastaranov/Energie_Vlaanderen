@@ -410,3 +410,94 @@ class TestDeLandingspagina:
         bron = Kaartbron(vreg_id="A1", leverancier="T", product="Eco Plus flex",
                          energie_type="elektriciteit", url=landing)
         assert archief.archiveer([bron]).mislukt == 1
+
+
+class TestDeDrieRegelsDieDeRestOplosten:
+    """Uit het foutenregister afgelezen, niet per leverancier uitgezocht.
+
+    De resolver bewaart bij elke mislukking de overwogen links. Daaruit bleken
+    drie patronen die niets met één leverancier te maken hebben — en dus als
+    regel horen en niet als uitzondering.
+    """
+
+    def test_ng_telt_als_gas(self, tmp_path, antwoorden):
+        """`_NG` is "natural gas".
+
+        De Energy Together-sites labelen `Tariefkaart_APEX Online_NG` naast
+        `_EL`. Zonder deze herkenning bleven bij een elektriciteitscontract
+        beide over en werd er niets gekozen — terwijl de juiste er letterlijk
+        tussen stond.
+        """
+        landing = "https://x.be/products"
+        antwoorden[landing] = _Antwoord(
+            b"""<html><body>
+              <a href="/c/1760/file">Tariefkaart_APEX Online_EL</a>
+              <a href="/c/1761/file">Tariefkaart_APEX Online_NG</a>
+            </body></html>""", url=landing, content_type="text/html")
+        antwoorden["https://x.be/c/1760/file"] = _Antwoord(
+            b"%PDF-1.4 elek", url="https://x.be/c/1760/file")
+        archief = _archief(tmp_path)
+        bron = Kaartbron(vreg_id="A1", leverancier="T", product="APEX Online",
+                         energie_type="elektriciteit", url=landing)
+        assert archief.archiveer([bron]).nieuw == 1
+        assert archief.lees_register()["kaarten"][0]["document_url"].endswith("1760/file")
+
+    def test_een_exacte_naam_wint_van_een_deelstring(self, tmp_path, antwoorden):
+        """"PRIME" zit ook in "PRIME Plus", "Flex" in "FlexPro".
+
+        Zonder deze regel leveren die twee kandidaten op en wordt er niets
+        gekozen, terwijl de juiste eenduidig aanwijsbaar is.
+        """
+        landing = "https://x.be/products"
+        antwoorden[landing] = _Antwoord(
+            b"""<html><body>
+              <a href="/c/1752/file">Tariefkaart_PRIME Plus_EL</a>
+              <a href="/c/1758/file">Tariefkaart_PRIME_EL</a>
+            </body></html>""", url=landing, content_type="text/html")
+        antwoorden["https://x.be/c/1758/file"] = _Antwoord(
+            b"%PDF-1.4 prime", url="https://x.be/c/1758/file")
+        archief = _archief(tmp_path)
+        bron = Kaartbron(vreg_id="A1", leverancier="T", product="PRIME",
+                         energie_type="elektriciteit", url=landing)
+        assert archief.archiveer([bron]).nieuw == 1
+        assert archief.lees_register()["kaarten"][0]["document_url"].endswith("1758/file")
+
+    def test_gelijke_kandidaten_zijn_geen_dubbelzinnigheid(self, tmp_path, antwoorden):
+        """Twee id's, één kaart.
+
+        De Energy Together-sites dragen dezelfde kaart onder twee id's met
+        dezelfde ankertekst. Op naam is dat niet te scheiden en kiezen zou een
+        gok zijn — maar zodra ze byte voor byte gelijk zijn, ís er niets te
+        kiezen. Dat is geen versoepeling van de regel maar de toepassing ervan.
+        """
+        landing = "https://x.be/products"
+        antwoorden[landing] = _Antwoord(
+            b"""<html><body>
+              <a href="/c/1751/file">Tariefkaart_NOVA_NG</a>
+              <a href="/c/1757/file">Tariefkaart_NOVA_NG</a>
+            </body></html>""", url=landing, content_type="text/html")
+        for i in ("1751", "1757"):
+            antwoorden[f"https://x.be/c/{i}/file"] = _Antwoord(
+                b"%PDF-1.4 een en dezelfde kaart", url=f"https://x.be/c/{i}/file")
+        archief = _archief(tmp_path)
+        bron = Kaartbron(vreg_id="A1", leverancier="T", product="NOVA",
+                         energie_type="gas", url=landing)
+        assert archief.archiveer([bron]).nieuw == 1
+        assert len(list((archief.wortel / "documenten").rglob("*.pdf"))) == 1
+
+    def test_verschillende_kandidaten_blijven_een_fout(self, tmp_path, antwoorden):
+        """De keerzijde, en ze is de reden dat de vorige regel mag bestaan."""
+        landing = "https://x.be/products"
+        antwoorden[landing] = _Antwoord(
+            b"""<html><body>
+              <a href="/c/1/file">Tariefkaart_NOVA_NG</a>
+              <a href="/c/2/file">Tariefkaart_NOVA_NG</a>
+            </body></html>""", url=landing, content_type="text/html")
+        antwoorden["https://x.be/c/1/file"] = _Antwoord(
+            b"%PDF-1.4 kaart een", url="https://x.be/c/1/file")
+        antwoorden["https://x.be/c/2/file"] = _Antwoord(
+            b"%PDF-1.4 kaart twee, anders", url="https://x.be/c/2/file")
+        archief = _archief(tmp_path)
+        bron = Kaartbron(vreg_id="A1", leverancier="T", product="NOVA",
+                         energie_type="gas", url=landing)
+        assert archief.archiveer([bron]).mislukt == 1

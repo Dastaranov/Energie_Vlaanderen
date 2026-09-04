@@ -45,7 +45,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--droogloop", action="store_true",
                         help="Toon wat er opgehaald zou worden, haal niets op.")
     parser.add_argument("--json", action="store_true", dest="als_json")
+    parser.add_argument(
+        "--kandidaten", action="store_true",
+        help=("Toon per leverancier wat er nog niet eenduidig te herleiden is, "
+              "uit het bestaande register. Haalt niets op — de overwogen links "
+              "zijn bij de vorige run al bewaard."),
+    )
     args = parser.parse_args(argv)
+
+    if args.kandidaten:
+        return _toon_kandidaten(ROOT / args.map, args.leverancier, args.als_json)
 
     with get_engine(ROOT).connect() as conn:
         bronnen = bronnen_uit_databank(conn)
@@ -100,6 +109,54 @@ def main(argv: list[str] | None = None) -> int:
     # alleen wanneer er niets gelukt is.
     if rapport.nieuw + rapport.ongewijzigd + rapport.gewijzigd == 0:
         return 1
+    return 0
+
+
+def _toon_kandidaten(wortel: Path, leverancier: str | None, als_json: bool) -> int:
+    """Wat er nog open staat, uit het register en zonder netwerk.
+
+    De resolver bewaart bij elke mislukking de links die hij overwogen heeft.
+    Het uitzoekwerk per leverancier is daarmee een opzoeking: je ziet in één
+    oogopslag of de kaart er wél staat maar onder een naam die de generieke
+    match niet herkent, of dat er helemaal niets te halen valt.
+    """
+    from energie_vlaanderen.ingest.tariefkaarten import TariefkaartArchief
+
+    register = TariefkaartArchief(wortel).lees_register()
+    fouten = register.get("fouten", [])
+    if leverancier:
+        naald = leverancier.casefold()
+        fouten = [f for f in fouten if naald in f["leverancier"].casefold()]
+    if als_json:
+        print(json.dumps(fouten, indent=2, ensure_ascii=False))
+        return 0
+
+    per_leverancier: dict[str, list] = {}
+    for f in fouten:
+        per_leverancier.setdefault(f["leverancier"], []).append(f)
+
+    for naam, groep in sorted(per_leverancier.items(), key=lambda x: -len(x[1])):
+        zonder = [f for f in groep if not f.get("kandidaten")]
+        print(f"\n{'=' * 72}\n{naam}  —  {len(groep)} open"
+              + (f", {len(zonder)} zonder kandidaten" if zonder else ""))
+        if zonder:
+            print(f"  onbereikbaar: {zonder[0]['reden'][:90]}")
+        # De kandidaatlijst is per landingspagina gelijk; één keer tonen
+        # volstaat om de regel af te lezen.
+        getoond = set()
+        for f in groep:
+            if not f.get("kandidaten"):
+                continue
+            sleutel = tuple(sorted(k["label"] for k in f["kandidaten"]))
+            producten = [g["product"] for g in groep
+                         if tuple(sorted(k["label"] for k in g.get("kandidaten", []))) == sleutel]
+            if sleutel in getoond:
+                continue
+            getoond.add(sleutel)
+            print(f"  producten : {', '.join(sorted(set(producten)))[:150]}")
+            print(f"  pagina    : {f['url'][:100]}")
+            for k in f["kandidaten"][:8]:
+                print(f"     {k['label'][:44]:44s}  {k['url'][-60:]}")
     return 0
 
 
