@@ -22,6 +22,8 @@ from dataclasses import dataclass
 
 import sqlalchemy as sa
 
+from energie_vlaanderen.audit.golden import FieldMismatch, GoldenAuditResult
+
 
 @dataclass(frozen=True)
 class Bevinding:
@@ -225,3 +227,224 @@ class DatabankAudit:
                     "where table_schema='public' and table_name=:t and column_name=:c"),
             {"t": tabel, "c": kolom},
         ).scalar())
+
+
+# De kolomnamen van het VREG-werkboek, zoals `TariffGoldenAuditor` ze verwacht.
+# De databank noemt ze anders; de vertaling staat hier zodat de audit niets van
+# het databankschema hoeft te weten.
+_TARIEF_KOLOMMEN = {
+    "netbeheerder_code": "Netbeheerder",
+    "contract_richting": "Contracttype",
+    "klanttype": "Klanttype",
+    "tarieftype": "Tarieftype",
+    "tariefdetail": "Tariefdetail",
+    "tariefnotering": "Tariefnotering",
+    "prijs": "Prijs_num",
+    "source_sheet": "source_sheet",
+    "source_row": "source_row",
+}
+
+# Welke klanttypes in welk bestand terechtkwamen. De pipeline splitst de
+# elektriciteitstarieven over drie bestanden; de databank kent die splitsing
+# niet, dus voor een vergelijking per domein moet ze hier gereproduceerd worden.
+_HS_MS_KLANTTYPES = frozenset(
+    {"ELEK_HS1", "ELEK_HS2", "ELEK_MS1", "ELEK_MS2", "ELEK_LS_DC"}
+)
+
+
+def nettarieven_als_frame(
+    conn: sa.Connection,
+    *,
+    energie_type: str,
+    richting: str,
+    tariefjaar: int,
+):
+    """De nettarieven uit de databank, in de vorm van het gestagede CSV.
+
+    Hiermee kan `audit golden` de **databank** tegen het bronwerkboek leggen in
+    plaats van het CSV. Dat is wat de controle overeind houdt wanneer de
+    CSV-weg verdwijnt: het werkboek blijft de onafhankelijke bron, alleen de
+    kant die ermee vergeleken wordt verhuist.
+
+    `richting` is "afname", "injectie" of "hoogspanning". Dat laatste is geen
+    richting maar een bestandsindeling: de pipeline schrijft de hoogspannings-
+    en middenspanningsklanttypes apart weg, met afname én injectie samen.
+    """
+    import pandas as pd
+
+    from datetime import date
+
+    kolommen = ", ".join(_TARIEF_KOLOMMEN)
+    rijen = conn.execute(
+        sa.text(
+            f"select {kolommen} from netbeheerder_tarief "  # noqa: S608
+            "where geldig_van = :van and energie_type = :energie"
+        ),
+        {"van": date(int(tariefjaar), 1, 1), "energie": energie_type},
+    ).mappings().all()
+
+    frame = pd.DataFrame([dict(r) for r in rijen])
+    if frame.empty:
+        return frame
+    frame = frame.rename(columns=_TARIEF_KOLOMMEN)
+
+    # De databank schrijft "afname"; het werkboek en de auditor "Afname".
+    frame["Contracttype"] = frame["Contracttype"].str.capitalize()
+
+    is_hs = frame["Klanttype"].isin(_HS_MS_KLANTTYPES)
+    if richting == "hoogspanning":
+        return frame[is_hs].reset_index(drop=True)
+    return frame[~is_hs & frame["Contracttype"].str.casefold().eq(richting)].reset_index(
+        drop=True
+    )
+
+
+# De vaste vergoeding hangt in de bron aan een meteropstelling en in de databank
+# aan de registerrij van die opstelling. Dezelfde kaart als in de importer.
+_VASTE_PER_METERTYPE = {
+    "fixed_fee_single": ("single",),
+    "fixed_fee_double": ("day", "night"),
+    "fixed_fee_exclusive_night": ("exclusive_night",),
+}
+
+_GEDEELDE_KOLOM = {
+    "green": "groene_stroom_kwh",
+    "wkk": "wkk_kwh",
+    "bijdrage op de energie": "energiebijdrage_kwh",
+}
+
+
+def _dec(waarde):
+    from decimal import Decimal
+
+    if waarde is None or str(waarde).strip() in ("", "nan", "None"):
+        return None
+    return Decimal(str(waarde).replace(",", "."))
+
+
+def vtest_tegen_werkboek(conn: sa.Connection, werkboek):
+    """Leg de vtest-waarden in de databank naast het bronwerkboek.
+
+    Anders dan bij de nettarieven is dit géén positievergelijking. De databank
+    draagt de vtest-data in brede vorm — één rij per meterregister, componenten
+    als kolom — terwijl het werkboek lange vorm is. De rijaantallen verschillen
+    dus per definitie, en juist bij ongelijke aantallen liep de oude
+    positievergelijking uit de pas: 2.220 gemelde verschillen waarvan er geen
+    enkele echt was. Er wordt hier daarom op sleutel vergeleken
+    (leverancier, product, maand, segment, richting, component), en wat maar aan
+    één kant bestaat wordt apart geteld in plaats van als verschil gemeld.
+
+    Twee dingen die de databank bewust niet draagt en die dus niet vergeleken
+    worden: `component_label` (de menselijke omschrijving) en de bronrij per
+    component. Ze staan alleen in het werkboek, en dat blijft bewaard.
+    """
+    from collections import defaultdict
+
+    import pandas as pd  # noqa: F401 - via de normalizer
+
+    from energie_vlaanderen.infrastructure.db.importer import METER_TYPES
+    from energie_vlaanderen.ingest.vtest.normalizer import VTestDataNormalizer
+    from energie_vlaanderen.ingest.vtest.workbook import VTestWorkbookParser
+    from energie_vlaanderen.utility.normalizer import ontleed_leveranciersnaam
+
+    ontleed = VTestWorkbookParser().parse(werkboek)
+    genormaliseerd = VTestDataNormalizer().normalize(
+        ontleed.fixed, ontleed.variable_dynamic
+    )
+
+    groepen = defaultdict(list)
+    for frame in (genormaliseerd.fixed, genormaliseerd.variable_dynamic):
+        if frame is None or frame.empty:
+            continue
+        for rij in frame.to_dict("records"):
+            basis = (
+                int(rij["year"]), int(rij["month"]), str(rij["segment"]),
+                str(rij["energy"]), str(rij["direction"]),
+                # Dezelfde sleutel als de importer: die voegt "Dots Energy" en
+                # "Dots energy" samen tot één leverancier.
+                ontleed_leveranciersnaam(rij["supplier"]).naam.casefold(),
+                str(rij["product"]).casefold(), str(rij["product_type"]),
+            )
+            groepen[basis].append(rij)
+
+    bron = {}
+    for basis, rijen in groepen.items():
+        registers = {str(r["component"]).lower() for r in rijen} & set(METER_TYPES)
+        for rij in rijen:
+            component = str(rij["component"]).lower()
+            bron[(*basis, component)] = rij
+            doelen = _VASTE_PER_METERTYPE.get(component) or (
+                tuple(registers) if component == "fixed_fee" else ()
+            )
+            for metertype in doelen:
+                bron.setdefault((*basis, f"fixed_fee@{metertype}"), rij)
+
+    databank = {}
+    for tabel, richting in (("tarief_afname", "Afname"), ("tarief_injectie", "Injectie")):
+        for rij in conn.execute(sa.text(f"""
+            select l.naam lev, p.product_naam prod, p.segment, p.energie_type,
+                   t.prijs_type, t.meter_type, t.energieprijs_kwh,
+                   t.vaste_vergoeding_jaar, t.groene_stroom_kwh, t.wkk_kwh,
+                   t.energiebijdrage_kwh, t.param_a, t.param_b, t.param_c,
+                   t.param_d, t.param_z, t.index_waarde_a,
+                   extract(year from t.geldig_van)::int jaar,
+                   extract(month from t.geldig_van)::int maand
+              from {tabel} t
+              join energie_product p on p.id = t.product_id
+              join leverancier l on l.id = p.leverancier_id
+        """)).mappings():  # noqa: S608 - vaste tabelnamen
+            basis = (
+                rij["jaar"], rij["maand"], rij["segment"].capitalize(),
+                rij["energie_type"].capitalize(), richting,
+                rij["lev"].casefold(), rij["prod"].casefold(), rij["prijs_type"],
+            )
+            databank[(*basis, rij["meter_type"])] = rij
+            for kolom, component in _GEDEELDE_KOLOM.items():
+                if rij[component] is not None:
+                    databank.setdefault((*basis, kolom), rij)
+            if rij["vaste_vergoeding_jaar"] is not None:
+                databank[(*basis, f"fixed_fee@{rij['meter_type']}")] = rij
+
+    gemeen = set(bron) & set(databank)
+    mismatches = []
+    vergelijkingen = 0
+    for sleutel in sorted(gemeen):
+        bron_rij, db_rij = bron[sleutel], databank[sleutel]
+        component = sleutel[-1]
+        if component.startswith("fixed_fee@"):
+            paren = [("price", db_rij["vaste_vergoeding_jaar"])]
+        elif component in METER_TYPES:
+            paren = [
+                ("price", db_rij["energieprijs_kwh"]),
+                ("a", db_rij["param_a"]), ("b", db_rij["param_b"]),
+                ("c", db_rij["param_c"]), ("d", db_rij["param_d"]),
+                ("z", db_rij["param_z"]),
+                ("index_value_A", db_rij["index_waarde_a"]),
+            ]
+        else:
+            paren = [("price", db_rij[_GEDEELDE_KOLOM[component]])]
+
+        for veld, db_waarde in paren:
+            verwacht, gevonden = _dec(bron_rij.get(veld)), _dec(db_waarde)
+            if verwacht is None and gevonden is None:
+                continue
+            vergelijkingen += 1
+            if verwacht != gevonden:
+                mismatches.append(FieldMismatch(
+                    domain="vtest_databank",
+                    source_sheet=str(bron_rij.get("source_sheet", "")),
+                    source_row=None,
+                    field=veld,
+                    csv_value=str(gevonden),
+                    xlsx_value=str(verwacht),
+                    row_key=f"{sleutel[5]}/{sleutel[6]}/{sleutel[8]}",
+                ))
+
+    return GoldenAuditResult(
+        version_id="",
+        domain="vtest_databank",
+        source_xlsx=werkboek,
+        total_rows=len(gemeen),
+        verified_rows=vergelijkingen,
+        mismatches=tuple(mismatches),
+    )

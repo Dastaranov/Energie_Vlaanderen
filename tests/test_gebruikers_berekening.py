@@ -157,22 +157,32 @@ class TestProfileBouwen:
 # --- Tests die de echte dataset nodig hebben -------------------------------
 
 
-def _repo(data_root: Path):
-    from energie_vlaanderen.data.repository import DataRepository
-
-    return DataRepository(
-        data_root, gemeente_csv=ROOT / "data" / "current" / "DnbPerGemeente.csv"
-    )
-
-
 @pytest.fixture
-def dataset(data_root: Path):
-    gemeente_csv = ROOT / "data" / "current" / "DnbPerGemeente.csv"
-    if not gemeente_csv.is_file():
-        pytest.skip("DnbPerGemeente.csv ontbreekt; nettarieven niet op te zoeken.")
-    if not (Path(data_root) / "tariffs").is_dir():
-        pytest.skip("Geen tariffs/-map in de dataset; netkost niet te berekenen.")
-    return _repo(Path(data_root))
+def dataset(db_conn):
+    """De tarieven uit de databank.
+
+    Deze fixture las eerst de gestagede CSV's uit `data/`, die niet in git
+    staan. Daardoor sloegen twaalf tests altijd over in CI — en dat waren net
+    de tests die de netkost tegen echte tariefdata leggen.
+
+    Sinds de databank de bron is, komen ze uit PostgreSQL. In CI vult de
+    zaaddump die databank, dus deze tests draaien daar nu mee. `Calculator` en
+    `Kostberekening` zijn ongewijzigd: alleen de herkomst van de data
+    verschilt, niet de rekenregels.
+    """
+    import sqlalchemy as sa
+
+    from energie_vlaanderen.data.db_repository import DbDataRepository
+
+    jaren = [
+        int(r[0]) for r in db_conn.execute(sa.text(
+            "select distinct extract(year from geldig_van)::int "
+            "from netbeheerder_tarief order by 1 desc"
+        ))
+    ]
+    if not jaren:
+        pytest.skip("Geen nettarieven in de databank.")
+    return DbDataRepository(db_conn, tariefjaar=jaren[0])
 
 
 @pytest.mark.integration

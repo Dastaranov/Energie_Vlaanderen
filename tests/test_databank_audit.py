@@ -103,3 +103,58 @@ def _db_conn_fixture():
 
 
 pytest_plugins = ()
+
+
+@pytest.mark.integration
+class TestVtestTegenWerkboek:
+    """De vtest-waarden in de databank, tegen het bronwerkboek.
+
+    Dit is de controle die overeind moest blijven toen de CSV-weg verdween. Het
+    werkboek is de onafhankelijke bron; welke kant ermee vergeleken wordt is een
+    implementatiekeuze, en die is verhuisd van het CSV naar de databank.
+
+    Bewust op sleutel en niet op positie. De databank draagt de vtest-data in
+    brede vorm (één rij per meterregister, componenten als kolom), het werkboek
+    in lange vorm (één rij per component). De rijaantallen verschillen dus per
+    definitie — en juist bij ongelijke aantallen liep de oude positievergelijking
+    uit de pas: 2.220 gemelde verschillen waarvan er geen enkele echt was.
+    """
+
+    VERSIE = "20260903T172618Z-f82afd0a"
+
+    def _werkboek(self):
+        from pathlib import Path
+
+        pad = Path(__file__).resolve().parents[1] / "data" / "raw" / self.VERSIE / "vtest.xlsx"
+        if not pad.is_file():
+            pytest.skip("Het V-testwerkboek van deze versie ontbreekt lokaal.")
+        return pad
+
+    def test_de_databank_komt_overeen_met_het_werkboek(self, db_conn):
+        from energie_vlaanderen.audit.databank import vtest_tegen_werkboek
+
+        resultaat = vtest_tegen_werkboek(db_conn, self._werkboek())
+        assert resultaat.verified_rows > 0, "er is niets vergeleken"
+        assert resultaat.passed, "\n".join(
+            f"{m.row_key} {m.field}: werkboek {m.xlsx_value} vs databank {m.csv_value}"
+            for m in resultaat.mismatches[:10]
+        )
+
+    def test_de_vaste_vergoeding_behoudt_haar_decimalen(self, db_conn):
+        """`vaste_vergoeding_jaar` stond op Numeric(10, 2) terwijl elke andere
+        prijskolom er zes heeft. 61,321 werd stil 61,32 — bij 4.631 rijen, en
+        het maakte een exacte audit op die kolom onmogelijk. Migratie 0022
+        verbreedde de kolom; een tolerantie inbouwen zou de kolom juist
+        onbewaakt hebben gelaten.
+        """
+        import sqlalchemy as sa
+
+        met_decimalen = db_conn.execute(sa.text("""
+            select count(*) from tarief_afname
+             where vaste_vergoeding_jaar is not null
+               and vaste_vergoeding_jaar <> round(vaste_vergoeding_jaar, 2)
+        """)).scalar()
+        assert met_decimalen > 0, (
+            "Geen enkele vaste vergoeding draagt meer dan twee decimalen; "
+            "de precisie is vermoedelijk opnieuw weggerond."
+        )

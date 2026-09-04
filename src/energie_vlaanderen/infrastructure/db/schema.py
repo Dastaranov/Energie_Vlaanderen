@@ -116,7 +116,10 @@ def _tarief_columns():
         sa.Column("meter_type", sa.Text, nullable=False),
         sa.Column("prijs_type", sa.Text, nullable=False),
         sa.Column("energieprijs_kwh", sa.Numeric(12, 6), nullable=True),
-        sa.Column("vaste_vergoeding_jaar", sa.Numeric(10, 2), nullable=True),
+        # Zes decimalen zoals de andere prijskolommen (migratie 0022). Met
+        # Numeric(10, 2) werd 61,321 stil 61,32 — een afronding van brondata
+        # die de cel-voor-cel-audit tegen het werkboek onmogelijk maakte.
+        sa.Column("vaste_vergoeding_jaar", sa.Numeric(12, 6), nullable=True),
         sa.Column("groene_stroom_kwh", sa.Numeric(12, 6), nullable=True),
         sa.Column("wkk_kwh", sa.Numeric(12, 6), nullable=True),
         sa.Column("energiebijdrage_kwh", sa.Numeric(12, 6), nullable=True),

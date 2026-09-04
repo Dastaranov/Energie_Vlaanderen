@@ -219,7 +219,17 @@ class TariffGoldenAuditor:
         energy_type: str,
         direction: str,
         version_id: str,
+        staged_frame: pd.DataFrame | None = None,
     ) -> GoldenAuditResult:
+        """Leg de verwerkte tarieven cel voor cel naast het bronwerkboek.
+
+        `staged_frame` laat de aanroeper kiezen wáár de verwerkte kant vandaan
+        komt. Zonder dat argument wordt `staged_csv` gelezen — de oude weg.
+        Mét een frame komt ze uit de databank, en dat is wat deze controle
+        overeind houdt wanneer de CSV-weg verdwijnt: het werkboek blijft de
+        onafhankelijke bron, alleen de kant die ermee vergeleken wordt
+        verhuist.
+        """
         domain = f"{energy_type}_{direction}"
         parsed = TariffWorkbookParser().parse(source_xlsx, energy_type=energy_type)
         # `kolomkaarten()` moet mee, net als in TariffPipeline. Zonder die
@@ -265,7 +275,9 @@ class TariffGoldenAuditor:
 
         fresh_df = fresh_df.reset_index(drop=True)
 
-        if not staged_csv.is_file():
+        if staged_frame is not None:
+            staged_df = staged_frame.fillna("").astype(str)
+        elif not staged_csv.is_file():
             return GoldenAuditResult(
                 version_id=version_id,
                 domain=domain,
@@ -275,8 +287,10 @@ class TariffGoldenAuditor:
                 mismatches=(),
                 ontbrekend_bestand=staged_csv,
             )
-
-        staged_df = pd.read_csv(staged_csv, sep=";", dtype=str, encoding="utf-8-sig").fillna("")
+        else:
+            staged_df = pd.read_csv(
+                staged_csv, sep=";", dtype=str, encoding="utf-8-sig"
+            ).fillna("")
 
         fresh_sorted = self._sorteer(fresh_df)
         staged_sorted = self._sorteer(staged_df)

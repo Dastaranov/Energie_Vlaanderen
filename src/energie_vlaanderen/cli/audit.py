@@ -6,7 +6,7 @@ import argparse
 import json
 import logging
 
-from energie_vlaanderen.audit.golden import TariffGoldenAuditor, VTestGoldenAuditor
+from energie_vlaanderen.audit.golden import GoldenAuditResult, TariffGoldenAuditor, VTestGoldenAuditor
 from energie_vlaanderen.audit.manager import ApprovalManager, AuditError
 from energie_vlaanderen.audit.sampler import DataSampler
 from energie_vlaanderen.audit.sanity import SanityChecker
@@ -57,6 +57,26 @@ def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
     vtest_dir = bron_dir / "vtest"
     tariffs_dir = bron_dir / "tariffs"
 
+    # Met --bron databank wordt de databank tegen het werkboek gelegd in plaats
+    # van het CSV. Het tariefjaar komt uit het verwerkingsrapport (dus uit de
+    # bestandsnaam van het werkboek) en niet uit het versie-id, dat het moment
+    # van downloaden draagt.
+    uit_databank = getattr(args, "bron", "bestanden") == "databank"
+    db_conn = None
+    db_engine = None
+    tariefjaar = None
+    if uit_databank:
+        from energie_vlaanderen.audit.databank import nettarieven_als_frame  # noqa: F401
+        from energie_vlaanderen.cli.helpers import tariefjaar_uit_manifest
+        from energie_vlaanderen.infrastructure.db.connection import get_engine
+
+        try:
+            tariefjaar = tariefjaar_uit_manifest(manifest_data, "electricity_tariffs")
+        except Exception as exc:
+            return fail("Tariefjaar niet te bepalen: %s", exc)
+        db_engine = get_engine(settings.project_root)
+        db_conn = db_engine.connect()
+
     all_results = []
 
     # --- V-test ---
@@ -67,7 +87,24 @@ def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
         LOG.warning("V-testartifact ontbreekt in manifest, audit overgeslagen.")
         vtest_xlsx = None
 
-    if vtest_xlsx and vtest_xlsx.is_file():
+    if vtest_xlsx and vtest_xlsx.is_file() and uit_databank:
+        # Op sleutel en niet op positie: de databank draagt de vtest-data in
+        # brede vorm (één rij per meterregister) en het werkboek in lange vorm,
+        # dus de rijaantallen verschillen per definitie. Bij ongelijke aantallen
+        # loopt een positievergelijking uit de pas — dat leverde ooit 2.220
+        # verschillen op waarvan er geen enkele echt was.
+        from energie_vlaanderen.audit.databank import vtest_tegen_werkboek
+
+        resultaat = vtest_tegen_werkboek(db_conn, vtest_xlsx)
+        all_results.append(GoldenAuditResult(
+            version_id=version_id,
+            domain="vtest_databank",
+            source_xlsx=resultaat.source_xlsx,
+            total_rows=resultaat.total_rows,
+            verified_rows=resultaat.verified_rows,
+            mismatches=resultaat.mismatches,
+        ))
+    elif vtest_xlsx and vtest_xlsx.is_file():
         auditor = VTestGoldenAuditor()
         for domain, csv_name in [("vtest_vast", "master_vast.csv"), ("vtest_var_dyn", "master_var_dyn.csv")]:
             result = auditor.audit(
@@ -106,14 +143,32 @@ def run_audit_golden(args: argparse.Namespace, settings: Settings) -> int:
 
         for direction in richtingen:
             csv_path = tariffs_dir / f"tariffs_{energy_type}_{direction}.csv"
+            frame = None
+            if uit_databank:
+                # De verwerkte kant komt uit de databank in plaats van uit het
+                # CSV. Het werkboek blijft de onafhankelijke bron; alleen de
+                # kant die ermee vergeleken wordt verhuist. Dat is wat deze
+                # controle overeind houdt wanneer de CSV-weg verdwijnt.
+                frame = nettarieven_als_frame(
+                    db_conn,
+                    energie_type=("elektriciteit" if energy_type == "electricity" else "gas"),
+                    richting=direction,
+                    tariefjaar=tariefjaar,
+                )
             result = t_auditor.audit(
                 staged_csv=csv_path,
                 source_xlsx=xlsx_path,
                 energy_type=energy_type,
                 direction=direction,
                 version_id=version_id,
+                staged_frame=frame,
             )
             all_results.append(result)
+
+    if db_conn is not None:
+        db_conn.close()
+    if db_engine is not None:
+        db_engine.dispose()
 
     if not all_results:
         return fail("Geen auditresultaten — is de versie volledig geparsed?")

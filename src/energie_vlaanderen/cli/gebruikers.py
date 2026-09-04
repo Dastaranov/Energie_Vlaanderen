@@ -324,6 +324,27 @@ def _nettarieven_per_jaar(settings: Settings, vtest_dir) -> dict:
     }
 
 
+def _nettarieven_uit_databank(conn) -> dict:
+    """Eén repository per tariefjaar dat de databank draagt.
+
+    De nettarieven worden per kalenderjaar vastgesteld, maar een afrekening
+    loopt zelden gelijk met het kalenderjaar. Anders dan bij de bestandsweg
+    hoeft hier niet naar versiemappen gezocht te worden: `netbeheerder_tarief`
+    draagt de jaargangen naast elkaar.
+    """
+    import sqlalchemy as sa
+
+    from energie_vlaanderen.data.db_repository import DbDataRepository
+
+    jaren = [
+        int(r[0]) for r in conn.execute(sa.text(
+            "select distinct extract(year from geldig_van)::int "
+            "from netbeheerder_tarief order by 1"
+        ))
+    ]
+    return {jaar: DbDataRepository(conn, tariefjaar=jaar) for jaar in jaren}
+
+
 def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     """Rekent het dossier door over `[--van, --tot)`, deelperiode per deelperiode."""
     from energie_vlaanderen.data.paths import DataPaths
@@ -346,18 +367,63 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
 
     paden = DataPaths.from_settings(settings)
     versie = getattr(args, "version", None)
-    data_dir = paden.version_dir(versie) if versie else paden.current_data_dir()
-    if data_dir is None or not Path(data_dir).is_dir():
-        return fail(
-            "Geen actieve dataversie gevonden. Draai `energievergelijker "
-            "version publish --version <id>` of geef --version mee."
-        )
+    uit_databank = getattr(args, "bron", "databank") == "databank"
 
     try:
-        repo = DataRepository.from_settings(settings, data_dir)
         heffingen = HeffingenRepository.load(settings.project_root / "config" / "heffingen")
-    except (DataRepositoryError, OSError) as exc:
+    except OSError as exc:
         return fail("%s", exc)
+
+    # De databank is de bron voor de berekening. De CSV-weg blijft als
+    # `--bron bestanden` bestaan zolang de bestanden er zijn, maar ze is niet
+    # meer de standaard: de databank draagt maandelijkse historiek, de
+    # versiemap één momentopname. Een contract van april 2026 herberekenen kan
+    # daarom wél uit de databank en niet uit een enkele versiemap.
+    db_engine = None
+    db_conn = None
+    if uit_databank:
+        from energie_vlaanderen.data.db_repository import (
+            DbDataRepository,
+            DbDataRepositoryError,
+        )
+        from energie_vlaanderen.infrastructure.db.connection import get_engine
+
+        db_engine = get_engine(settings.project_root)
+        try:
+            db_conn = db_engine.connect()
+        except Exception as exc:
+            return fail(
+                "Geen verbinding met de databank: %s\n\n"
+                "De berekening leest sinds kort uit de databank. Met "
+                "`--bron bestanden` gaat ze via de gestagede CSV's.", exc,
+            )
+        data_dir = paden.version_dir(versie) if versie else paden.current_data_dir()
+        try:
+            nettarieven = _nettarieven_uit_databank(db_conn)
+        except DbDataRepositoryError as exc:
+            db_conn.close()
+            db_engine.dispose()
+            return fail("%s", exc)
+        if not nettarieven:
+            db_conn.close()
+            db_engine.dispose()
+            return fail(
+                "Geen nettarieven in de databank. Laad ze met "
+                "`energievergelijker db backfill --version <raw-id>`."
+            )
+        repo = nettarieven[max(nettarieven)]
+    else:
+        data_dir = paden.version_dir(versie) if versie else paden.current_data_dir()
+        if data_dir is None or not Path(data_dir).is_dir():
+            return fail(
+                "Geen actieve dataversie gevonden. Draai `energievergelijker "
+                "version publish --version <id>` of geef --version mee."
+            )
+        try:
+            repo = DataRepository.from_settings(settings, data_dir)
+        except (DataRepositoryError, OSError) as exc:
+            return fail("%s", exc)
+        nettarieven = _nettarieven_per_jaar(settings, Path(data_dir))
 
     omvormer_kva = next(
         (a.omvormer_kva for a in dossier.assets if a.omvormer_kva is not None),
@@ -369,7 +435,6 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     metingen = meetreeks.intervallen if meetreeks is not None else None
     markt = _laad_markt(settings, args.van, args.tot)
 
-    nettarieven = _nettarieven_per_jaar(settings, Path(data_dir))
     rekenaar = Kostberekening(
         repo, heffingen,
         segment=str(dossier.gebruiker.segment),
@@ -390,12 +455,21 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
         )
     except (BerekeningError, GebruikersError) as exc:
         return fail("%s", exc)
+    finally:
+        if db_conn is not None:
+            db_conn.close()
+        if db_engine is not None:
+            db_engine.dispose()
 
     totalen = resultaat.totalen
 
     def _text() -> None:
         print_kv("Periode", f"{resultaat.van} .. {resultaat.tot}")
-        print_kv("Dataversie", Path(data_dir).name)
+        print_kv(
+            "Dataversie",
+            (Path(data_dir).name if data_dir else "(uit de databank)")
+            + ("  [databank]" if uit_databank else "  [bestanden]"),
+        )
         print_kv(
             "Meetdata",
             (

@@ -769,6 +769,50 @@ een resultaat komt. De lus zoekt de knop opnieuw en klikt opnieuw binnen hetzelf
 `timeout`-budget, en een uitblijvend resultaat citeert nu de validatiemeldingen
 van de pagina in plaats van "controleer of vtest.be bereikbaar is".
 
+### De golden-audit hangt aan het werkboek, niet aan het CSV
+
+`audit golden --bron databank` legt de **databank** cel voor cel naast het
+bronwerkboek. Dat was de voorwaarde om de CSV-weg te kunnen laten vallen: het
+XLSX is de onafhankelijke bron, en welke kant ermee vergeleken wordt is een
+implementatiekeuze. Het CSV was dat nooit — het is dezelfde pipeline één stap
+eerder.
+
+De nettarieven gaan één op één: `netbeheerder_tarief` draagt dezelfde velden
+als het gestagede CSV, en de audit geeft identiek oordeel (200/200, 48/48,
+528/528, 256/256, 16/16).
+
+**De vtest-data gaat op sleutel en niet op positie.** De databank draagt die in
+brede vorm — één rij per meterregister, componenten als kolom — en het werkboek
+in lange vorm. De rijaantallen verschillen dus per definitie, en juist bij
+ongelijke aantallen loopt een positievergelijking uit de pas: dat leverde ooit
+2.220 gemelde verschillen op waarvan er geen enkele echt was. Er wordt
+vergeleken op (leverancier, product, maand, segment, richting, component), en
+wat maar aan één kant bestaat wordt geteld in plaats van als verschil gemeld.
+Stand: 174.870 vergelijkingen over 55.353 sleutels, nul afwijkingen.
+
+Twee dingen draagt de databank bewust niet, en die worden dus niet vergeleken:
+`component_label` (de menselijke omschrijving) en de bronrij per component. Ze
+staan alleen in het werkboek — dat bewaard blijft. De databank is de werkvorm,
+het werkboek het archief.
+
+Twee structurele verschillen die verklaard zijn en geen fout:
+
+- **4.528 sleutels alleen in de databank.** De import maakt voor elke groep ook
+  een `single`-rij aan wanneer de bron dat register niet kent; die draagt geen
+  prijs.
+- **100 alleen in het werkboek.** Een vaste vergoeding voor een meteropstelling
+  waarvan het register in de bron ontbreekt (`fixed_fee_double` zonder dag- of
+  nachtrij). De databank hangt die vergoeding aan een registerrij, dus zonder
+  register verdwijnt ze. Klein, maar het is dataverlies.
+
+**En daarbij gevonden: de vaste vergoeding werd stil afgerond.**
+`vaste_vergoeding_jaar` stond op `Numeric(10, 2)` terwijl elke andere prijskolom
+in dezelfde tabel `Numeric(12, 6)` is. 61,321 werd 61,32 en 11,2075 werd 11,21 —
+bij 4.631 rijen. Het bedrag is verwaarloosbaar (een duizendste euro per jaar),
+maar het is afronding van brondata, en het maakte een exacte audit op die kolom
+onmogelijk: een tolerantie inbouwen zou de kolom juist onbewaakt hebben gelaten.
+Migratie 0022 verbreedt de kolom; de decimalen komen terug uit het werkboek.
+
 ### De contractmetadata staat niet in de resultatendump
 
 `vtest_contract` stond grotendeels leeg: intekenperiode, start levering,
