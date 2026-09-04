@@ -335,13 +335,14 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     except OSError as exc:
         return fail("%s", exc)
 
-    # De databank is de bron voor de berekening. De CSV-weg blijft als
-    # `--bron bestanden` bestaan zolang de bestanden er zijn, maar ze is niet
-    # meer de standaard: de databank draagt maandelijkse historiek, de
-    # versiemap één momentopname. Een contract van april 2026 herberekenen kan
-    # daarom wél uit de databank en niet uit een enkele versiemap.
+    # De databank is de bron voor de berekening, en de enige. Ze draagt
+    # maandelijkse historiek waar een versiemap één momentopname draagt: een
+    # contract van april 2026 herberekenen kan daarom wél uit de databank en
+    # niet uit een enkele versiemap.
     db_engine = None
     db_conn = None
+
+    import sqlalchemy as sa
 
     from energie_vlaanderen.data.db_repository import (
         DbDataRepository,  # noqa: F401 - via _nettarieven_uit_databank
@@ -355,7 +356,24 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     except Exception as exc:
         return fail("Geen verbinding met de databank: %s", exc)
 
-    data_dir = paden.version_dir(versie) if versie else paden.current_data_dir()
+    # De getoonde dataversie komt uit de databank, niet van de schijf.
+    #
+    # Hier stond `paden.current_data_dir()`, en die werpt een fout zodra
+    # `data/current.txt` ontbreekt. Dat maakte een lokale dataset een
+    # voorwaarde voor een berekening die verder volledig uit de databank komt:
+    # een verse machine met een herstelde databank kon niets uitrekenen
+    # terwijl alle gegevens er waren. De waarde dient alleen om te tonen
+    # waarmee gerekend is.
+    #
+    # `current.txt` blijft de wijzer aan de bestandskant; welke versie actief
+    # is, weet de databank zelf.
+    if versie:
+        getoonde_versie = versie
+    else:
+        getoonde_versie = db_conn.execute(sa.text(
+            "select version_id from data_version where status = 'active' "
+            "order by geactiveerd_op desc nulls last limit 1"
+        )).scalar()
     try:
         nettarieven = _nettarieven_uit_databank(db_conn)
     except DbDataRepositoryError as exc:
@@ -413,8 +431,7 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
         print_kv("Periode", f"{resultaat.van} .. {resultaat.tot}")
         print_kv(
             "Dataversie",
-            (Path(data_dir).name if data_dir else "(uit de databank)")
-            + "  [databank]",
+            (getoonde_versie or "(geen actieve versie)") + "  [databank]",
         )
         print_kv(
             "Meetdata",
@@ -471,7 +488,7 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
         json_obj={
             "van": resultaat.van.isoformat(),
             "tot": resultaat.tot.isoformat(),
-            "dataversie": Path(data_dir).name,
+            "dataversie": getoonde_versie,
             "meetintervallen": 0 if metingen is None else len(metingen),
             "marktpunten": 0 if markt is None else len(markt),
             "exactheidsklasse": str(resultaat.exactheidsklasse),

@@ -32,6 +32,10 @@ from urllib.parse import urlparse
 import requests
 
 from energie_vlaanderen.data.paths import DataPaths, DataPathsError
+from energie_vlaanderen.ingest.zip_guard import (
+    ZipBegrenzingOverschreden,
+    controleer_zip_begrensd,
+)
 from energie_vlaanderen.ingest.sources import SourceArtifact
 from energie_vlaanderen.settings import Settings
 
@@ -310,9 +314,15 @@ class SynergridDownloader:
 
         try:
             with zipfile.ZipFile(path, mode="r") as archive:
-                bad_member = archive.testzip()
-                if bad_member is not None:
-                    raise SynergridDownloadError(f"{kind} bevat een beschadigd ZIP-lid: {bad_member}")
+                # Begrensd, niet `testzip()` -- zie ingest/zip_guard.py. Juist
+                # hier telt het: de Synergrid-werkboeken zijn de grootste
+                # downloads die deze pipeline doet.
+                try:
+                    controleer_zip_begrensd(path, archive)
+                except ZipBegrenzingOverschreden as exc:
+                    raise SynergridDownloadError(
+                        f"{kind} overschrijdt de ZIP-grenzen: {exc}"
+                    ) from exc
 
                 members = set(archive.namelist())
                 if EXPECTED_XLSX_MEMBERS <= members:

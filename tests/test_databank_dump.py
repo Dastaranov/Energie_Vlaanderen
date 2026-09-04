@@ -95,3 +95,99 @@ class TestManifest:
             pytest.skip("manifest.json ontbreekt.")
         m = json.loads(MANIFEST.read_text(encoding="utf-8"))
         assert not (set(m["rijen"]) & set(PERSOONSGEGEVENS))
+
+
+class TestEenKapotteDumpWistNiets:
+    """Inlezen begon met een `TRUNCATE` in een eigen psql-aanroep, en die commit
+    meteen. Was de gzip stuk of liep de restore vast, dan bleef de databank leeg
+    achter: geen herstel maar een wisser, en de weg terug is een nieuwe dump van
+    een databank die er niet meer is.
+
+    Er zijn nu twee lagen. `_valideer_dump` decomprimeert het bestand volledig
+    vóór er iets aangeraakt wordt — de CRC van een gzip staat achteraan, dus dat
+    kan niet goedkoper. Daarna gaan leegmaken en vullen samen door één
+    `psql --single-transaction`, zodat een fout halverwege terugrolt.
+
+    Deze tests dekken de eerste laag; de tweede wordt in CI gedekt, waar
+    `.github/workflows/databank.yml` een echte restore doet tegen postgres:16.
+    """
+
+    @staticmethod
+    def _valideer(pad: Path):
+        from energie_vlaanderen.infrastructure.db.dump import _valideer_dump
+
+        return _valideer_dump(pad)
+
+    def test_de_echte_zaaddump_wordt_aanvaard(self):
+        if not DUMP.is_file():
+            pytest.skip(f"{DUMP.name} ontbreekt.")
+        self._valideer(DUMP)  # geen uitzondering
+
+    def test_een_afgekapte_gzip_wordt_geweigerd(self, tmp_path):
+        """Een download of kopieeractie die halverwege stopt."""
+        if not DUMP.is_file():
+            pytest.skip(f"{DUMP.name} ontbreekt.")
+        from energie_vlaanderen.infrastructure.db.dump import DumpError
+
+        ruw = DUMP.read_bytes()
+        half = tmp_path / "half.sql.gz"
+        half.write_bytes(ruw[: len(ruw) // 2])
+        with pytest.raises(DumpError, match="beschadigd"):
+            self._valideer(half)
+
+    def test_een_omgeslagen_bit_wordt_geweigerd(self, tmp_path):
+        """Stille corruptie op schijf. De gzip-CRC vangt dit."""
+        if not DUMP.is_file():
+            pytest.skip(f"{DUMP.name} ontbreekt.")
+        from energie_vlaanderen.infrastructure.db.dump import DumpError
+
+        ruw = bytearray(DUMP.read_bytes())
+        ruw[len(ruw) // 2] ^= 0xFF
+        stuk = tmp_path / "stuk.sql.gz"
+        stuk.write_bytes(bytes(ruw))
+        with pytest.raises(DumpError, match="beschadigd"):
+            self._valideer(stuk)
+
+    def test_een_bestand_dat_geen_gzip_is_wordt_geweigerd(self, tmp_path):
+        from energie_vlaanderen.infrastructure.db.dump import DumpError
+
+        pad = tmp_path / "tekst.sql.gz"
+        pad.write_bytes(b"dit is gewone tekst")
+        with pytest.raises(DumpError, match="beschadigd"):
+            self._valideer(pad)
+
+    def test_een_lege_gzip_wordt_geweigerd(self, tmp_path):
+        from energie_vlaanderen.infrastructure.db.dump import DumpError
+
+        pad = tmp_path / "leeg.sql.gz"
+        with gzip.open(pad, "wb") as fh:
+            fh.write(b"")
+        with pytest.raises(DumpError, match="leeg"):
+            self._valideer(pad)
+
+    def test_een_geldige_gzip_zonder_data_wordt_geweigerd(self, tmp_path):
+        """Het gemeenste geval: technisch in orde, maar hij vult niets.
+
+        Een pg_dump die op een lege selectie draaide levert een geldig bestand
+        met alleen `SET`-regels. Inlezen zou de tabellen leegmaken en er niets
+        voor terugzetten — en niets zou falen.
+        """
+        from energie_vlaanderen.infrastructure.db.dump import DumpError
+
+        pad = tmp_path / "zonder_data.sql.gz"
+        with gzip.open(pad, "wb") as fh:
+            fh.write(b"SET statement_timeout = 0;\nSET lock_timeout = 0;\n")
+        with pytest.raises(DumpError, match="COPY- of INSERT"):
+            self._valideer(pad)
+
+    def test_een_sleutelwoord_op_de_blokgrens_wordt_gevonden(self, tmp_path):
+        """De datacontrole leest in blokken van 1 MiB. Valt "COPY " precies op
+        die grens, dan zou een naïeve controle hem missen en een geldige dump
+        weigeren."""
+        from energie_vlaanderen.infrastructure.db.dump import _BLOKGROOTTE
+
+        pad = tmp_path / "grens.sql.gz"
+        vulling = b"-- " + b"x" * (_BLOKGROOTTE - 5) + b"\n"
+        with gzip.open(pad, "wb") as fh:
+            fh.write(vulling + b"COPY leverancier (id) FROM stdin;\n1\n\\.\n")
+        self._valideer(pad)  # geen uitzondering

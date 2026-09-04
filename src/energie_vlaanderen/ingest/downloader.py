@@ -18,6 +18,11 @@ from energie_vlaanderen.settings import Settings
 from energie_vlaanderen.data.paths import DataPaths
 from energie_vlaanderen.ingest.sources import SourceArtifact
 
+from energie_vlaanderen.ingest.zip_guard import (
+    ZipBegrenzingOverschreden,
+    controleer_zip_begrensd,
+)
+
 LOG = logging.getLogger(__name__)
 
 XLSX_MAGIC = b"PK\x03\x04"
@@ -472,13 +477,15 @@ class ArtifactDownloader:
                 path,
                 mode="r",
             ) as archive:
-                bad_member = archive.testzip()
-
-                if bad_member is not None:
+                # Begrensd, niet `testzip()`: dat pakt elk lid volledig uit
+                # zonder bovengrens, terwijl de downloadlimiet alleen de
+                # *gecomprimeerde* grootte begrenst.
+                try:
+                    controleer_zip_begrensd(path, archive)
+                except ZipBegrenzingOverschreden as exc:
                     raise DownloadError(
-                        f"{kind} bevat een beschadigd "
-                        f"ZIP-lid: {bad_member}"
-                    )
+                        f"{kind} overschrijdt de ZIP-grenzen: {exc}"
+                    ) from exc
 
                 members = set(
                     archive.namelist()

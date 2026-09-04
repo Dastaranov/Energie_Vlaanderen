@@ -29,8 +29,11 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import os
 import shutil
 import subprocess
+import tempfile
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,6 +44,12 @@ LOG = logging.getLogger(__name__)
 
 class DumpError(RuntimeError):
     pass
+
+
+# Blokgrootte voor het streamen van dump en restore. Groot genoeg om het aantal
+# systeemaanroepen laag te houden, klein genoeg om het geheugengebruik vlak te
+# houden ongeacht de dumpgrootte.
+_BLOKGROOTTE = 1024 * 1024
 
 
 # De referentiefamilie: publiek van nature. De volgorde is de laadvolgorde —
@@ -113,21 +122,40 @@ def maak_dump(
     doel.parent.mkdir(parents=True, exist_ok=True)
 
     argumenten, omgeving = _pg_dump_argumenten(dsn, tabellen)
-    import os
 
-    proces = subprocess.run(  # noqa: S603 - vaste argumenten, geen shell
-        argumenten,
-        capture_output=True,
-        env={**os.environ, **omgeving},
-        check=False,
-    )
-    if proces.returncode != 0:
-        raise DumpError(
-            "pg_dump mislukte: " + proces.stderr.decode("utf-8", "replace")[:400]
-        )
-
-    with gzip.open(doel, "wb") as fh:
-        fh.write(proces.stdout)
+    # Streamend naar gzip, niet via `capture_output`. Een distributiedump met
+    # marktcurves en profielen is honderden megabytes; die eerst volledig in
+    # `proces.stdout` verzamelen en daarna in één keer wegschrijven zet twee
+    # kopieën naast elkaar in het geheugen.
+    #
+    # Eerst naar een tijdelijk bestand naast het doel, dan hernoemen: een
+    # afgebroken pg_dump laat anders een half bestand achter dat er als een
+    # geldige dump uitziet. `os.replace` is atomair binnen dezelfde map.
+    tijdelijk = doel.with_name(doel.name + ".tijdelijk")
+    try:
+        with tempfile.TemporaryFile() as fouten:
+            with gzip.open(tijdelijk, "wb") as fh:
+                proces = subprocess.Popen(  # noqa: S603 - vaste argumenten, geen shell
+                    argumenten,
+                    stdout=subprocess.PIPE,
+                    stderr=fouten,
+                    env={**os.environ, **omgeving},
+                )
+                # stderr gaat naar een bestand en niet naar een pipe: bij twee
+                # pipes kan het proces blokkeren op een volle stderr terwijl wij
+                # op stdout staan te wachten.
+                shutil.copyfileobj(proces.stdout, fh, _BLOKGROOTTE)
+                proces.stdout.close()
+                returncode = proces.wait()
+            if returncode != 0:
+                fouten.seek(0)
+                raise DumpError(
+                    "pg_dump mislukte: "
+                    + fouten.read().decode("utf-8", "replace")[:400]
+                )
+        os.replace(tijdelijk, doel)
+    finally:
+        tijdelijk.unlink(missing_ok=True)
 
     revisie = conn.execute(sa.text("select version_num from alembic_version")).scalar()
     actief = conn.execute(sa.text(
@@ -156,6 +184,44 @@ def maak_dump(
     return manifest
 
 
+def _valideer_dump(bron: Path) -> None:
+    """Toets dat de gzip volledig en niet-leeg is, vóór er iets gewist wordt.
+
+    De CRC van een gzip staat aan het einde, dus dit vergt een volledige
+    decompressie. Ze wordt blok voor blok weggegooid -- het gaat om de
+    integriteit, niet om de inhoud.
+
+    Er wordt ook gekeken of er werkelijk data in zit. Een geldige gzip van een
+    leeg of louter uit `SET`-regels bestaand bestand zou de tabellen anders
+    netjes leegmaken en daarna niets terugzetten.
+    """
+    bytes_gelezen = 0
+    heeft_data = False
+    staart = b""
+    try:
+        with gzip.open(bron, "rb") as fh:
+            while blok := fh.read(_BLOKGROOTTE):
+                bytes_gelezen += len(blok)
+                if not heeft_data:
+                    # Op de blokgrens kan een sleutelwoord doormidden vallen,
+                    # dus de staart van het vorige blok gaat mee.
+                    heeft_data = b"COPY " in staart + blok or b"INSERT INTO" in staart + blok
+                    staart = blok[-16:]
+    except (gzip.BadGzipFile, EOFError, OSError, zlib.error) as exc:
+        raise DumpError(
+            f"Dump is beschadigd en is niet ingelezen; de databank is ongemoeid "
+            f"gebleven: {bron} ({exc})"
+        ) from exc
+
+    if bytes_gelezen == 0:
+        raise DumpError(f"Dump is leeg: {bron}")
+    if not heeft_data:
+        raise DumpError(
+            f"Dump bevat geen COPY- of INSERT-opdrachten: {bron}. Inlezen zou "
+            "de tabellen leegmaken zonder ze te vullen."
+        )
+
+
 def lees_dump(dsn: str, bron: Path) -> None:
     """Laad een dump in een databank waarop de migraties al gedraaid hebben.
 
@@ -166,36 +232,55 @@ def lees_dump(dsn: str, bron: Path) -> None:
     if shutil.which("psql") is None:
         raise DumpError("psql niet gevonden (postgresql-client).")
 
-    import os
-
     url = sa.engine.make_url(dsn)
     bron = Path(bron)
     if not bron.is_file():
         raise DumpError(f"Dump niet gevonden: {bron}")
 
+    # Eerst valideren, dan pas iets aanraken. Het leegmaken gebeurde vroeger in
+    # een eigen psql-aanroep -- en die commit meteen. Was de gzip stuk of liep
+    # de restore vast, dan bleef de databank leeg achter: de dump was dan geen
+    # herstel maar een wisser.
+    _valideer_dump(bron)
+
     tabellen = ", ".join(REFERENTIE_TABELLEN + ZWARE_TABELLEN)
     argumenten = [
-        "psql", "-v", "ON_ERROR_STOP=1", "-q",
+        # --single-transaction: leegmaken en vullen zijn samen één handeling.
+        # Faalt er iets halverwege, dan rolt het geheel terug en staat de
+        # databank er nog zoals ze stond.
+        "psql", "-v", "ON_ERROR_STOP=1", "-q", "--single-transaction",
         "-h", str(url.host), "-p", str(url.port or 5432),
         "-U", str(url.username), "-d", str(url.database),
     ]
     omgeving = {**os.environ, "PGPASSWORD": url.password or ""}
 
-    leeg = subprocess.run(  # noqa: S603
-        [*argumenten, "-c", f"TRUNCATE {tabellen} RESTART IDENTITY CASCADE"],
-        capture_output=True, env=omgeving, check=False,
-    )
-    if leeg.returncode != 0:
-        raise DumpError(
-            "Leegmaken mislukte: " + leeg.stderr.decode("utf-8", "replace")[:400]
+    with tempfile.TemporaryFile() as fouten:
+        proces = subprocess.Popen(  # noqa: S603 - vaste argumenten, geen shell
+            argumenten,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=fouten,
+            env=omgeving,
         )
-
-    with gzip.open(bron, "rb") as fh:
-        inhoud = fh.read()
-    laden = subprocess.run(  # noqa: S603
-        argumenten, input=inhoud, capture_output=True, env=omgeving, check=False,
-    )
-    if laden.returncode != 0:
-        raise DumpError(
-            "Inlezen mislukte: " + laden.stderr.decode("utf-8", "replace")[:400]
-        )
+        try:
+            proces.stdin.write(
+                f"TRUNCATE {tabellen} RESTART IDENTITY CASCADE;\n".encode()
+            )
+            # Streamend, zoals bij het maken: de gedecomprimeerde dump hoeft
+            # nergens in zijn geheel in het geheugen te staan.
+            with gzip.open(bron, "rb") as fh:
+                shutil.copyfileobj(fh, proces.stdin, _BLOKGROOTTE)
+        except (OSError, gzip.BadGzipFile, EOFError) as exc:
+            proces.stdin.close()
+            proces.wait()
+            raise DumpError(f"Inlezen mislukte tijdens het streamen: {exc}") from exc
+        finally:
+            if not proces.stdin.closed:
+                proces.stdin.close()
+        returncode = proces.wait()
+        if returncode != 0:
+            fouten.seek(0)
+            raise DumpError(
+                "Inlezen mislukte (de databank is teruggerold): "
+                + fouten.read().decode("utf-8", "replace")[:400]
+            )
