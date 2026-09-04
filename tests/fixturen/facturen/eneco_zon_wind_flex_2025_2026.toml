@@ -1,0 +1,217 @@
+# Referentiefactuur: jaarafrekening Eneco "Zon & Wind Flex", elektriciteit.
+#
+# Geanonimiseerd. Naam, straat, EAN, klant-, factuur- en meternummer, het
+# rekeningnummer en de domiciliëringsreferentie staan hier niet in; het
+# brondocument blijft lokaal in `data/referentie/` en valt buiten git.
+#
+# WAAROM DEZE FACTUUR ZO NUTTIG IS
+# --------------------------------
+# Ze verbruikt 15,09 kWh over 369 dagen. Daardoor is de energiekost
+# verwaarloosbaar en bestaat de factuur bijna volledig uit vaste posten — en
+# die drukt Eneco één voor één af mét hun eenheidsprijs: afnametarief,
+# databeheer, capaciteitstarief en het maximumtarief, elk per deelperiode.
+# Geen enkele andere referentiefactuur in dit repo laat de netkost zo open zien.
+#
+# Ze is bovendien de enige die twee takken van `grid_cost()` werkelijk laat
+# vuren: de **ondergrens van 2,5 kW** op het capaciteitstarief en het
+# **maximumtarief** over het jaarverbruik. Bij een gewoon gezin blijft de
+# capaciteit ruim boven de bodem en bijt de cap nooit.
+
+[factuur]
+bron = "Jaarafrekening Eneco Belgium nv, factuurdatum 2026-07-08"
+soort = "afrekening"
+periode_van = "2025-06-01"
+periode_tot = "2026-06-04"
+dagen = 369
+leverancier = "Eneco Belgium"
+product = "Eneco Zon & Wind Flex"
+contracttype = "variabel"
+tariefkaart_versie = "012210 (geldig vanaf 2023-01-01)"
+netbeheerder = "Fluvius Midden-Vlaanderen"
+netbeheerder_code = "FMV"
+postcode = "9220"
+meter = "digitaal"
+totaal_excl_btw = "316.91"
+totaal_incl_btw = "328.67"
+
+[btw]
+basis_0pct = "120.80"
+btw_0pct = "0.00"
+basis_6pct = "196.11"
+btw_6pct = "11.76"
+# De bijdrage energiefonds staat in de 0%-schaal: ze is een heffing per
+# afnamepunt en draagt geen btw. Dat is een derde btw-behandeling naast de
+# 6%-basis en de vrijstelling op de injectievergoeding.
+
+[elektriciteit]
+afname_kwh = "15.09"
+registerschema = "enkelvoudig"
+# Niet gemeten maar de wettelijke ondergrens, zoals de factuur hem afdrukt:
+# de werkelijke maandpieken lagen eronder.
+capaciteitstarief_kw = "2.5"
+
+[elektriciteit.componenten]
+energiekost_eur = "52.44"
+nettarieven_eur = "142.95"
+heffingen_eur = "121.52"
+
+# Elke nettariefregel apart, met de eenheidsprijs die de factuur afdrukt.
+# Twee dingen vallen hier op en ze bevestigen allebei onze data:
+#
+#   - het capaciteitstarief van FMV is 49,04 EUR/kW/jaar in 2025 en
+#     50,12 in 2026 (28,75 = 49,0426 x 214/365; 11,12 = 50,1240 x 81/365;
+#     125,33 = 2,5 x 50,1324 over het laatste stuk). Eneco proratiseert het
+#     *tarief*, wij het bedrag — dezelfde uitkomst.
+#   - het databeheer is 17,52 in 2025 en 17,84/17,86 in 2026, tegenover
+#     17,51 en 17,85 in het VREG-werkboek: Eneco rondt het jaartarief op
+#     centen af.
+[[elektriciteit.netwerk.regel]]
+post = "afnametarief"
+van = "2025-06-01"
+tot = "2025-12-31"
+hoeveelheid_kwh = "14.68"
+eenheidsprijs_ct_kwh = "5.29"
+bedrag_eur = "0.77"
+
+[[elektriciteit.netwerk.regel]]
+post = "afnametarief"
+van = "2026-01-01"
+tot = "2026-01-31"
+hoeveelheid_kwh = "0.40"
+eenheidsprijs_ct_kwh = "4.98"
+bedrag_eur = "0.02"
+
+[[elektriciteit.netwerk.regel]]
+post = "capaciteitstarief"
+van = "2025-06-01"
+tot = "2025-12-31"
+hoeveelheid_kw = "2.50"
+eenheidsprijs_eur = "28.75"
+bedrag_eur = "71.88"
+
+[[elektriciteit.netwerk.regel]]
+post = "capaciteitstarief"
+van = "2026-01-01"
+tot = "2026-03-22"
+hoeveelheid_kw = "2.50"
+eenheidsprijs_eur = "11.12"
+bedrag_eur = "27.80"
+
+[[elektriciteit.netwerk.regel]]
+post = "capaciteitstarief"
+van = "2026-03-23"
+tot = "2026-06-04"
+hoeveelheid_jaar = "0.20"
+eenheidsprijs_eur = "125.33"
+bedrag_eur = "25.40"
+
+[[elektriciteit.netwerk.regel]]
+post = "databeheer"
+van = "2025-06-01"
+tot = "2025-12-31"
+hoeveelheid_jaar = "0.59"
+eenheidsprijs_eur = "17.52"
+bedrag_eur = "10.28"
+
+[[elektriciteit.netwerk.regel]]
+post = "databeheer"
+van = "2026-01-01"
+tot = "2026-03-22"
+hoeveelheid_jaar = "0.22"
+eenheidsprijs_eur = "17.84"
+bedrag_eur = "3.97"
+
+[[elektriciteit.netwerk.regel]]
+post = "databeheer"
+van = "2026-03-23"
+tot = "2026-06-04"
+hoeveelheid_jaar = "0.20"
+eenheidsprijs_eur = "17.86"
+bedrag_eur = "3.63"
+
+[[elektriciteit.netwerk.regel]]
+post = "maximumtarief"
+van = "2025-06-01"
+tot = "2025-12-31"
+bedrag_eur = "-0.77"
+
+[[elektriciteit.netwerk.regel]]
+post = "maximumtarief"
+van = "2026-01-01"
+tot = "2026-03-22"
+bedrag_eur = "-0.03"
+
+# --------------------------------------------------------------------------
+# De heffingen, en de bevinding die eruit volgt
+# --------------------------------------------------------------------------
+#
+# **Deze aansluiting betaalt de bijzondere accijns aan het niet-zakelijke
+# tarief maar de bijdrage energiefonds aan het niet-residentiële.** Dat zijn
+# twee heffingen uit twee wetten met twee eigen definities, en ze vallen hier
+# niet samen.
+#
+# In de rekenengine sturen ze allebei op één veld: `Profile.segment`.
+# "Woning" geeft niet_zakelijk + residentieel, elke andere waarde geeft
+# zakelijk + niet_residentieel. Geen van beide reproduceert dus deze factuur.
+# Zie de bevinding in `tests/test_referentiefacturen_reeks.py`.
+[elektriciteit.heffingen]
+bijzondere_accijns_eur = "0.72"
+bijzondere_accijns_ct_kwh = "4.75"
+bijdrage_energiefonds_2025_eur = "69.50"
+bijdrage_energiefonds_2026_eur = "51.30"
+bijdrage_energiefonds_totaal_eur = "120.80"
+# 118,56 / 12 = 9,88 en 120,84 / 12 = 10,07 EUR per maand — exact de waarden
+# die `config/heffingen/bijdrage_energiefonds.toml` voor 2025 en 2026 in de
+# categorie "niet_residentieel" draagt. Die masterdata was tot nu toe alleen
+# tegen zijn eigen bron (vlaanderen.be) gelegd; dit is de eerste bevestiging
+# uit een betaalde factuur.
+bijdrage_energiefonds_2025_eur_jaar = "118.56"
+bijdrage_energiefonds_2026_eur_jaar = "120.84"
+bijdrage_energiefonds_klantcategorie = "niet_residentieel"
+# Eneco rekent op deze factuur geen bijdrage op de energie aan. Op de
+# voorgaande jaarafrekening van hetzelfde afnamepunt staat ze wél, met
+# 0,19260 ct/kWh — 1,9260 EUR/MWh, opnieuw de waarde uit de masterdata.
+bijdrage_op_de_energie_eur = "0"
+
+[elektriciteit.energie]
+vaste_vergoeding_jaar = "49.59"
+vaste_vergoeding_eur = "50.13"
+groene_stroom_eur = "0.14"
+wkk_eur = "0.07"
+formule = "0,1 x BELPEX-RLP + 5,966"
+# De factuur drukt de indexwaarden zelf af — 69,40967 EUR/MWh voor juni 2025,
+# oplopend tot 99,22022 in het eerste kwartaal 2026. (Het document zet er zes
+# nullen te veel achter: "6.940.967.000,00". Een opmaakfout van Eneco, geen
+# eenheidsverschil: 0,1 x 69,40967 + 5,966 = 12,907 ct/kWh, en dat is de
+# 12,91 die de eerste verbruiksregel afdrukt.)
+index_naam = "BELPEX-RLP"
+index_juni_2025_eur_mwh = "69.40967"
+
+# --------------------------------------------------------------------------
+# Wat de simulatie ervan maakt
+# --------------------------------------------------------------------------
+#
+#   | post          | simulatie | factuur | verschil |
+#   |---------------|----------:|--------:|---------:|
+#   | netwerkkosten |    142,94 |  142,95 |    -0,01 |
+#   | heffingen     |      0,75 |  121,52 |  -120,77 |
+#   | leverancier   |     64,14 |   52,44 |   +11,70 |
+#
+# De netkost komt op één cent uit — over drie deelperiodes, twee tariefjaren,
+# de ondergrens van 2,5 kW én de maximumtariefcorrectie. Dat is de sterkste
+# bevestiging van `grid_cost()` die dit repo heeft.
+#
+# Het gat op de heffingen is de bijdrage energiefonds hierboven: het dossier
+# staat op `segment = "Woning"` en dan rekent de engine het residentiële
+# tarief van 0,00 EUR/maand. Het is dus geen rekenfout maar een ontbrekend
+# onderscheid.
+#
+# De 11,70 op de leverancierskost is exact het verschil tussen de vaste
+# vergoeding in de V-test-export (61,321 EUR/jaar) en die op de tariefkaart van
+# de klant (49,59). Dezelfde oorzaak als bij "Direct Online": de export levert
+# de kaart die vandaag verkocht wordt, niet die van een lopend contract.
+[simulatie]
+netwerkkosten_eur = "142.94"
+heffingen_eur = "0.75"
+leverancier_eur = "64.14"
+export_vaste_vergoeding_jaar = "61.321"

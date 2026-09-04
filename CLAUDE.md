@@ -857,6 +857,105 @@ documenteert de volledige bestandsvorm, inclusief `gemeten_maandpiek_kw`,
 `periode_van`/`periode_tot` en de lijst `[[verbruiksopgave]]` voor een verbruik
 dat per tariefkaartperiode opgesplitst is.
 
+### Vier facturen erbij, en wat ze blootlegden
+
+Naast de eerste referentiefactuur staan er nu vier andere echte afrekeningen in
+`tests/fixturen/facturen/`, met hun dossiers in `tests/fixturen/dossiers/` en
+`tests/test_referentiefacturen_reeks.py` als bewaker. Ze zijn niet gekozen op
+aantal maar op spreiding: elk raakt iets wat de eerste niet raakt — een derde
+meterregister, de netkost regel per regel, een contract dat niet op de markt
+bestaat, en een tweede netbeheerder. De brondocumenten blijven lokaal in
+`data/referentie/facturen_2026-09/` (buiten git).
+
+Wat er reproduceert:
+
+| factuur | post | simulatie | factuur |
+|---|---|---:|---:|
+| Eneco "Zon & Wind Flex" | netkost | **142,94** | 142,95 |
+| ENGIE "Flow" (aardgas) | netkost | **235,63** | 235,62 |
+| ENGIE "Direct Online" | heffingen | **579,94** | 579,93 |
+| ENGIE "Drive" (Halle-Vilvoorde) | netkost elektriciteit | 1153,65 | 1150,39 |
+| ENGIE "Drive" (Halle-Vilvoorde) | distributiekost gas | 219,78 | 220,94 |
+
+**Het register "uitsluitend nacht" werd niet geprijsd.** `supplier_cost()`
+rekende de energiekost over `afname_dag_kwh` en `afname_nacht_kwh`;
+`afname_exclusief_nacht_kwh` werd in geen enkele tak vermenigvuldigd. Het volume
+telde wél mee in de kosten groene stroom en WKK — die gaan over `afname_kwh` —
+zodat er ook geen verdachte nul te zien was. Op een afrekening met
+nachtverwarming ging het om 2.076 van de 11.738 kWh: **223,77 EUR per jaar
+gratis stroom**, geen exception, geen falende test. De prijs stond al die tijd
+in de databank (`tarief_afname.meter_type = 'exclusive_night'`, 2.855 rijen,
+evenveel als `day` en `night`); de netkost las het register wél, want
+`grid_cost()` splitst er sinds een eerdere referentiefactuur het ODV-tarief
+precies op. Alleen de leverancierskant was blijven staan. Een ontbrekende prijs
+is nu een fout en geen nul: terugvallen op de nachtprijs zou een aanname zonder
+bron zijn, en dat het exclusief-nachttarief lager ligt ís de reden dat het
+register bestaat.
+
+**De bijzondere accijns op aardgas is vóór 01/08/2026 progressief, niet vlak.**
+`config/heffingen/bijzondere_accijns_aardgas.toml` draagt één schijf van 8,2415
+EUR/MWh voor het hele oude regime. Dat cijfer is teruggerekend uit één factuur
+door het bedrag door het volume te delen — dus het is het *gemiddelde* van die
+ene factuur en niet het tarief. Drie facturen over vrijwel dezelfde periode
+geven drie gemiddelden die met het volume meestijgen: 8,2415 op 12.181 kWh,
+8,3146 op 13.599 en 8,3479 op 14.230. Een jaarwisselstap is uitgesloten (de
+zuiver-2025-periode van één factuur geeft 8,2798, hóger dan het gemiddelde van
+de factuur met het laagste volume). Een tweeschijvenmodel met de grens op
+12 MWh — dezelfde grens als ná de hervorming — en 8,23 onder en ~8,98 boven
+reproduceert de eerste en de derde tot op de cent. Gevolg vandaag: elk gezin
+boven 12 MWh betaalt in onze berekening te weinig, 1,00 EUR op 13.599 kWh en
+1,52 op 14.230. De bovenste schijf komt uit drie punten en niet uit een
+wettekst; ze staat daarom nog niet in de masterdata.
+
+**"Residentieel" en "niet-zakelijk" zijn niet hetzelfde, en `segment` doet alsof
+van wel.** Eén afrekening rekent de bijzondere accijns aan het niet-zakelijke
+tarief (een privépersoon, geen onderneming) maar de bijdrage energiefonds aan
+het niet-residentiële — twee wetten, twee definities, en ze vallen hier niet
+samen. `levies_gesplitst()` leidt beide categorieën uit `Profile.segment` af, dus
+geen van beide waarden reproduceert die factuur; met "Woning" mist de berekening
+120,80 EUR. Dat oplossen vraagt een eigen veld in het dossier.
+
+**Twee dingen bevestigd die tot nu toe alleen hun eigen bron hadden.** De
+bijdrage op de energie van 1,9261 EUR/MWh staat letterlijk op drie
+ENGIE-facturen afgedrukt — de post die tot augustus 2026 op nul stond omdat
+vtest.be hem niet toont. En het energiefonds: 118,56 en 120,84 EUR/jaar op de
+Eneco-afrekening zijn exact 9,88 en 10,07 EUR/maand uit
+`bijdrage_energiefonds.toml`, categorie `niet_residentieel`; de residentiële
+facturen dragen géén energiefondsregel, wat de 0,00 van diezelfde tabel vanuit
+de andere richting bevestigt.
+
+**De leverancierskost heeft een plafond dat niet aan de code ligt.** Op elke
+factuur in deze reeks rekent de simulatie 5 tot 22% naast de energiekost, altijd
+in dezelfde richting, en de oorzaak is steeds dezelfde twee dingen. De
+V-test-export levert per maand de tariefkaart die op dat moment *verkocht*
+wordt, terwijl een lopend variabel contract de formule van zijn eigen
+kaartversie houdt en alleen de index laat bewegen: bij Eneco is het verschil
+precies de vaste vergoeding (61,321 in de export tegenover 49,59 op de kaart van
+de klant), bij "Direct Online" ook param A (0,0954 tegenover 0,0996). En de
+indexwaarde in de export is die welke VREG bij publicatie kende, niet de
+gerealiseerde maandwaarde waarmee de leverancier afrekent — voor april 2026
+110,75 tegenover 84,75 EUR/MWh. Dat is de nauwkeurigheidsgrens van deze
+gegevensbron voor het reconstrueren van een *bestaand* contract; voor het
+vergelijken van aanbiedingen, waar de tool voor gemaakt is, is het geen probleem.
+
+**Een product dat van de markt verdwijnt maakt een dossier onberekenbaar.**
+"Drive" stond t/m mei 2025 in de export; de klant hield het contract tot maart
+2026. `zoek_product()` weigert dan terecht — maar daarmee valt de héle
+berekening weg, ook de netkost en de heffingen, die niet van het product afhangen
+en apart wél op een half procent uitkomen. Dezelfde soort scheiding als "een
+fout op het ene aansluitingspunt laat het andere niet vervallen", maar dan
+binnen één punt over de kostcomponenten heen. Hetzelfde geldt voor een
+hernoeming: ENGIE's "Direct" heet vanaf 01/12/2025 "Direct Online", en een
+variabel contract dat de jaarwissel kruist moet die naamswissel als aparte
+contractperiode declareren of het vindt niets.
+
+**Het personeelstarief hoort te weigeren, en doet dat.** Een tarief dat alleen
+voor werknemers bestaat staat niet op vtest.be en zal er nooit op staan; de
+factuur draagt bovendien géén aparte netwerkkostenregel voor elektriciteit — het
+is een all-in prijs (`0,1097 + 0,00114 x Epex DAM`) met daarbovenop een
+personeelskorting. Er is niets aan af te leiden, en de juiste uitkomst is dus
+geen bedrag maar een fout.
+
 ### Injectie
 
 Het injectiekrediet komt uit dezelfde V-test-export als de afnameprijzen, maar

@@ -1,0 +1,214 @@
+# Referentiefactuur: eindafrekening ENGIE "Drive" → "Empower", elektriciteit
+# met ToU-injectie én aardgas, netbeheerder **Fluvius Halle-Vilvoorde**.
+#
+# Geanonimiseerd. Naam, straat, EAN, klant- en meternummer staan hier niet in;
+# het brondocument blijft lokaal in `data/referentie/` en valt buiten git.
+#
+# WAAROM DEZE FACTUUR NODIG IS
+# ----------------------------
+# Elke andere referentiefactuur in dit repo staat op Fluvius Midden-Vlaanderen.
+# Zolang dat zo blijft, bewijst geen enkele toets dat de nettariefopzoeking
+# werkelijk op de netbeheerder gaat en niet op een stilzwijgende standaard.
+# Deze staat op Halle-Vilvoorde.
+#
+# WAT ZE ÓÓK BLOOTLEGT
+# --------------------
+# Ze is niet volledig door te rekenen, en de reden is structureel: **"Drive"
+# verdween in juni 2025 uit de V-test-export.** ENGIE stopte de verkoop; de
+# klant hield het contract tot 25/03/2026. De export bevat wat er te koop is,
+# niet wat er loopt. `zoek_product()` weigert dan — terecht — en daarmee valt
+# de héle berekening weg, ook de netkost en de heffingen, terwijl juist die
+# twee niet van het product afhangen en volledig bekend zijn.
+
+[factuur]
+bron = "Eindafrekening ENGIE (Electrabel nv), detailpagina's, factuurdatum 2026-06-08"
+soort = "afrekening"
+periode_van = "2025-06-01"
+periode_tot = "2026-05-31"
+dagen = 365
+leverancier = "ENGIE"
+netbeheerder = "Fluvius Halle-Vilvoorde"
+netbeheerder_code = "FHV"
+postcode = "1760"
+segment = "Woning"
+meter = "digitaal"
+
+[btw]
+basis_6pct = "536.87"
+btw_6pct = "32.21"
+vrijgesteld_injectie = "-84.15"
+vrijgesteld_injectie_grond = "Beslissing ET 131.616/2 van 25-10-2019"
+
+[elektriciteit]
+afname_piek_kwh = "3719"
+afname_dal_kwh = "8852"
+afname_totaal_kwh = "12571"
+injectie_piek_kwh = "1409"
+injectie_dal_kwh = "501"
+injectie_totaal_kwh = "1910"
+gemiddelde_maandpiek_kw = "7.627"
+
+[[elektriciteit.tariefkaart]]
+product = "Drive"
+van = "2025-06-01"
+tot = "2026-03-25"
+versie = "2025-01-26"
+dagen = 298
+vaste_vergoeding_jaar = "95.00"
+vaste_vergoeding_eur = "77.56"
+afname_piek_kwh = "3185"
+prijs_piek_eur_kwh = "0.1267881"
+afname_dal_kwh = "7130"
+prijs_dal_eur_kwh = "0.0997237"
+injectie_piek_kwh = "938"
+injectieprijs_piek_eur_kwh = "0.0538060"
+injectie_dal_kwh = "342"
+injectieprijs_dal_eur_kwh = "0.0215790"
+formule_piek = "0,0257850 + 0,0012190 x Epex DAM"
+formule_dal = "0,0186850 + 0,0009670 x Epex DAM"
+formule_injectie_piek = "0,0003000 + 0,0007130 x Epex DAM"
+formule_injectie_dal = "0,0003000 + 0,0002860 x Epex DAM"
+
+[[elektriciteit.tariefkaart]]
+product = "Empower"
+van = "2026-03-26"
+tot = "2026-05-31"
+versie = "2026-01-26"
+dagen = 67
+vaste_vergoeding_jaar = "80.19"
+vaste_vergoeding_eur = "14.72"
+afname_piek_kwh = "534"
+prijs_piek_eur_kwh = "0.1323034"
+afname_dal_kwh = "1722"
+prijs_dal_eur_kwh = "0.1011789"
+injectie_piek_kwh = "471"
+injectieprijs_piek_eur_kwh = "0.0414650"
+injectie_dal_kwh = "159"
+injectieprijs_dal_eur_kwh = "0.0425786"
+formule_piek = "0,0264550 + 0,0012490 x Epex DAM"
+formule_dal = "0,0175080 + 0,0009670 x Epex DAM"
+formule_injectie_piek = "0,0003000 + 0,0004850 x Epex DAM"
+formule_injectie_dal = "0,0003000 + 0,0004850 x Epex DAM"
+
+[elektriciteit.componenten]
+energie_afname_eur = "1452.01"
+energie_injectie_eur = "-84.15"
+groene_stroom_eur = "138.28"
+wkk_eur = "49.28"
+netwerkkosten_eur = "1150.39"
+toeslagen_eur = "621.10"
+
+[elektriciteit.netwerk]
+databeheer_eur = "17.65"
+capaciteitstarief_eur = "428.07"
+distributiekosten_eur = "704.67"
+gemiddelde_distributiekost_eur_kwh = "0.0560552"
+
+[elektriciteit.heffingen]
+bijdrage_op_de_energie_eur = "24.22"
+bijzondere_accijns_eur = "596.88"
+bijdrage_op_de_energie_eur_mwh = "1.9261"
+bijzondere_accijns_eur_mwh_afgedrukt = "47.4807"
+bijdrage_energiefonds_eur = "0"
+
+[aardgas]
+periode_van = "2025-06-01"
+periode_tot = "2026-05-31"
+verbruik_kwh = "13599"
+
+[[aardgas.tariefkaart]]
+product = "Drive"
+van = "2025-06-01"
+tot = "2026-03-25"
+versie = "2025-01-26"
+dagen = 298
+vaste_vergoeding_jaar = "40.57"
+vaste_vergoeding_eur = "33.12"
+verbruik_kwh = "12116"
+prijs_eur_kwh = "0.0430423"
+bedrag_eur = "521.50"
+formule = "0,0096800 + 0,0010000 x ZTP DAM (HEREN)"
+
+[[aardgas.tariefkaart]]
+product = "Empower"
+van = "2026-03-26"
+tot = "2026-05-31"
+versie = "2026-01-26"
+dagen = 67
+vaste_vergoeding_jaar = "42.45"
+vaste_vergoeding_eur = "7.79"
+verbruik_kwh = "1483"
+prijs_eur_kwh = "0.0542549"
+bedrag_eur = "80.46"
+formule = "0,0068800 + 0,0010000 x ZTP DAM (HEREN)"
+
+[aardgas.componenten]
+energie_eur = "642.87"
+netwerkkosten_eur = "242.15"
+toeslagen_eur = "126.64"
+
+[aardgas.netwerk]
+distributiekosten_eur = "220.94"
+transportkosten_eur = "21.21"
+gemiddelde_distributiekost_eur_kwh = "0.0162468"
+gemiddelde_transportkost_eur_kwh = "0.0015597"
+
+[aardgas.heffingen]
+bijdrage_op_de_energie_eur = "13.57"
+bijzondere_accijns_eur = "113.07"
+bijdrage_op_de_energie_eur_mwh_afgedrukt = "0.9978"
+bijzondere_accijns_eur_mwh_afgedrukt = "0.0083146"
+
+# --------------------------------------------------------------------------
+# Wat de simulatie ervan maakt
+# --------------------------------------------------------------------------
+#
+# De volledige afrekening levert geen bedrag: "Drive" staat niet in de export
+# voor juni 2025 en later. Wat wél getoetst is:
+#
+#   | post                            | simulatie | factuur | verschil |
+#   |---------------------------------|----------:|--------:|---------:|
+#   | netkost elektriciteit (FHV)     |   1153,65 | 1150,39 |    +3,26 |
+#   | distributiekost aardgas (FHV)   |    219,78 |  220,94 |    -1,16 |
+#
+# Beide binnen een half procent, op een netbeheerder die verder in geen enkele
+# referentiecase voorkomt. De nettariefopzoeking gaat dus werkelijk op de
+# netbeheerder.
+#
+# Het laatste stuk van de afrekening — het product "Empower", 26/03/2026 tot
+# 31/05/2026 — staat wél in de export en is als apart dossier na te rekenen
+# (`tests/fixturen/dossiers/engie_empower_fhv_slot.toml`). De factuur drukt
+# voor dat stuk zijn eigen bedragen af, dus die zijn rechtstreeks vergelijkbaar.
+[simulatie]
+elektriciteit_netkost_eur = "1153.65"
+aardgas_distributiekost_eur = "219.78"
+elektriciteit_fout = "Product 'Drive' van ENGIE niet gevonden voor 2025-06"
+
+# Het Empower-stuk apart doorgerekend:
+#
+#   | post                       | simulatie | factuur | verschil |
+#   |----------------------------|----------:|--------:|---------:|
+#   | leverancier elektriciteit  |    332,85 |  293,26 |   +39,59 |
+#   | injectievergoeding         |     31,75 |   26,30 |    +5,45 |
+#   | leverancier aardgas        |     94,77 |   88,25 |    +6,52 |
+#
+# (293,26 = de 259,60 van de factuurregels plus het pro-rata-aandeel van de
+# kosten groene stroom en WKK, die de factuur alleen over het volledige jaar
+# afdrukt: 2.256 kWh x 1,100 + 2.256 kWh x 0,392 ct/kWh.)
+#
+# De richting is stelselmatig: de export rekent hoger. Twee oorzaken, beide
+# eigen aan de bron en niet aan de code:
+#
+#   - de vaste vergoeding in de export is 84,91 EUR/jaar (elektriciteit) en
+#     47,17 (gas), tegenover 80,19 en 42,45 op de kaart van de klant;
+#   - de indexwaarde in de export voor april 2026 is 110,75 EUR/MWh, terwijl de
+#     prijs die de leverancier aanrekende overeenkomt met 84,75. De export
+#     draagt de waarde die VREG bij publicatie kende; de leverancier rekent af
+#     met de gerealiseerde maandwaarde.
+[simulatie.empower_slot]
+leverancier_elektriciteit_eur = "332.85"
+injectievergoeding_eur = "31.75"
+leverancier_aardgas_eur = "94.77"
+factuur_leverancier_elektriciteit_eur = "293.26"
+factuur_injectievergoeding_eur = "26.30"
+factuur_leverancier_aardgas_eur = "88.25"

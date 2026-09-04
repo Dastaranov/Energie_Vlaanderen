@@ -158,6 +158,7 @@ nog langs beide wegen na, en dat twee onafhankelijke paden op dezelfde euro
 uitkomen is precies wat de overstap naar de databank rechtvaardigt. Het getal
 overhouden en de vergelijking weggooien zou de waarde van die test omkeren.
 | `test_referentiefactuur.py` | De volledige engine tegen een echte ENGIE-eindafrekening, inclusief de verklaring van elk restverschil. |
+| `test_referentiefacturen_reeks.py` | Vier andere echte afrekeningen, elk voor wat de eerste niet raakt: een register "uitsluitend nacht", de netkost regel per regel, een contract dat niet op de markt bestaat, en een tweede netbeheerder. |
 | `test_battery.py` | De batterij bewaakt haar eigen grenzen: laadtoestand, cyclustelling, en een nameplate van nul die vroeger deelde door nul. |
 | `test_omvormer.py` | Dezelfde zelfbewaking voor de omvormer — drie vermogensvelden die strikt positief moeten zijn. |
 | `test_zonnepaneel.py` | Instraling, celtemperatuur en ouderdom naar DC-vermogen; elk van de drie kan stil een verkeerd getal geven. |

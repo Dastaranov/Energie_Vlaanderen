@@ -1,0 +1,94 @@
+# Geanonimiseerd dossier bij de ENGIE-eindafrekening met **personeelstarief**
+# voor elektriciteit en "Flow" voor aardgas.
+#
+# Naam, straat, EAN, klant- en meternummer staan hier niet in; het brondocument
+# blijft lokaal onder `data/referentie/`.
+#
+# Waarom deze case: het personeelstarief is een contract dat **niet op vtest.be
+# staat en er nooit op zal staan** — het is geen marktaanbod. De juiste uitkomst
+# is dan ook geen bedrag maar een weigering: de rekenengine hoort te stoppen in
+# plaats van er een marktproduct naast te leggen. Dat is de ene helft van wat
+# deze case toetst.
+#
+# De andere helft is gewoon aardgas: "Flow" staat wél in de export, over de hele
+# periode, met een tariefkaartwissel in het midden en een jaarwissel — een
+# volwaardige gascase op zichzelf.
+#
+# Wat de factuur over het personeelstarief zegt, en wat er dus *niet* in dit
+# dossier staat:
+#
+#   - De prijsformule is `0,1097000 + 0,0011400 x Epex DAM` EUR/kWh (en
+#     0,1124000 voor de tweede periode). De factor 0,00114 ligt ruim boven de
+#     0,001 die een marktproduct hanteert.
+#   - Er staat **geen enkele netwerkkostenregel** op de elektriciteitshelft van
+#     deze factuur, en de rubriek "Netwerkkosten en toeslagen" noemt voor
+#     elektriciteit alleen de twee heffingen — geen "gemiddelde distributiekosten
+#     elektriciteit", terwijl die regel op de andere ENGIE-facturen wél staat.
+#     De prijs van 0,2054 EUR/kWh is dus all-in; ENGIE's eigen prijsevolutietabel
+#     noemt het totaal ook "netwerkkosten en toeslagen inbegrepen".
+#   - Daarbovenop staat een "Korting personeel" van -413,32 EUR.
+#
+# Geen van die drie is uit een publieke bron af te leiden.
+
+[gebruiker]
+postcode = "9220"
+gemeente = "Hamme"
+segment = "Woning"
+
+[aansluiting]
+elektriciteit = true
+gas = true
+meter = "digitaal"
+# De meter draagt piek- en dalregisters, maar de factuur rekent alles af als
+# "normale uren" — één tarief over de som.
+registerschema = "enkelvoudig"
+# Er is injectie (2.696 kWh), maar het piekvermogen van de installatie staat
+# niet op de factuur. `zonnepanelen = true` zou een pv_kwp of omvormer_kva
+# eisen om productie te schatten; die schatting is hier overbodig omdat de
+# injectievolumes gemeten in de opgave staan.
+zonnepanelen = false
+terugdraaiend = false
+
+[[verbruiksopgave]]
+energie = "elektriciteit"
+periode_van = "2025-07-06"
+periode_tot = "2026-06-01"
+bron = "factuur"
+afname_dag_kwh = 3594
+injectie_dag_kwh = 2696
+
+[[verbruiksopgave]]
+energie = "gas"
+periode_van = "2025-05-08"
+periode_tot = "2026-05-07"
+bron = "factuur"
+afname_dag_kwh = 14230
+
+# Het contract dat niet bestaat op de markt. Het staat hier omdat het dossier
+# de werkelijkheid beschrijft; de berekening hoort erop te stoppen.
+[[contract.elektriciteit]]
+leverancier = "ENGIE"
+product = "personeelstarief"
+type = "variabel"
+van = "2025-07-06"
+tot = "2026-06-01"
+tariefkaart_van = "2025-07-06"
+bron = "factuur"
+
+[[contract.gas]]
+leverancier = "ENGIE"
+product = "Flow"
+type = "variabel"
+van = "2025-05-08"
+tot = "2025-10-12"
+tariefkaart_van = "2024-09-12"
+bron = "factuur"
+
+[[contract.gas]]
+leverancier = "ENGIE"
+product = "Flow"
+type = "variabel"
+van = "2025-10-12"
+tot = "2026-05-07"
+tariefkaart_van = "2025-08-12"
+bron = "factuur"

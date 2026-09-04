@@ -1,0 +1,229 @@
+# Referentiefactuur: eindafrekening ENGIE met **personeelstarief** voor
+# elektriciteit en "Flow" voor aardgas.
+#
+# Geanonimiseerd. Naam, straat, EAN, klant- en meternummer staan hier niet in;
+# het brondocument blijft lokaal in `data/referentie/` en valt buiten git.
+#
+# WAT DEZE FACTUUR TOETST
+# -----------------------
+# Twee dingen, en het eerste is een weigering.
+#
+# Het personeelstarief is geen marktaanbod: het staat niet op vtest.be en zal
+# er nooit op staan. De juiste uitkomst van een berekening is dan geen bedrag
+# maar een fout. `zoek_product()` levert die ook —
+#     "Product 'personeelstarief' van ENGIE niet gevonden voor 2025-07 (afname)"
+# — en dat is precies het gedrag dat bewaakt hoort te worden. Een engine die
+# hier het dichtstbijzijnde marktproduct naast zou leggen, geeft een plausibel
+# ogend en volledig verzonnen bedrag.
+#
+# Het tweede is gewoon aardgas, en dat rekent wél helemaal door.
+
+[factuur]
+bron = "Eindafrekening ENGIE (Electrabel nv), detailpagina's, factuurdatum 2026-06-08"
+soort = "afrekening"
+leverancier = "ENGIE"
+netbeheerder = "Fluvius Midden-Vlaanderen"
+netbeheerder_code = "FMV"
+postcode = "9220"
+segment = "Woning"
+meter = "digitaal"
+
+[btw]
+basis_6pct = "684.62"
+btw_6pct = "41.09"
+vrijgesteld_injectie = "-196.68"
+vrijgesteld_injectie_grond = "Beslissing ET 131.616/2 van 25-10-2019"
+# Derde onafhankelijke bevestiging van de btw-behandeling van de
+# injectievergoeding: ze valt volledig buiten de 6%-basis.
+
+# --------------------------------------------------------------------------
+# Elektriciteit — het personeelstarief
+# --------------------------------------------------------------------------
+[elektriciteit]
+periode_van = "2025-07-06"
+periode_tot = "2026-05-31"
+product = "personeelstarief"
+contracttype = "variabel"
+looptijd = "onbepaalde duur"
+afname_kwh = "3594"
+injectie_kwh = "2696"
+registerschema = "enkelvoudig"
+
+[elektriciteit.componenten]
+energie_afname_eur = "740.92"
+energie_injectie_eur = "-196.68"
+toeslagen_eur = "177.56"
+korting_personeel_eur = "-413.32"
+# **Er staat geen netwerkkostenregel op de elektriciteitshelft van deze
+# factuur.** Niet nul, maar afwezig — en de rubriek "Netwerkkosten en
+# toeslagen" noemt voor elektriciteit alleen de twee heffingen, terwijl diezelfde
+# rubriek op de andere ENGIE-facturen wél een "gemiddelde distributiekosten
+# elektriciteit" draagt. De prijsevolutietabel van de factuur noemt het totaal
+# bovendien "netwerkkosten en toeslagen inbegrepen". De prijs van 0,2054 EUR/kWh
+# is dus all-in.
+netwerkkosten_eur = ""
+netwerkkosten_aanwezig = false
+
+[[elektriciteit.tariefkaart]]
+van = "2025-07-06"
+tot = "2026-03-31"
+afname_kwh = "3102"
+prijs_eur_kwh = "0.2054255"
+formule = "0,1097000 + 0,0011400 x Epex DAM"
+
+[[elektriciteit.tariefkaart]]
+van = "2026-04-01"
+tot = "2026-05-31"
+afname_kwh = "492"
+prijs_eur_kwh = "0.2107520"
+formule = "0,1124000 + 0,0011400 x Epex DAM"
+
+[elektriciteit.injectie]
+kwh = "2696"
+prijs_eur_kwh = "0.0729525"
+formule = "0,0020000 + 0,0008690 x Endex303"
+
+[elektriciteit.heffingen]
+bijdrage_op_de_energie_eur = "6.92"
+bijzondere_accijns_eur = "170.64"
+# De factuur drukt de tarieven apart af. 1,9261 is exact de waarde die de
+# masterdata draagt; 47,4791 is het volumegewogen periodegemiddelde van deze
+# factuur en niet het wettelijke tarief (een tweede ENGIE-factuur over een
+# andere periode drukt 47,4800 af, een derde 47,4807).
+bijdrage_op_de_energie_eur_mwh = "1.9261"
+bijzondere_accijns_eur_mwh_afgedrukt = "47.4791"
+
+# --------------------------------------------------------------------------
+# Aardgas — "Flow", volledig na te rekenen
+# --------------------------------------------------------------------------
+[aardgas]
+periode_van = "2025-05-08"
+periode_tot = "2026-05-06"
+dagen = 364
+verbruik_m3 = "1247"
+omrekenfactor_kwh_m3 = "11.4114"
+verbruik_kwh = "14230"
+
+[[aardgas.tariefkaart]]
+product = "Flow"
+looptijd = "1 jaar"
+van = "2025-05-08"
+tot = "2025-10-11"
+versie = "2024-09-12"
+dagen = 157
+vaste_vergoeding_jaar = "35.00"
+vaste_vergoeding_eur = "15.05"
+verbruik_kwh = "1744"
+prijs_eur_kwh = "0.0479931"
+bedrag_eur = "83.70"
+formule = "0,0148100 + 0,0010000 x ZTP DAM (HEREN)"
+
+[[aardgas.tariefkaart]]
+product = "Flow"
+looptijd = "2 jaar"
+van = "2025-10-12"
+tot = "2026-05-06"
+versie = "2025-08-12"
+dagen = 207
+vaste_vergoeding_jaar = "42.45"
+vaste_vergoeding_eur = "24.07"
+verbruik_kwh = "12486"
+prijs_eur_kwh = "0.0457865"
+bedrag_eur = "571.69"
+formule = "0,0106600 + 0,0010000 x ZTP DAM (HEREN)"
+
+[aardgas.componenten]
+energie_eur = "694.51"
+netwerkkosten_eur = "235.62"
+toeslagen_eur = "132.99"
+# Kortingen, buiten elke publieke bron en dus niet vergelijkbaar.
+welkomstvoordeel_eur = "-41.87"
+
+[aardgas.netwerk]
+distributiekosten_eur = "213.42"
+transportkosten_eur = "22.20"
+# De distributie- en transportkosten staan per tariefkaartperiode afgedrukt:
+# 53,43 + 159,99 distributie en 2,72 + 19,48 transport.
+gemiddelde_distributiekost_eur_kwh = "0.0149979"
+gemiddelde_transportkost_eur_kwh = "0.0015601"
+
+# --------------------------------------------------------------------------
+# De gasheffingen, en de bevinding die eruit volgt
+# --------------------------------------------------------------------------
+#
+# **De bijzondere accijns op aardgas is vóór 01/08/2026 niet vlak maar
+# progressief, en onze masterdata modelleert hem als vlak.**
+#
+# `config/heffingen/bijzondere_accijns_aardgas.toml` draagt één schijf van
+# 8,2415 EUR/MWh voor de hele periode vóór de hervorming. Dat cijfer is
+# teruggerekend uit één factuur (12.181 kWh, 100,39 EUR) door te delen — dus
+# het is een *gemiddelde*, geen tarief. Drie facturen samen laten zien dat het
+# gemiddelde met het volume meestijgt:
+#
+#     12.181 kWh -> 100,39 EUR -> 8,2415 EUR/MWh
+#     13.599 kWh -> 113,07 EUR -> 8,3146 EUR/MWh
+#     14.230 kWh -> 118,79 EUR -> 8,3479 EUR/MWh
+#
+# Dat is precies de vorm van een progressieve tabel. Een tweeschijvenmodel met
+# de grens op 12 MWh — dezelfde grens als het regime ná 01/08/2026 — en
+# 8,23 EUR/MWh onder en ~8,98 boven reproduceert de eerste en de derde factuur
+# tot op de cent en de tweede tot op vijf cent:
+#
+#     12.000 x 8,23 +   181 x 8,98 = 100,385   (factuur 100,39)
+#     12.000 x 8,23 + 1.599 x 8,98 = 113,119   (factuur 113,07)
+#     12.000 x 8,23 + 2.230 x 8,98 = 118,785   (factuur 118,79)
+#
+# Een jaarwisselstap is uitgesloten: de eerste tariefkaartperiode van déze
+# factuur ligt volledig in 2025 en geeft 8,2798 EUR/MWh, terwijl de factuur met
+# het laagste volume over een vrijwel gelijke periode op 8,2415 uitkomt — lager
+# dan het zuivere 2025-cijfer. Alleen het volume verklaart de spreiding.
+#
+# 8,2300 is trouwens de waarde die vóór de "correctie" van augustus 2026 in de
+# masterdata stond, uit een secundaire bron. Die was voor de eerste schijf
+# blijkbaar juist; de correctie naar 8,2415 heeft een schijfgrens platgeslagen.
+#
+# De bovenste schijf is uit drie facturen afgeleid en niet uit een wettekst;
+# `geverifieerd` hoort daar dus op false te staan tot ze bevestigd is.
+[aardgas.heffingen]
+bijdrage_op_de_energie_eur = "14.20"
+bijzondere_accijns_eur = "118.79"
+bijzondere_accijns_kaart1_kwh = "1744"
+bijzondere_accijns_kaart1_eur = "14.44"
+bijzondere_accijns_kaart2_kwh = "12486"
+bijzondere_accijns_kaart2_eur = "104.35"
+# Afgedrukt op de prijsinformatiepagina. 0,9978 is óók wat de tweede
+# ENGIE-factuur in deze reeks afdrukt; de masterdata draagt 0,9975 voor
+# niet_zakelijk, teruggerekend uit een afgerond factuurbedrag.
+bijdrage_op_de_energie_eur_mwh_afgedrukt = "0.9978"
+bijzondere_accijns_eur_mwh_afgedrukt = "8.3479"
+federale_bijdrage_eur_mwh = "0"
+
+# --------------------------------------------------------------------------
+# Wat de simulatie ervan maakt
+# --------------------------------------------------------------------------
+#
+# Aardgas, venster 2025-05-08 .. 2026-05-07:
+#
+#   | post          | simulatie | factuur | verschil |
+#   |---------------|----------:|--------:|---------:|
+#   | netwerkkosten |    235,63 |  235,62 |    +0,01 |
+#   | heffingen     |    131,47 |  132,99 |    -1,52 |
+#   | leverancier   |    653,98 |  694,51 |   -40,53 |
+#
+# De netkost komt op één cent uit, over twee tariefjaren en met de
+# RLP0-verdeling van het volume. Het gat van 1,52 op de heffingen is exact de
+# progressieve accijnsschijf hierboven; met het tweeschijvenmodel wordt het
+# 132,98 tegenover 132,99.
+#
+# De 40,53 op de leverancierskost is dezelfde oorzaak als bij de andere
+# facturen in deze reeks: de export draagt de kaart die vandaag verkocht wordt
+# (47,17 EUR/jaar vaste vergoeding) en niet die van het lopende contract
+# (35,00 en 42,45), en de indexwaarde van de export is niet die waarmee de
+# leverancier heeft afgerekend.
+#
+# Elektriciteit levert geen bedrag op, en dat is de bedoelde uitkomst.
+[simulatie]
+gas_netwerkkosten_eur = "235.63"
+gas_heffingen_eur = "131.47"
+gas_leverancier_eur = "653.98"
+elektriciteit_fout = "Product 'personeelstarief' van ENGIE niet gevonden"

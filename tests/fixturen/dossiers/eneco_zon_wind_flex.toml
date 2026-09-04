@@ -1,0 +1,67 @@
+# Geanonimiseerd dossier bij de Eneco-jaarafrekening "Zon & Wind Flex",
+# elektriciteit, 01/06/2025 - 04/06/2026 (369 dagen).
+#
+# Naam, straat, EAN, klant-, factuur- en meternummer en het rekeningnummer
+# staan hier niet in; het brondocument blijft lokaal onder `data/referentie/`.
+#
+# Waarom deze case: het is het enige document in dit repo dat **elke
+# nettariefpost apart met zijn eenheidsprijs afdrukt** — afnametarief,
+# databeheer, capaciteitstarief én het maximumtarief. Bij 15,09 kWh over een
+# heel jaar is de energiekost verwaarloosbaar en bestaat de factuur bijna
+# volledig uit vaste posten; dat maakt van deze afrekening een zuivere toets op
+# de netkost en de heffingen, zonder dat verbruiksaannames het beeld vertroebelen.
+#
+# Ze is bovendien de enige die de **ondergrens van 2,5 kW** en het
+# **maximumtarief** werkelijk laat vuren — takken van `grid_cost()` die geen
+# enkele andere referentiefactuur aanraakt.
+
+[gebruiker]
+postcode = "9220"
+gemeente = "Hamme"
+# LET OP — dit is de plek waar dossier en factuur uit elkaar lopen.
+#
+# De factuur rekent de **bijzondere accijns** aan het niet-zakelijke tarief
+# (4,75 c/kWh) maar de **bijdrage energiefonds** aan het *niet-residentiële*
+# tarief (118,56 EUR/jaar in 2025, 120,84 in 2026). Twee heffingen, twee wetten,
+# twee categorieën — en ze vallen hier niet samen.
+#
+# `segment` stuurt in de rekenengine beide categorieën tegelijk aan:
+# "Woning" -> niet_zakelijk + residentieel, anders zakelijk + niet_residentieel.
+# Geen van de twee waarden reproduceert deze factuur dus volledig. "Woning" is
+# hier gekozen omdat het de energiekost en de accijns juist zet; het
+# energiefonds valt daardoor op 0 uit terwijl de factuur er 120,80 aanrekent.
+# Zie de bevinding in `tests/fixturen/facturen/eneco_zon_wind_flex_2025_2026.toml`.
+segment = "Woning"
+
+[aansluiting]
+elektriciteit = true
+gas = false
+meter = "digitaal"
+# De meter draagt een dag- en een nachtregister, maar Eneco factureert
+# "Enkelvoudig": één tarief over de som.
+registerschema = "enkelvoudig"
+zonnepanelen = false
+terugdraaiend = false
+# 2,50 kW is niet de gemeten piek maar de **wettelijke ondergrens** die de
+# netbeheerder toepast zodra de werkelijke maandpieken daaronder liggen; de
+# factuur drukt hem als zodanig af. De werkelijke pieken staan er niet op.
+gemeten_maandpiek_kw = 2.5
+
+[[verbruiksopgave]]
+energie = "elektriciteit"
+periode_van = "2025-06-01"
+periode_tot = "2026-06-05"
+bron = "factuur"
+afname_dag_kwh = 15.09
+
+[[contract.elektriciteit]]
+leverancier = "Eneco Belgium"
+product = "Eneco Zon & Wind Flex"
+type = "variabel"
+van = "2025-06-01"
+tot = "2026-06-05"
+# Tariefkaart versie 012210, geldig vanaf 01/01/2023. Bij een variabel contract
+# bevriest die kaart de formule, niet de prijs: de index blijft maandelijks
+# bewegen.
+tariefkaart_van = "2023-01-01"
+bron = "factuur"

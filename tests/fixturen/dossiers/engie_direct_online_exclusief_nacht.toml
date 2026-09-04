@@ -1,0 +1,98 @@
+# Geanonimiseerd dossier bij de ENGIE-eindafrekening "Direct Online",
+# elektriciteit met een apart register **uitsluitend nacht**.
+#
+# Naam, straat, EAN, klant- en meternummer staan hier bewust niet in; het
+# brondocument blijft lokaal onder `data/referentie/` (buiten git). Wat hier
+# staat zijn postcode, gemeente, volumes en contractperiodes — het minimum om
+# de factuur na te rekenen.
+#
+# Waarom deze case: ze is de enige in dit repo met een **exclusief-nachtregister
+# naast een tweevoudige meter**. Precies de constellatie waarop `bouw_profile`
+# ooit het dalvolume bij het exclusief-nachtregister optelde en daarmee 35 EUR
+# per jaar te weinig netkost rekende.
+
+[gebruiker]
+postcode = "9500"
+gemeente = "Geraardsbergen"
+segment = "Woning"
+
+[aansluiting]
+elektriciteit = true
+gas = false
+meter = "digitaal"
+# De meter draagt twee registerparen: 4190 piek/dal en 4230 (uitsluitend
+# nacht). `Registerschema` kent die combinatie niet als eigen waarde — het is
+# "tweevoudig" plus een apart nachtregister. De berekening leest de volumes,
+# niet het schema.
+registerschema = "tweevoudig"
+zonnepanelen = false
+terugdraaiend = false
+# De factuur rekent het capaciteitstarief op 10,129 kW. Dat is de gemiddelde
+# maandpiek zoals de netbeheerder ze vastgesteld heeft, niet onze schatting.
+gemeten_maandpiek_kw = 10.129
+
+# De opgave staat op de jaargrens gesplitst, en dat is geen detail.
+#
+# De factuur drukt in "Vergelijking met voorgaande jaren" het verbruik per
+# kalenderjaar af: 131 piek / 2.947 dal / 975 exclusief nacht in 2026 (1 januari
+# t/m de meteropname van 31 maart). De rest van de 11.738 kWh valt in 2025.
+#
+# Zonder die splitsing verdeelt de berekening het volume naar **dagen** — 90 van
+# de 365 in 2026, oftewel 24,7% — terwijl er in werkelijkheid 34,5% van het
+# volume in die drie wintermaanden valt. Bij een aansluiting met
+# nachtverwarming is dat het verschil tussen een aanname en een meting, en het
+# tarief van 2026 ligt lager dan dat van 2025.
+[[verbruiksopgave]]
+energie = "elektriciteit"
+periode_van = "2025-04-01"
+periode_tot = "2026-01-01"
+bron = "factuur"
+afname_dag_kwh = 283
+afname_nacht_kwh = 6301
+afname_exclusief_nacht_kwh = 1101
+
+[[verbruiksopgave]]
+energie = "elektriciteit"
+periode_van = "2026-01-01"
+periode_tot = "2026-04-01"
+bron = "factuur"
+afname_dag_kwh = 131
+afname_nacht_kwh = 2947
+afname_exclusief_nacht_kwh = 975
+
+# ENGIE hernoemde "Direct" naar "Direct Online" op 01/12/2025 — de
+# V-test-export draagt de oude naam t/m november 2025 en de nieuwe vanaf
+# december. De factuur noemt beide kaarten "Direct Online"; de leverancier
+# hanteert de nieuwe naam dus met terugwerkende kracht.
+#
+# Een variabel contract wordt per maand opgezocht, dus één declaratie met de
+# nieuwe naam vindt niets voor april t/m november 2025 en de berekening stopt.
+# Daarom staat de naamswissel hier expliciet als een derde contractperiode. De
+# tariefkaart wisselt níét mee: die blijft die van 14/01/2025 tot de nieuwe
+# kaart op 14/03/2026 ingaat.
+[[contract.elektriciteit]]
+leverancier = "ENGIE"
+product = "Direct"
+type = "variabel"
+van = "2025-04-01"
+tot = "2025-12-01"
+tariefkaart_van = "2025-01-14"
+bron = "factuur"
+
+[[contract.elektriciteit]]
+leverancier = "ENGIE"
+product = "Direct Online"
+type = "variabel"
+van = "2025-12-01"
+tot = "2026-03-14"
+tariefkaart_van = "2025-01-14"
+bron = "factuur"
+
+[[contract.elektriciteit]]
+leverancier = "ENGIE"
+product = "Direct Online"
+type = "variabel"
+van = "2026-03-14"
+tot = "2026-04-01"
+tariefkaart_van = "2026-01-14"
+bron = "factuur"

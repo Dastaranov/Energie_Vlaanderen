@@ -1,0 +1,66 @@
+# Hetzelfde aansluitingspunt als `engie_drive_empower_elek_gas.toml`, maar
+# alleen het **laatste stuk** van de eindafrekening: 26/03/2026 - 31/05/2026,
+# de periode onder het product "Empower".
+#
+# Waarom dit bestand bestaat: het voorafgaande product "Drive" verdween in juni
+# 2025 uit de V-test-export (ENGIE verkocht het niet meer; de klant hield het).
+# Daardoor is de volledige afrekening niet door te rekenen — zie de bevinding
+# bij de fixture. Wat wél door te rekenen is, is dit laatste stuk, en de factuur
+# drukt er zijn eigen volumes en bedragen voor af:
+#
+#   elektriciteit afname   534 kWh piek + 1.722 kWh dal   ->  259,60 EUR
+#   elektriciteit injectie 471 kWh piek +   159 kWh dal   ->  -26,30 EUR
+#   aardgas                1.483 kWh                      ->   88,25 EUR
+#
+# Die drie bedragen zijn per tariefkaart afgedrukt en dus rechtstreeks
+# vergelijkbaar. De netkost en de heffingen staan op de factuur alleen over de
+# volledige periode en worden hier dus niet vergeleken.
+
+[gebruiker]
+postcode = "1760"
+gemeente = "Roosdaal"
+segment = "Woning"
+
+[aansluiting]
+elektriciteit = true
+gas = true
+meter = "digitaal"
+registerschema = "tweevoudig"
+zonnepanelen = false
+terugdraaiend = false
+gemeten_maandpiek_kw = 7.627
+
+[[verbruiksopgave]]
+energie = "elektriciteit"
+periode_van = "2026-03-26"
+periode_tot = "2026-06-01"
+bron = "factuur"
+afname_dag_kwh = 534
+afname_nacht_kwh = 1722
+injectie_dag_kwh = 471
+injectie_nacht_kwh = 159
+
+[[verbruiksopgave]]
+energie = "gas"
+periode_van = "2026-03-26"
+periode_tot = "2026-06-01"
+bron = "factuur"
+afname_dag_kwh = 1483
+
+[[contract.elektriciteit]]
+leverancier = "ENGIE"
+product = "Empower"
+type = "variabel"
+van = "2026-03-26"
+tot = "2026-06-01"
+tariefkaart_van = "2026-01-26"
+bron = "factuur"
+
+[[contract.gas]]
+leverancier = "ENGIE"
+product = "Empower"
+type = "variabel"
+van = "2026-03-26"
+tot = "2026-06-01"
+tariefkaart_van = "2026-01-26"
+bron = "factuur"

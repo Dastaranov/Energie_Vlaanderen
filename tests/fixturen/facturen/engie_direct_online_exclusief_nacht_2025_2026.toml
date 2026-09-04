@@ -1,0 +1,164 @@
+# Referentiefactuur: eindafrekening ENGIE "Direct Online", elektriciteit met een
+# apart register **uitsluitend nacht**.
+#
+# Geanonimiseerd. Naam, straat, EAN, klant- en meternummer staan hier bewust
+# niet in; het brondocument blijft lokaal in `data/referentie/` en valt buiten
+# git (zie `data/referentie/LEESMIJ.md`). Wat hier staat zijn uitsluitend
+# bedragen, tarieven en volumes.
+#
+# WAT DEZE FACTUUR BLOOTLEGDE
+# ---------------------------
+# `Calculator.supplier_cost()` prijsde het register 'uitsluitend nacht' niet.
+# De vaste en de variabele tak rekenden enkel `afname_dag_kwh` en
+# `afname_nacht_kwh`; `afname_exclusief_nacht_kwh` werd nergens vermenigvuldigd.
+# Op deze factuur ging het om 2.076 van de 11.738 kWh — 223,77 EUR per jaar
+# gratis stroom, zonder foutmelding en zonder falende test.
+#
+# De prijs stond al die tijd in de databank: `tarief_afname` draagt
+# `meter_type = 'exclusive_night'` op 2.855 rijen, evenveel als 'day' en
+# 'night'. De netkost las het register wél — `grid_cost()` splitst er het
+# ODV-tarief precies op, sinds een eerdere referentiefactuur. Alleen de
+# leverancierskant was blijven staan.
+
+[factuur]
+bron = "Eindafrekening ENGIE (Electrabel nv), detailpagina's, factuurdatum 2026-04-28"
+soort = "afrekening"
+periode_van = "2025-04-01"
+periode_tot = "2026-03-31"
+dagen = 365
+leverancier = "ENGIE"
+product = "Direct Online"
+contracttype = "variabel"
+netbeheerder = "Fluvius Midden-Vlaanderen"
+netbeheerder_code = "FMV"
+postcode = "9500"
+segment = "Woning"
+meter = "digitaal"
+
+[btw]
+basis_6pct = "351.84"
+btw_6pct = "21.14"
+
+# --------------------------------------------------------------------------
+# Elektriciteit
+# --------------------------------------------------------------------------
+[elektriciteit]
+# Drie registers. 4190 draagt piek/dal, 4230 is de aansluiting "uitsluitend
+# nacht" (nachtverwarming). Dat derde register is geen dalvolume: het heeft een
+# eigen, lager ODV-tarief bij de netbeheerder en een eigen prijs bij de
+# leverancier.
+afname_piek_kwh = "414"
+afname_dal_kwh = "9248"
+afname_exclusief_nacht_kwh = "2076"
+afname_totaal_kwh = "11738"
+injectie_kwh = "0"
+# Het capaciteitstarief van de factuur. Dit is de door de netbeheerder
+# vastgestelde gemiddelde maandpiek, geen schatting van ons.
+gemiddelde_maandpiek_kw = "10.129"
+
+# De factuur drukt het verbruik per kalenderjaar af in "Vergelijking met
+# voorgaande jaren". De kolom 2026 loopt van 1 januari tot de meteropname van
+# 31 maart; de rest van de 11.738 kWh valt in 2025. Daarmee is de verdeling
+# over de jaarwissel gemeten in plaats van aangenomen: 34,5% van het volume in
+# 24,7% van de dagen — een aansluiting met nachtverwarming is winterzwaar.
+[elektriciteit.jaarwissel]
+kalenderjaar_2026_piek_kwh = "131"
+kalenderjaar_2026_dal_kwh = "2947"
+kalenderjaar_2026_exclusief_nacht_kwh = "975"
+kalenderjaar_2026_totaal_kwh = "4053"
+
+[[elektriciteit.tariefkaart]]
+van = "2025-04-01"
+tot = "2026-03-13"
+versie = "2025-01-14"
+vaste_vergoeding_jaar = "25.47"
+vaste_vergoeding_aangerekend = "24.21"
+dagen = 347
+prijs_piek_eur_kwh = "0.1288010"
+prijs_dal_eur_kwh = "0.1178093"
+prijs_exclusief_nacht_eur_kwh = "0.1075442"
+formule_piek = "0,0299920 + 0,0012320 x Epex DAM"
+formule_dal = "0,0289020 + 0,0009960 x Epex DAM"
+formule_exclusief_nacht = "0,0289020 + 0,0009960 x Epex DAM"
+
+[[elektriciteit.tariefkaart]]
+van = "2026-03-14"
+tot = "2026-03-31"
+versie = "2026-01-14"
+vaste_vergoeding_jaar = "28.30"
+vaste_vergoeding_aangerekend = "1.40"
+dagen = 18
+prijs_piek_eur_kwh = "0.1377273"
+prijs_dal_eur_kwh = "0.1128571"
+prijs_exclusief_nacht_eur_kwh = "0.1127835"
+formule_piek = "0,0243160 + 0,0012620 x Epex DAM"
+formule_dal = "0,0232260 + 0,0009960 x Epex DAM"
+formule_exclusief_nacht = "0,0232260 + 0,0009960 x Epex DAM"
+
+[elektriciteit.componenten]
+energie_afname_eur = "1389.87"
+groene_stroom_eur = "129.11"
+wkk_eur = "46.01"
+netwerkkosten_eur = "1106.81"
+toeslagen_eur = "579.93"
+
+[elektriciteit.netwerk]
+databeheer_eur = "17.59"
+capaciteitstarief_eur = "499.46"
+distributiekosten_eur = "589.76"
+# De factuur drukt zijn eigen gemiddelde distributietarief af.
+gemiddelde_distributiekost_eur_kwh = "0.0502437"
+
+[elektriciteit.heffingen]
+bijdrage_op_de_energie_eur = "22.61"
+bijzondere_accijns_eur = "557.32"
+# De factuur drukt de tarieven af als periodegemiddelde over deze
+# verbruiksperiode, niet als het wettelijke tarief: 22,61 / 11.738 = 0,0019262
+# en 557,32 / 11.738 = 0,0474800. Dat eerste bevestigt de bijdrage op de
+# energie van 1,9261 EUR/MWh die de masterdata sinds augustus 2026 draagt —
+# onafhankelijk van vtest.be, dat die post niet toont.
+bijdrage_op_de_energie_eur_mwh = "1.9261"
+bijzondere_accijns_eur_mwh_afgedrukt = "47.4800"
+# Er staat geen regel "bijdrage energiefonds" op deze factuur, en dat klopt:
+# voor een residentiële laagspanningsaansluiting staat die heffing sinds 2023
+# op 0,00 EUR/maand. Dat is de bevestiging vanuit de andere richting van wat
+# `config/heffingen/bijdrage_energiefonds.toml` zegt.
+bijdrage_energiefonds_eur = "0"
+
+# Twee factuurposten vallen buiten wat de engine kent en worden niet vergeleken:
+# de correctie "Periode tussen meteropname en factuurdatum" (-4,58) en de
+# tussentijdse facturen (3.069,00 incl. btw).
+[elektriciteit.buiten_bereik]
+periode_meteropname_factuurdatum_eur = "-4.58"
+
+# --------------------------------------------------------------------------
+# Wat de simulatie ervan maakt
+# --------------------------------------------------------------------------
+#
+# `energievergelijker gebruiker bereken` op
+# `tests/fixturen/dossiers/engie_direct_online_exclusief_nacht.toml`,
+# venster 2025-04-01 .. 2026-04-01, alles uit de databank:
+#
+#   | post          | simulatie | factuur | verschil |
+#   |---------------|----------:|--------:|---------:|
+#   | heffingen     |    579,94 |  579,93 |    +0,01 |
+#   | netwerkkosten |   1111,67 | 1106,81 |    +4,86 |
+#   | leverancier   |   1486,25 | 1564,99 |   -78,74 |
+#
+# De heffingen komen op één cent uit. De netkost blijft 0,44% boven de factuur
+# staan; het restverschil zit volledig in de volumetrische distributieterm
+# (594,64 tegenover 589,76). Het is géén verdelingsprobleem: om met een
+# jaarwisselverdeling op 589,76 uit te komen zou 48,2% van het volume in 2026
+# moeten vallen, terwijl de factuur zelf 34,5% afdrukt. Er zit dus ongeveer
+# 0,0004 EUR/kWh verschil in het tarief zelf, en dat is nog niet thuisgebracht.
+#
+# De 78,74 op de leverancierskost is verklaard en niet oplosbaar met deze
+# gegevensbron: de V-test-export levert per maand de tariefkaart die op dat
+# moment *verkocht* wordt, terwijl een lopend variabel contract de formule van
+# zijn eigen kaartversie houdt en alleen de index laat bewegen. Concreet voor
+# dit contract: de export draagt param A = 0,0954 waar de kaart van 14/01/2025
+# 0,0996 zegt, en een vaste vergoeding van 28,30 waar de kaart 25,47 zegt.
+[simulatie]
+heffingen_eur = "579.94"
+netwerkkosten_eur = "1111.67"
+leverancier_eur = "1486.25"

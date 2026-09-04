@@ -1,0 +1,85 @@
+# Geanonimiseerd dossier bij de ENGIE-eindafrekening "Drive" → "Empower",
+# elektriciteit met ToU-injectie én aardgas, netbeheerder Fluvius
+# Halle-Vilvoorde.
+#
+# Naam, straat, EAN, klant- en meternummer staan hier niet in; het brondocument
+# blijft lokaal onder `data/referentie/` (buiten git).
+#
+# Waarom deze case: ze is de enige met **Fluvius Halle-Vilvoorde** — elke andere
+# referentiefactuur in dit repo staat op Fluvius Midden-Vlaanderen. Ze toetst
+# dus of de nettariefopzoeking werkelijk op de netbeheerder gaat en niet op een
+# stilzwijgende standaard. Daarbij: een productwissel midden in de periode, en
+# injectie met vier verschillende prijzen (piek/dal x twee producten).
+
+[gebruiker]
+postcode = "1760"
+gemeente = "Roosdaal"
+segment = "Woning"
+
+[aansluiting]
+elektriciteit = true
+gas = true
+meter = "digitaal"
+registerschema = "tweevoudig"
+# De factuur bewijst dat er zonnepanelen zijn (1.910 kWh injectie), maar noemt
+# het piekvermogen niet. `zonnepanelen = true` eist een pv_kwp of omvormer_kva
+# om productie te kunnen schatten; hier is die schatting overbodig — de
+# injectievolumes staan gemeten in de opgave. Een kWp verzinnen om een vlag te
+# stillen zou een aanname zonder bron in het dossier zetten.
+zonnepanelen = false
+terugdraaiend = false
+# De factuur rekent het capaciteitstarief op 7,627 kW.
+gemeten_maandpiek_kw = 7.627
+
+[[verbruiksopgave]]
+energie = "elektriciteit"
+periode_van = "2025-06-01"
+periode_tot = "2026-06-01"
+bron = "factuur"
+afname_dag_kwh = 3719
+afname_nacht_kwh = 8852
+injectie_dag_kwh = 1409
+injectie_nacht_kwh = 501
+
+[[verbruiksopgave]]
+energie = "gas"
+periode_van = "2025-06-01"
+periode_tot = "2026-06-01"
+bron = "factuur"
+afname_dag_kwh = 13599
+
+[[contract.elektriciteit]]
+leverancier = "ENGIE"
+product = "Drive"
+type = "variabel"
+van = "2025-06-01"
+tot = "2026-03-26"
+tariefkaart_van = "2025-01-26"
+bron = "factuur"
+
+[[contract.elektriciteit]]
+leverancier = "ENGIE"
+product = "Empower"
+type = "variabel"
+van = "2026-03-26"
+tot = "2026-06-01"
+tariefkaart_van = "2026-01-26"
+bron = "factuur"
+
+[[contract.gas]]
+leverancier = "ENGIE"
+product = "Drive"
+type = "variabel"
+van = "2025-06-01"
+tot = "2026-03-26"
+tariefkaart_van = "2025-01-26"
+bron = "factuur"
+
+[[contract.gas]]
+leverancier = "ENGIE"
+product = "Empower"
+type = "variabel"
+van = "2026-03-26"
+tot = "2026-06-01"
+tariefkaart_van = "2026-01-26"
+bron = "factuur"

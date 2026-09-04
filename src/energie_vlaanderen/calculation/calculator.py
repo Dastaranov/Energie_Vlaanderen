@@ -262,6 +262,37 @@ class Calculator:
             if x is not None: total += (f.get(coeff) or D("0"))*x
         return total
 
+    @staticmethod
+    def _exclusief_nachtprijs(product:Product,p:Profile,prijs:Optional[Decimal])->Decimal:
+        """De ct/kWh voor het register 'uitsluitend nacht' — of een fout.
+
+        Dit register werd door `supplier_cost` nooit geprijsd: de vaste en de
+        variabele tak rekenden enkel `afname_dag_kwh` en `afname_nacht_kwh`,
+        terwijl `Profile` sinds de referentiefactuur een derde register draagt.
+        Het volume verdween daarmee stil uit de energiekost — op een echte
+        ENGIE-afrekening 2.076 van de 11.738 kWh, ruim 220 EUR per jaar gratis
+        stroom, zonder foutmelding. De netkost kende het register wél
+        (`grid_cost` splitst het ODV-tarief er precies op), dus de fout zat
+        alleen aan de leverancierskant.
+
+        De prijs stond al die tijd in de databank: `tarief_afname` draagt
+        `meter_type = 'exclusive_night'` op evenveel rijen als 'day' en
+        'night'. Ontbreekt ze tóch, dan is dat een fout en geen nul: een
+        register zonder tarief is een onbekende kost. Terugvallen op de
+        nachtprijs zou een aanname zonder bron zijn — het exclusief-nachttarief
+        ligt structureel lager, en dat verschil is nu net waarom het register
+        bestaat.
+        """
+        if p.afname_exclusief_nacht_kwh<=0: return D("0")
+        if prijs is None:
+            raise ValueError(
+                f"Product {product.name!r} van {product.supplier} heeft geen "
+                f"prijs voor het register 'uitsluitend nacht', terwijl het "
+                f"profiel er {p.afname_exclusief_nacht_kwh} kWh op draagt. "
+                "Die kWh zouden anders gratis zijn."
+            )
+        return prijs
+
     def supplier_cost(self, product:Product,p:Profile, market:Optional[pd.DataFrame]=None,
                       intervals:Optional[pd.DataFrame]=None, *,
                       sta_vlak_profiel:bool=True)->tuple[Decimal,list[str]]:
@@ -280,7 +311,9 @@ class Calculator:
         if product.kind.startswith("vast"):
             d=product.components.get("day",product.components.get("single")); n=product.components.get("night",d)
             if d is None: raise ValueError("Vast product mist afnameprijs")
-            return p.afname_dag_kwh*d/D("100")+p.afname_nacht_kwh*(n or d)/D("100")+fixed+extras,warnings
+            x=self._exclusief_nachtprijs(product,p,product.components.get("exclusive_night"))
+            return (p.afname_dag_kwh*d+p.afname_nacht_kwh*(n or d)
+                    +p.afname_exclusief_nacht_kwh*x)/D("100")+fixed+extras,warnings
         if product.kind.startswith("variabel"):
             fd=product.formulas.get("day",product.formulas.get("single")); fn=product.formulas.get("night",fd)
             if not fd: raise ValueError("Variabel product mist formule")
@@ -292,7 +325,12 @@ class Calculator:
                 d=fallback; warnings.append("Variabele prijs gebruikt de aangeleverde berekende Prijs omdat de indexwaarde ontbreekt.")
             if fn and not self.heeft_indexwaarde(fn):
                 n=product.components.get("night",d)
-            return p.afname_dag_kwh*d/D("100")+p.afname_nacht_kwh*n/D("100")+fixed+extras,warnings
+            fx=product.formulas.get("exclusive_night")
+            x=self.formula_ct(fx) if fx and self.heeft_indexwaarde(fx) else None
+            if x is None: x=product.components.get("exclusive_night")
+            x=self._exclusief_nachtprijs(product,p,x)
+            return (p.afname_dag_kwh*d+p.afname_nacht_kwh*n
+                    +p.afname_exclusief_nacht_kwh*x)/D("100")+fixed+extras,warnings
         if product.kind.startswith("dynamisch"):
             f=product.formulas.get("dynamic")
             if not f: raise ValueError("Dynamisch product mist formule")
