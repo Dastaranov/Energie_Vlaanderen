@@ -30,6 +30,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -78,6 +79,80 @@ ZWARE_TABELLEN: tuple[str, ...] = (
     "marktcurve",
     "verbruiksprofiel_waarde",
 )
+
+# Eén stuk van een zware tabel gaat wél mee in de lichte dump.
+#
+# `verbruiksprofiel_waarde` telt 849.720 rijen en past niet in git — maar 8.760
+# daarvan zijn het nationale RLP0N-gasprofiel, en zónder dat profiel kan er
+# helemaal geen gasfactuur berekend worden: `gasaandeel_uit_rlp0()` weigert dan
+# hard. Het gevolg was een CI die elke gasberekening oversloeg terwijl de
+# gascode juist nieuw is. Het elektriciteitsprofiel is wat de tabel groot maakt
+# (35.040 kwartieren x 24 netbeheerders) en dat blijft eruit.
+LICHTE_SUBSETS: tuple[tuple[str, str], ...] = (
+    ("verbruiksprofiel_waarde", "energie_type = 'gas' AND profiel_type = 'rlp0n'"),
+)
+
+
+def _psql_argumenten(dsn: str) -> tuple[list[str], dict]:
+    url = sa.engine.make_url(dsn)
+    argumenten = [
+        "psql", "-v", "ON_ERROR_STOP=1", "-q", "--no-psqlrc",
+        "-h", str(url.host),
+        "-p", str(url.port or 5432),
+        "-U", str(url.username),
+        "-d", str(url.database),
+    ]
+    return argumenten, {"PGPASSWORD": url.password or ""}
+
+
+def _schrijf_subset(fh, conn: sa.Connection, dsn: str, tabel: str, waar: str) -> int:
+    """Voeg een deel van een tabel als COPY-blok aan de dump toe.
+
+    pg_dump kan geen rijen filteren -- `-t` neemt een tabel in zijn geheel. Het
+    tekstformaat dat het uitschrijft is wél gewoon dat van `COPY ... TO STDOUT`,
+    dus psql levert hetzelfde blok voor een deelverzameling. De kolomlijst komt
+    uit het schema en niet uit `select *`, zodat de COPY-kop en de rijen
+    gegarandeerd dezelfde volgorde hebben.
+    """
+    kolommen = [
+        r[0] for r in conn.execute(
+            sa.text(
+                "select column_name from information_schema.columns "
+                "where table_schema = 'public' and table_name = :t "
+                "order by ordinal_position"
+            ),
+            {"t": tabel},
+        )
+    ]
+    if not kolommen:
+        raise DumpError(f"Tabel {tabel!r} bestaat niet; subset kan niet gedumpt worden.")
+
+    lijst = ", ".join(kolommen)
+    argumenten, omgeving = _psql_argumenten(dsn)
+    argumenten += [
+        "-c",
+        rf"\copy (SELECT {lijst} FROM {tabel} WHERE {waar}) TO STDOUT",  # noqa: S608
+    ]
+
+    fh.write(f"COPY public.{tabel} ({lijst}) FROM stdin;\n".encode())
+    with tempfile.TemporaryFile() as fouten:
+        proces = subprocess.Popen(  # noqa: S603 - vaste argumenten, geen shell
+            argumenten, stdout=subprocess.PIPE, stderr=fouten,
+            env={**os.environ, **omgeving},
+        )
+        shutil.copyfileobj(proces.stdout, fh, _BLOKGROOTTE)
+        proces.stdout.close()
+        if proces.wait() != 0:
+            fouten.seek(0)
+            raise DumpError(
+                f"Subset van {tabel} mislukte: "
+                + fouten.read().decode("utf-8", "replace")[:400]
+            )
+    fh.write(b"\\.\n\n")
+
+    return conn.execute(
+        sa.text(f"select count(*) from {tabel} where {waar}")  # noqa: S608
+    ).scalar()
 
 
 def _pg_dump_argumenten(dsn: str, tabellen: tuple[str, ...]) -> tuple[list[str], dict]:
@@ -132,6 +207,7 @@ def maak_dump(
     # afgebroken pg_dump laat anders een half bestand achter dat er als een
     # geldige dump uitziet. `os.replace` is atomair binnen dezelfde map.
     tijdelijk = doel.with_name(doel.name + ".tijdelijk")
+    subsets: dict[str, int] = {}
     try:
         with tempfile.TemporaryFile() as fouten:
             with gzip.open(tijdelijk, "wb") as fh:
@@ -147,6 +223,13 @@ def maak_dump(
                 shutil.copyfileobj(proces.stdout, fh, _BLOKGROOTTE)
                 proces.stdout.close()
                 returncode = proces.wait()
+                if returncode == 0 and not met_zware_tabellen:
+                    # De subsets gaan in dezelfde stroom en dus achter de
+                    # pg_dump-blokken aan. `lees_dump` zet de TRUNCATE van álle
+                    # betrokken tabellen vooraan, dus de volgorde binnen het
+                    # bestand doet er niet toe zolang het één transactie blijft.
+                    for tabel, waar in LICHTE_SUBSETS:
+                        subsets[tabel] = _schrijf_subset(fh, conn, dsn, tabel, waar)
             if returncode != 0:
                 fouten.seek(0)
                 raise DumpError(
@@ -165,6 +248,11 @@ def maak_dump(
         tabel: conn.execute(sa.text(f"select count(*) from {tabel}")).scalar()  # noqa: S608
         for tabel in tabellen
     }
+    # Een subset staat apart in het manifest en niet tussen `rijen`: dat getal
+    # is het aantal rijen in de *databank*, en voor deze tabellen zit maar een
+    # deel in de dump. Ze door elkaar zetten zou het manifest laten beweren dat
+    # de dump 849.720 profielwaarden draagt terwijl het er 8.760 zijn.
+    aantallen.update(subsets)
 
     manifest = {
         "gemaakt_op": datetime.now(tz=timezone.utc).isoformat(),
@@ -174,6 +262,10 @@ def maak_dump(
         "alembic_revisie": revisie,
         "actieve_dataversie": actief,
         "met_zware_tabellen": met_zware_tabellen,
+        "subsets": {
+            tabel: {"rijen": aantal, "waar": dict(LICHTE_SUBSETS)[tabel]}
+            for tabel, aantal in subsets.items()
+        },
         "rijen": aantallen,
         "bestand": doel.name,
         "bytes": doel.stat().st_size,
@@ -184,8 +276,11 @@ def maak_dump(
     return manifest
 
 
-def _valideer_dump(bron: Path) -> None:
-    """Toets dat de gzip volledig en niet-leeg is, vóór er iets gewist wordt.
+_COPY_KOP = re.compile(rb"^COPY (?:public\.)?\"?([a-z_][a-z0-9_]*)\"?\s*\(", re.MULTILINE)
+
+
+def _valideer_dump(bron: Path) -> set[str]:
+    """Toets de gzip vóór er iets gewist wordt, en zeg welke tabellen erin staan.
 
     De CRC van een gzip staat aan het einde, dus dit vergt een volledige
     decompressie. Ze wordt blok voor blok weggegooid -- het gaat om de
@@ -194,19 +289,30 @@ def _valideer_dump(bron: Path) -> None:
     Er wordt ook gekeken of er werkelijk data in zit. Een geldige gzip van een
     leeg of louter uit `SET`-regels bestaand bestand zou de tabellen anders
     netjes leegmaken en daarna niets terugzetten.
+
+    En passant worden de tabelnamen uit de COPY-koppen verzameld. `lees_dump`
+    maakt alleen die tabellen leeg, en dat is geen verfijning maar een
+    veiligheidsslot: een lichte dump draagt `marktcurve` niet en van
+    `verbruiksprofiel_waarde` alleen het gasdeel. Wie zo'n dump op een volle
+    databank inleest — een verkeerd gezette DB_HOST volstaat — wiste vroeger
+    849.720 profielwaarden en 265.080 curverijen die er nooit meer uit
+    terugkwamen. Nu blijft staan wat de dump niet kan teruggeven.
     """
     bytes_gelezen = 0
-    heeft_data = False
+    tabellen: set[str] = set()
     staart = b""
     try:
         with gzip.open(bron, "rb") as fh:
             while blok := fh.read(_BLOKGROOTTE):
                 bytes_gelezen += len(blok)
-                if not heeft_data:
-                    # Op de blokgrens kan een sleutelwoord doormidden vallen,
-                    # dus de staart van het vorige blok gaat mee.
-                    heeft_data = b"COPY " in staart + blok or b"INSERT INTO" in staart + blok
-                    staart = blok[-16:]
+                # Op de blokgrens kan een COPY-kop doormidden vallen, dus de
+                # staart van het vorige blok gaat mee. 512 bytes is ruim: de
+                # langste kop in dit schema is die van `vtest_contract`.
+                samen = staart + blok
+                tabellen.update(
+                    naam.decode("ascii") for naam in _COPY_KOP.findall(samen)
+                )
+                staart = samen[-512:]
     except (gzip.BadGzipFile, EOFError, OSError, zlib.error) as exc:
         raise DumpError(
             f"Dump is beschadigd en is niet ingelezen; de databank is ongemoeid "
@@ -215,11 +321,12 @@ def _valideer_dump(bron: Path) -> None:
 
     if bytes_gelezen == 0:
         raise DumpError(f"Dump is leeg: {bron}")
-    if not heeft_data:
+    if not tabellen:
         raise DumpError(
-            f"Dump bevat geen COPY- of INSERT-opdrachten: {bron}. Inlezen zou "
+            f"Dump bevat geen COPY-opdrachten: {bron}. Inlezen zou "
             "de tabellen leegmaken zonder ze te vullen."
         )
+    return tabellen
 
 
 def lees_dump(dsn: str, bron: Path) -> None:
@@ -241,9 +348,17 @@ def lees_dump(dsn: str, bron: Path) -> None:
     # een eigen psql-aanroep -- en die commit meteen. Was de gzip stuk of liep
     # de restore vast, dan bleef de databank leeg achter: de dump was dan geen
     # herstel maar een wisser.
-    _valideer_dump(bron)
+    aanwezig = _valideer_dump(bron)
 
-    tabellen = ", ".join(REFERENTIE_TABELLEN + ZWARE_TABELLEN)
+    # Alleen leegmaken wat de dump ook weer vult. De volgorde blijft die van de
+    # constanten, zodat de TRUNCATE er voorspelbaar uitziet.
+    te_wissen = [t for t in REFERENTIE_TABELLEN + ZWARE_TABELLEN if t in aanwezig]
+    if not te_wissen:
+        raise DumpError(
+            f"Dump {bron} bevat geen van de bekende tabellen "
+            f"({', '.join(sorted(aanwezig))!r} gevonden). Inlezen afgebroken."
+        )
+    tabellen = ", ".join(te_wissen)
     argumenten = [
         # --single-transaction: leegmaken en vullen zijn samen één handeling.
         # Faalt er iets halverwege, dan rolt het geheel terug en staat de

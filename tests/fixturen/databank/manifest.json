@@ -1,8 +1,14 @@
 {
-  "gemaakt_op": "2026-09-04T05:20:46.246683+00:00",
-  "alembic_revisie": "0022",
+  "gemaakt_op": "2026-09-04T15:56:16.988825+00:00",
+  "alembic_revisie": "0024",
   "actieve_dataversie": "20260903T172618Z-f82afd0a",
   "met_zware_tabellen": false,
+  "subsets": {
+    "verbruiksprofiel_waarde": {
+      "rijen": 8760,
+      "waar": "energie_type = 'gas' AND profiel_type = 'rlp0n'"
+    }
+  },
   "rijen": {
     "data_version": 5,
     "leverancier": 34,
@@ -12,14 +18,15 @@
     "netbeheerder": 25,
     "netbeheerder_tarief": 2096,
     "gemeente": 519,
-    "nettarief_transport": 2,
+    "nettarief_transport": 3,
     "overheidsheffing_accijns_schijf": 12,
     "overheidsheffing_energiefonds": 25,
     "overheidsheffing_btw": 4,
     "vtest_contract": 364,
     "vtest_scrape_run": 3,
-    "vtest_postcode_prijs": 8263
+    "vtest_postcode_prijs": 8263,
+    "verbruiksprofiel_waarde": 8760
   },
   "bestand": "referentie.sql.gz",
-  "bytes": 498561
+  "bytes": 580359
 }

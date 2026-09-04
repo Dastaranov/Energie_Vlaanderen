@@ -66,16 +66,85 @@ class TestBruikbaarheid:
                       "gemeente", "overheidsheffing_accijns_schijf"):
             assert f"COPY public.{tabel} " in inhoud, tabel
 
-    def test_de_zware_tabellen_zitten_er_niet_in(self, inhoud):
-        """`marktcurve` is 70 MB en `verbruiksprofiel_waarde` 374 MB, tegenover
-        ~7 MB voor al de rest. Ze meenemen maakt de repo zwaar en CI traag; ze
-        zijn alleen nodig voor dynamische contracten en verbruiksschatting."""
-        for tabel in ("marktcurve", "verbruiksprofiel_waarde"):
-            assert f"COPY public.{tabel} " not in inhoud, tabel
+    def test_marktcurve_zit_er_niet_in(self, inhoud):
+        """70 MB, en alleen nodig voor dynamische contracten. Meenemen maakt de
+        repo zwaar en CI traag."""
+        assert "COPY public.marktcurve " not in inhoud
+
+    def test_van_de_profielen_zit_alleen_het_gasdeel_erin(self, inhoud):
+        """849.720 rijen passen niet in git; 8.760 wel, en zonder die 8.760 kan
+        CI geen enkele gasfactuur berekenen.
+
+        `gasaandeel_uit_rlp0()` weigert hard zonder RLP0N-gasprofiel, dus een
+        dump zonder dat profiel laat elke gastest overslaan of crashen — wat ze
+        ook deed tot de dump van september 2026. Het elektriciteitsprofiel is
+        wat de tabel groot maakt (35.040 kwartieren x 24 netbeheerders) en dat
+        blijft eruit.
+        """
+        assert "COPY public.verbruiksprofiel_waarde " in inhoud
+        regels = [
+            r for r in inhoud.splitlines()
+            if "\trlp0n\t" in r and r.startswith(tuple("0123456789"))
+        ]
+        assert len(regels) == 8760, f"{len(regels)} profielrijen, verwacht 8.760"
+        assert all("\tgas\t" in r for r in regels), (
+            "Er staan elektriciteitsprofielen in de lichte dump; die maken haar "
+            "honderd keer zo groot."
+        )
 
     def test_de_dump_blijft_klein_genoeg_voor_git(self):
         omvang = DUMP.stat().st_size
         assert omvang < 2 * 1024 * 1024, f"{omvang / 1024:.0f} kB — te groot voor git"
+
+
+class TestErWordtAlleenGewistWatDeDumpTerugzet:
+    """Het veiligheidsslot op `lees_dump`.
+
+    Het inlezen begint met TRUNCATE. Zolang dat álle bekende tabellen wiste,
+    was een lichte dump op een volle databank een wisser: `marktcurve` staat er
+    niet in en van `verbruiksprofiel_waarde` alleen het gasdeel, dus 265.080
+    curverijen en 840.960 profielwaarden verdwenen zonder dat er iets voor
+    terugkwam. Eén verkeerd gezette DB_HOST volstaat daarvoor.
+
+    `_valideer_dump` leest het bestand toch al volledig (de gzip-CRC staat aan
+    het einde), dus de tabelnamen komen uit diezelfde pas.
+    """
+
+    def test_de_validatie_noemt_de_tabellen_die_in_de_dump_staan(self):
+        from energie_vlaanderen.infrastructure.db.dump import _valideer_dump
+
+        if not DUMP.is_file():
+            pytest.skip("referentie.sql.gz ontbreekt.")
+        tabellen = _valideer_dump(DUMP)
+        assert "tarief_afname" in tabellen
+        assert "netbeheerder_tarief" in tabellen
+        # Het gasdeel zit erin, dus de tabel wordt wél leeggemaakt — ze wordt
+        # ook weer gevuld.
+        assert "verbruiksprofiel_waarde" in tabellen
+        # En deze staat er niet in, dus ze blijft ongemoeid.
+        assert "marktcurve" not in tabellen
+
+    def test_een_kop_op_een_blokgrens_wordt_niet_gemist(self, tmp_path):
+        """De COPY-kop kan doormidden vallen tussen twee leesblokken.
+
+        Wordt hij dan gemist, dan blijft die tabel staan terwijl de dump haar
+        wél vult — dubbele rijen in plaats van een verse tabel.
+        """
+        from energie_vlaanderen.infrastructure.db.dump import (
+            _BLOKGROOTTE,
+            _valideer_dump,
+        )
+
+        kop = b"COPY public.tarief_afname (id, product_id) FROM stdin;\n"
+        pad = tmp_path / "grens.sql.gz"
+        with gzip.open(pad, "wb") as fh:
+            # Vulling zodat de kop precies over de blokgrens heen loopt, met de
+            # regelovergang er nog vóór: in een echte dump staat COPY altijd aan
+            # het begin van een regel, en daar hangt de patroonherkenning aan.
+            fh.write(b"-" * (_BLOKGROOTTE - len(kop) // 2 - 1) + b"\n")
+            fh.write(kop)
+            fh.write(b"1\t2\n\\.\n")
+        assert "tarief_afname" in _valideer_dump(pad)
 
 
 class TestManifest:
@@ -177,7 +246,7 @@ class TestEenKapotteDumpWistNiets:
         pad = tmp_path / "zonder_data.sql.gz"
         with gzip.open(pad, "wb") as fh:
             fh.write(b"SET statement_timeout = 0;\nSET lock_timeout = 0;\n")
-        with pytest.raises(DumpError, match="COPY- of INSERT"):
+        with pytest.raises(DumpError, match="geen COPY-opdrachten"):
             self._valideer(pad)
 
     def test_een_sleutelwoord_op_de_blokgrens_wordt_gevonden(self, tmp_path):
