@@ -133,33 +133,9 @@ class DbDataRepository:
 
     @property
     def netbeheerders(self) -> NetbeheerderRegister:
-        """Postcode → netbeheerder, uit `gemeente` en `netbeheerder`.
-
-        De tabel `gemeente` draagt de netbeheerder als code ("FK"), het register
-        werkt met de naam ("Fluvius Kempen"); vandaar de join. De opzoeklogica
-        zelf — inclusief de weigering om bij postcode 2387 te gokken — wordt
-        hergebruikt en niet nagebouwd.
-        """
-        if self._netbeheerders is not None:
-            return self._netbeheerders
-
-        rijen = self.conn.execute(sa.text("""
-            select g.postcode, g.naam,
-                   ne.naam as dnb_elek,
-                   ng.naam as dnb_gas
-              from gemeente g
-              left join netbeheerder ne on ne.code = g.dnb_elektriciteit
-              left join netbeheerder ng on ng.code = g.dnb_gas
-        """)).all()
-        if not rijen:
-            raise DbDataRepositoryError(
-                "De tabel `gemeente` is leeg; zonder postcode-naar-netbeheerder "
-                "is het nettarief niet te bepalen."
-            )
-        self._netbeheerders = NetbeheerderRegister.uit_rijen(
-            ((str(p), str(n or ""), e, g) for p, n, e, g in rijen),
-            herkomst="databank:gemeente",
-        )
+        """Postcode → netbeheerder, uit `gemeente` en `netbeheerder`."""
+        if self._netbeheerders is None:
+            self._netbeheerders = netbeheerders_uit_databank(self.conn)
         return self._netbeheerders
 
     def dnb_for(
@@ -315,3 +291,36 @@ class DbDataRepository:
             formulas=formulas,
             source=str(groep[0].get("bron_bestand") or "databank"),
         )
+
+
+def netbeheerders_uit_databank(conn: sa.Connection) -> NetbeheerderRegister:
+    """Postcode → netbeheerder, uit `gemeente` en `netbeheerder`.
+
+    Staat los van `DbDataRepository`, want die vraagt een tariefjaar en dit
+    register kent er geen: welke netbeheerder op een postcode zit, hangt niet
+    van een tariefjaar af. Wie alleen de koppeling nodig heeft — `gebruiker
+    bereken` bij het inlezen van het dossier, nog vóór er een tariefjaar
+    bekend is — hoeft daardoor geen jaartal te verzinnen.
+
+    De tabel `gemeente` draagt de netbeheerder als code ("FK"), het register
+    werkt met de naam ("Fluvius Kempen"); vandaar de join. De opzoeklogica zelf
+    — inclusief de weigering om bij postcode 2387 te gokken — wordt hergebruikt
+    en niet nagebouwd.
+    """
+    rijen = conn.execute(sa.text("""
+        select g.postcode, g.naam,
+               ne.naam as dnb_elek,
+               ng.naam as dnb_gas
+          from gemeente g
+          left join netbeheerder ne on ne.code = g.dnb_elektriciteit
+          left join netbeheerder ng on ng.code = g.dnb_gas
+    """)).all()
+    if not rijen:
+        raise DbDataRepositoryError(
+            "De tabel `gemeente` is leeg; zonder postcode-naar-netbeheerder "
+            "is het nettarief niet te bepalen."
+        )
+    return NetbeheerderRegister.uit_rijen(
+        ((str(p), str(n or ""), e, g) for p, n, e, g in rijen),
+        herkomst="databank:gemeente",
+    )

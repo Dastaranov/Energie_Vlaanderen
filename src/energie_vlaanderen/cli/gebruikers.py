@@ -25,14 +25,36 @@ def _pad(args: argparse.Namespace, settings: Settings) -> Path:
     return Path(getattr(args, "toml", None) or settings.project_root / "gebruiker.toml")
 
 
-def _register(settings: Settings):
-    """Het postcode->netbeheerderregister, of niets als het bestand ontbreekt.
+def _register(settings: Settings, conn=None):
+    """Het postcode->netbeheerderregister.
 
-    Ontbreekt `DnbPerGemeente.csv`, dan blijft de netbeheerdercode leeg en meldt
-    `gebruiker controleer` dat als waarschuwing. Hier hard stoppen zou het
-    inlezen van een dossier afhankelijk maken van een dataset die er voor het
-    inlezen zelf niet toe doet.
+    **Met een databankverbinding komt het uit `gemeente`**, niet uit
+    `DnbPerGemeente.csv`. Dat is geen detail: de netbeheerder bepaalt wélke
+    nettarieven gelden, dus de koppeling postcode->netbeheerder zit midden in
+    de berekening. Ze uit een CSV halen terwijl de tarieven uit de databank
+    komen, is precies de tweede weg naar hetzelfde antwoord die uiteen kan
+    lopen -- en het bleek ook zo te zijn: een spoorloop over `gebruiker
+    bereken` liet zien dat dit het enige pipelinebestand was dat nog gelezen
+    werd.
+
+    Zonder verbinding (`gebruiker toon`, `gebruiker controleer`) blijft het CSV
+    over. Die twee rekenen niets uit; ze lezen en toetsen een dossier, en horen
+    te werken zonder databank. Ontbreekt ook het CSV, dan blijft de
+    netbeheerdercode leeg en meldt `gebruiker controleer` dat als
+    waarschuwing -- hard stoppen zou het inlezen van een dossier afhankelijk
+    maken van een dataset die er voor het inlezen zelf niet toe doet.
     """
+    if conn is not None:
+        from energie_vlaanderen.data.db_repository import (
+            DbDataRepositoryError,
+            netbeheerders_uit_databank,
+        )
+
+        try:
+            return netbeheerders_uit_databank(conn)
+        except DbDataRepositoryError:
+            return None
+
     from energie_vlaanderen.nettarieven.netbeheerder import (
         NetbeheerderError,
         NetbeheerderRegister,
@@ -45,11 +67,11 @@ def _register(settings: Settings):
         return None
 
 
-def _lees(args: argparse.Namespace, settings: Settings) -> Dossier:
+def _lees(args: argparse.Namespace, settings: Settings, conn=None) -> Dossier:
     return lees_dossier(
         _pad(args, settings),
         project_root=settings.project_root,
-        netbeheerders=_register(settings),
+        netbeheerders=_register(settings, conn),
     )
 
 
@@ -308,9 +330,29 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     from energie_vlaanderen.gebruikers.berekening import BerekeningError, Kostberekening
     from energie_vlaanderen.heffingen.repository import HeffingenRepository
 
+    import sqlalchemy as sa
+
+    from energie_vlaanderen.data.db_repository import (
+        DbDataRepository,  # noqa: F401 - via _nettarieven_uit_databank
+        DbDataRepositoryError,
+    )
+    from energie_vlaanderen.infrastructure.db.connection import get_engine
+
+    # De databank gaat vóór het dossier open, en niet andersom. Het dossier
+    # heeft het postcode->netbeheerderregister nodig om een aansluitingspunt
+    # aan een netbeheerder te hangen, en dat register hoort uit `gemeente` te
+    # komen -- de netbeheerder bepaalt immers welke nettarieven gelden.
+    db_engine = get_engine(settings.project_root)
     try:
-        dossier = _lees(args, settings)
+        db_conn = db_engine.connect()
+    except Exception as exc:
+        return fail("Geen verbinding met de databank: %s", exc)
+
+    try:
+        dossier = _lees(args, settings, db_conn)
     except GebruikersError as exc:
+        db_conn.close()
+        db_engine.dispose()
         return fail("%s", exc)
 
     punt = dossier.punt(EnergieType.ELEKTRICITEIT)
@@ -336,23 +378,7 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     # De databank is de bron voor de berekening, en de enige. Ze draagt
     # maandelijkse historiek waar een versiemap één momentopname draagt: een
     # contract van april 2026 herberekenen kan daarom wél uit de databank en
-    # niet uit een enkele versiemap.
-    db_engine = None
-    db_conn = None
-
-    import sqlalchemy as sa
-
-    from energie_vlaanderen.data.db_repository import (
-        DbDataRepository,  # noqa: F401 - via _nettarieven_uit_databank
-        DbDataRepositoryError,
-    )
-    from energie_vlaanderen.infrastructure.db.connection import get_engine
-
-    db_engine = get_engine(settings.project_root)
-    try:
-        db_conn = db_engine.connect()
-    except Exception as exc:
-        return fail("Geen verbinding met de databank: %s", exc)
+    # niet uit een enkele versiemap. De verbinding staat hierboven al open.
 
     # De getoonde dataversie komt uit de databank, niet van de schijf.
     #

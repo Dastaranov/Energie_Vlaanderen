@@ -1,10 +1,15 @@
 from __future__ import annotations
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 import pandas as pd
 from energie_vlaanderen.utility.constants import DNB_CODES
 from energie_vlaanderen.utility.normalizer import clean_text
+
+# "II. Het tarief openbaredienstverplichtingen" -> "Het tarief openbare..."
+# Romeinse of Arabische nummering vooraan een groepslabel.
+_ZONDER_NUMMERING = re.compile(r"^\s*(?:[IVXLC]+|\d+)[.)]\s*", re.IGNORECASE)
 
 LOG = logging.getLogger(__name__)
 
@@ -15,6 +20,34 @@ class TariffNormalizationError(RuntimeError):
 # (bv. "FA ELEK Afname" -> "FA"). Afgeleid van DNB_CODES (utility/constants.py)
 # zodat deze whitelist en de netbeheerder-tabel nooit uit elkaar groeien.
 VALID_DNB_ABBREVIATIONS = frozenset(DNB_CODES.values())
+
+# Databeheer bij aardgas hangt aan de **metersoort**, niet aan de tariefgroep.
+#
+# Het werkboek zet die drie tarieven (AMR, MMR, Jaaropname) onder de kop
+# "3) Tarief databeheer", elk met één waarde in één willekeurige kolom: AMR in
+# de T5-kolom, MMR en Jaaropname in de T1-kolom. Met de vaste kolomkaart
+# hieronder kregen ze daardoor `GAS_T5` respectievelijk `GAS_T1` als klanttype
+# — alsof ze alleen voor die tariefgroep golden.
+#
+# Gevolg: een gezin in T2 (5.001-150.000 kWh) vond geen databeheertarief en
+# betaalde er dus geen. Op de referentiefactuur scheelde dat 17,62 EUR op een
+# distributiekost van 196,24 — bijna 9%, en niets faalde. Dezelfde fout als
+# `ELEK_LS_DC`: een tarief dat bestaat maar aan de verkeerde sleutel hangt.
+#
+# Ze krijgen daarom een eigen klanttype. De omschrijving is de sleutel, niet de
+# kolom; de kolom waarin het bedrag staat is een opmaakkeuze van VREG.
+GAS_DATABEHEER = {
+    "amr": "GAS_DBH_AMR",                  # telegemeten
+    "mmr": "GAS_DBH_MMR",                  # maandelijkse meteropname
+    "jaaropname": "GAS_DBH_JAAROPNAME",    # jaarlijkse opname (o.a. digitale meter)
+}
+
+
+def gas_databeheer_klanttype(omschrijving: str) -> str | None:
+    """De databeheerklanttype voor deze omschrijving, of None."""
+    eerste = omschrijving.strip().casefold().split(" ")[0].split("(")[0]
+    return GAS_DATABEHEER.get(eerste)
+
 
 # Gas afname: (column_index, klanttype_label)
 GAS_AFNAME_COLS = [
@@ -199,6 +232,16 @@ class TariffDataNormalizer:
             if not desc and current_hoofdgroep:
                 desc = current_hoofdgroep
 
+            # Sommige tariefregels dragen hun naam in kolom 0 in plaats van
+            # kolom 1, omdat de regel zelf de hoofdgroep is: bij aardgas staat
+            # "II. Het tarief openbaredienstverplichtingen" daar, mét de
+            # bedragen op dezelfde rij. Zonder deze terugval krijgen die 24
+            # rijen (het ODV-tarief van alle acht netbeheerders, drie
+            # tariefgroepen) een lege `Tariefdetail` — een tarief zonder naam,
+            # dat in een opzoeking alleen op zijn eenheid te vinden is.
+            if not desc and col0:
+                desc = _ZONDER_NUMMERING.sub("", col0).strip()
+
             desc = desc.split(" *")[0].strip()
 
             # Rijen waarvan de omschrijving met "- " of "*" begint zijn voetnoten
@@ -239,10 +282,36 @@ class TariffDataNormalizer:
                 if is_gas:
                     if len(row) > 10:
                         unit = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
-                        for col_idx, klanttype in GAS_AFNAME_COLS:
-                            val = self._safe_price(row.iloc[col_idx])
-                            if val is not None:
-                                out.append({**base_data, "Tariefnotering": unit, "Klanttype": klanttype, "Prijs_num": val})
+                        databeheer = gas_databeheer_klanttype(desc)
+                        if databeheer is not None:
+                            # Eén rij, ongeacht in welke kolom VREG het bedrag
+                            # zette: dit tarief hangt aan de metersoort en geldt
+                            # voor elke tariefgroep. Staan er meerdere waarden
+                            # op de regel, dan is dat een vormwijziging in de
+                            # bron en hoort ze op te vallen.
+                            waarden = [
+                                self._safe_price(row.iloc[i])
+                                for i, _ in GAS_AFNAME_COLS
+                            ]
+                            gevonden = [v for v in waarden if v is not None]
+                            if len(gevonden) > 1:
+                                issues.append(RowIssue(
+                                    source_sheet=source_sheet,
+                                    severity="warning",
+                                    message=(
+                                        f"Databeheertarief {desc!r} staat in "
+                                        f"{len(gevonden)} kolommen; verwacht er één. "
+                                        "De bron heeft mogelijk een andere vorm."
+                                    ),
+                                ))
+                            for val in gevonden:
+                                out.append({**base_data, "Tariefnotering": unit,
+                                            "Klanttype": databeheer, "Prijs_num": val})
+                        else:
+                            for col_idx, klanttype in GAS_AFNAME_COLS:
+                                val = self._safe_price(row.iloc[col_idx])
+                                if val is not None:
+                                    out.append({**base_data, "Tariefnotering": unit, "Klanttype": klanttype, "Prijs_num": val})
                 else:
                     kolommen = self._elek_afname_kolommen(
                         source_sheet, (kolomkaarten or {}).get(source_sheet), gemeld

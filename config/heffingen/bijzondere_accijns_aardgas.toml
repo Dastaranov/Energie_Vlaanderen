@@ -43,16 +43,41 @@ bron = "vtest.be (kalibratie 2026-08-31) + programmawet 2026"
 
 # --- Niet-zakelijk gebruik (residentieel) ---
 
+# Het regime vóór de hervorming van 01/08/2026, nagerekend op een betaalde
+# eindafrekening.
+#
+# Twee correcties, allebei uit dezelfde bron:
+#
+# 1. De bijzondere accijns stond op 8,2300 uit een secundaire bron. De
+#    afrekening drukt 8,2415 EUR/MWh af en rekent 100,39 EUR aan op
+#    12.181 kWh — 100,39 / 12,181 = 8,2415, exact.
+#
+# 2. **De bijdrage op de energie stond op nul, en dat was fout.** Precies
+#    dezelfde fout als bij elektriciteit (zie CLAUDE.md): vtest.be toont die
+#    post niet, maar dat is iets anders dan dat hij nul is. De afrekening
+#    rekent hem als aparte regel aan: 12,15 EUR, afgedrukt als 0,9975 EUR/MWh.
+#    Het zakelijke tarief hieronder draagt 0,9978 — vrijwel hetzelfde bedrag,
+#    langs een andere weg gekalibreerd, wat de waarde bevestigt.
+#
+#    Op dit verbruik scheelde de nul 12,15 EUR per jaar; op de netkost van
+#    215,24 is dat geen afronding.
+#
+# `geverifieerd = true` slaat op de **waarde**, niet op de ingangsdatum. Wat
+# vaststaat is dat deze tarieven golden over 25/06/2025-30/04/2026, de periode
+# van de afrekening. Dat ze al sinds 01/07/2023 ongewijzigd zijn, komt uit de
+# secundaire bron en is niet nagegaan — dezelfde splitsing als bij de zakelijke
+# tabel onderaan.
+
 [[schijf]]
 klantcategorie = "niet_zakelijk"
 van_mwh = "0"
 tot_mwh = ""
 accijns_eur_mwh = "0"
-bijzondere_accijns_eur_mwh = "8.2300"
-energiebijdrage_eur_mwh = "0"
+bijzondere_accijns_eur_mwh = "8.2415"
+energiebijdrage_eur_mwh = "0.9975"
 geldig_vanaf = "2023-07-01"
-geverifieerd = false
-bron = "Mega tariefoverzicht hervorming 2023 (secundaire bron); geen schijfonderscheid in dat regime"
+geverifieerd = true
+bron = "ENGIE-eindafrekening 25/06/2025-30/04/2026 (factuurdatum 27/05/2026): 100,39 EUR accijns en 12,15 EUR bijdrage op 12.181 kWh, beide met het tarief afgedrukt. Ingangsdatum uit Mega tariefoverzicht hervorming 2023 (secundaire bron, niet nagegaan)"
 
 [[schijf]]
 klantcategorie = "niet_zakelijk"

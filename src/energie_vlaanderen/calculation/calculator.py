@@ -115,6 +115,120 @@ class Calculator:
             grid=fixed+volume+data+pros
         return grid
 
+    # Tariefgroepen voor aardgas, met de bovengrens van het **jaar**verbruik in
+    # kWh. Letterlijk uit het VREG-werkboek, rij 7 van een "<DNB> GAS Afname"-
+    # blad: "0 - 5 000", "5 001 - 150 000", "150 001 - 1 000 000", "> 1 000 000".
+    #
+    # T5 en T6 staan er bewust niet bij: dat zijn de telegemeten klanten, een
+    # andere metersoort en niet een volgende schijf. Ze op verbruik kiezen zou
+    # een grootverbruiker met een gewone meter in T5 laten belanden.
+    GAS_TARIEFGROEPEN = (
+        (D("5000"), "GAS_T1"),
+        (D("150000"), "GAS_T2"),
+        (D("1000000"), "GAS_T3"),
+        (None, "GAS_T4"),
+    )
+
+    @staticmethod
+    def gas_tariefgroep(jaarverbruik_kwh: Decimal) -> str:
+        """De tariefgroep voor dit jaarverbruik.
+
+        Het werkboek zegt erbij dat de groep vooraf bepaald wordt op het
+        verbruik van het *vorige* jaar en bij de afrekening retroactief
+        bijgesteld wordt op het verbruik van het jaar zelf. Wij nemen het
+        verbruik van de periode die doorgerekend wordt — dat is wat de
+        eindafrekening ook doet.
+        """
+        for bovengrens, groep in Calculator.GAS_TARIEFGROEPEN:
+            if bovengrens is None or jaarverbruik_kwh <= bovengrens:
+                return groep
+        return "GAS_T4"
+
+    def gas_grid_cost(
+        self,
+        p: Profile,
+        jaarverbruik_kwh: Decimal,
+        verbruik_kwh: Decimal,
+        dagen: int = 365,
+    ) -> Decimal:
+        """De distributienetkost voor aardgas.
+
+        Drie grootheden die niet hetzelfde schalen, en het onderscheid is waar
+        de fout in zit als het bedrag afwijkt:
+
+        - de **vaste term** en het **databeheertarief** zijn jaarbedragen. Het
+          werkboek is er expliciet over: "Voor de facturatie van de vaste term
+          en het tarief databeheer worden de jaartarieven geproratiseerd over
+          het aantal dagen die de gemeten periode bestrijkt." Vandaar `dagen`.
+        - de **volumetrische termen** (proportioneel, ODV, pensioenlasten,
+          retributies) volgen `verbruik_kwh`, het volume dat in deze periode
+          valt.
+        - de **tariefgroep** volgt `jaarverbruik_kwh`, het volume over een heel
+          jaar. Dat is een derde grootheid: een deelperiode van twee maanden
+          hoort niet in T1 te vallen omdat er in die twee maanden weinig door
+          de meter ging.
+
+        Databeheer hangt aan de metersoort, niet aan de tariefgroep — zie
+        `GAS_DATABEHEER` in de normalizer en migratie 0023. Een digitale
+        gasmeter is volgens het werkboek een niet-telegemeten klant en krijgt
+        het tarief "Jaaropname"; dat is ook wat de referentiefactuur aanrekent.
+        """
+        _, code = self.repo.dnb_for(p.postcode, p.gemeente, "gas")
+        groep = self.gas_tariefgroep(jaarverbruik_kwh)
+
+        alle = self.repo.dnb[
+            (self.repo.dnb.Netbeheerder == code)
+            & (self.repo.dnb.Contracttype == "Afname")
+        ]
+        rows = alle[alle.Klanttype == groep]
+        if rows.empty:
+            beschikbaar = sorted(alle.Klanttype.dropna().unique())
+            raise ValueError(
+                f"Geen aardgastarieven voor netbeheerder {code} en tariefgroep "
+                f"{groep} (jaarverbruik {jaarverbruik_kwh} kWh). "
+                + (f"Voor {code} bestaan wel: {', '.join(beschikbaar)}."
+                   if beschikbaar
+                   else f"Netbeheerder {code} heeft helemaal geen gastarieven.")
+            )
+
+        def bedrag(frame, detail: str, unit: str, verplicht: bool = False) -> Decimal:
+            q = frame[
+                frame.Tariefdetail.str.casefold().str.startswith(detail.casefold(), na=False)
+                & (frame.Tariefnotering == unit)
+            ]
+            if q.empty:
+                # Zelfde regel als bij elektriciteit: een ontbrekend verplicht
+                # tarief stopt de berekening. Een tarief dat er is en 0 bedraagt
+                # is iets anders dan een tarief dat ontbreekt.
+                if verplicht:
+                    raise ValueError(
+                        f"Aardgastarief ontbreekt voor {code}/{groep}: "
+                        f"{detail!r} ({unit}). Zonder dat tarief zou de netkost "
+                        "stil te laag uitvallen."
+                    )
+                return D("0")
+            return D(str(q.iloc[0].Prijs_num))
+
+        jaardeel = D(dagen) / D("365")
+
+        vaste_term = bedrag(rows, "Vaste term", "EUR/jaar", verplicht=True) * jaardeel
+
+        # Databeheer staat op zijn eigen klanttype en dus buiten `rows`.
+        databeheer_groep = "GAS_DBH_JAAROPNAME"
+        dbh = alle[alle.Klanttype == databeheer_groep]
+        databeheer = bedrag(dbh, "Jaaropname", "EUR/jaar", verplicht=True) * jaardeel
+
+        # De volumetrische termen. Ze staan onder vier namen in het werkboek en
+        # worden opgeteld: samen vormen ze de EUR/kWh-kant van het nettarief.
+        volumetrisch = (
+            bedrag(rows, "Proportionele term", "EUR/kWh", verplicht=True)
+            + bedrag(rows, "Het tarief openbaredienstverplichtingen", "EUR/kWh")
+            + bedrag(rows, "Lasten van niet-gekapitaliseerde pensioenen", "EUR/kWh")
+            + bedrag(rows, "Retributies en heffingen", "EUR/kWh")
+        )
+
+        return vaste_term + databeheer + volumetrisch * verbruik_kwh
+
     @staticmethod
     def _index(f: dict[str,Any], letter: str) -> dict[str,Any]:
         """De indexparameter `letter` uit een formule, of een leeg record.

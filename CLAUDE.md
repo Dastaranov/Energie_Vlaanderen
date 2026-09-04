@@ -366,6 +366,107 @@ in het repo verwees er nog naar.
 masterdata-controles in CI draaien met een installatie zonder de `db`-extra.
 `cli/gebruikers.py` vangt hem af op de enige plek die hem kan werpen.
 
+### De postcodekoppeling kwam nog uit een CSV
+
+De regel "de berekening komt uit de code, de data uit de databank" stond nergens
+vastgelegd — ze werd nageleefd omdat het zo bedoeld was. Dat hield niet. Een
+spoorloop over `gebruiker bereken` (een audithaak op `open`) liet zien dat het
+postcode→netbeheerderregister nog uit `data/current/DnbPerGemeente.csv` kwam,
+terwijl diezelfde 519 gemeenten in de tabel `gemeente` staan.
+
+Geen bijzaak: de netbeheerder bepaalt wélke nettarieven gelden. De tarieven
+kwamen uit de databank en de koppeling ernaartoe uit een bestand — precies de
+tweede weg naar hetzelfde antwoord die uiteen kan lopen.
+
+`netbeheerders_uit_databank(conn)` staat nu los van `DbDataRepository`, want die
+vraagt een tariefjaar en dit register kent er geen: welke netbeheerder op een
+postcode zit, hangt niet van een tariefjaar af. `gebruiker bereken` opent
+daardoor eerst de databank en leest daarna pas het dossier — het dossier heeft
+het register nodig om een aansluitingspunt aan een netbeheerder te hangen.
+
+`gebruiker toon` en `gebruiker controleer` houden de CSV-weg: die rekenen niets
+uit en horen zonder databank te werken.
+
+**De regel is nu zelf een test.** `tests/test_berekening_leest_geen_pipeline_csv.py`
+hangt een audithaak in de interpreter en faalt zodra een berekening iets uit
+`data/staging/`, `data/versions/` of `data/current/` opent. Dat is sterker dan
+een grep op importregels: het vangt ook een pad dat via een omweg wordt
+samengesteld. Wat er ná de fix nog geopend wordt: `gebruiker.toml`,
+`config/heffingen/*.toml`, de marktprijscache, `.env`, en de eigen
+Fluvius-meterexport onder `data/referentie/`.
+
+### Aardgas: drie grootheden die niet hetzelfde schalen
+
+`grid_cost()` dekte enkel elektriciteit-laagspanning. `gas_grid_cost()` dekt nu
+aardgas, nagerekend op de referentiefactuur: **196,28 tegenover 196,24 EUR
+distributiekost, vier cent op 0,02%.** Alle vier de gereguleerde gasposten samen
+(distributie, vervoerstarief, bijzondere accijns, bijdrage op de energie) komen
+op 327,82 tegenover 327,78.
+
+Wat gas anders maakt dan elektriciteit zit niet in de bedragen maar in de
+soorten grootheid:
+
+- **de tariefgroep volgt het jaarverbruik.** T1 `0 - 5 000`, T2
+  `5 001 - 150 000`, T3 `150 001 - 1 000 000`, T4 `> 1 000 000` — letterlijk
+  uit rij 7 van een `<DNB> GAS Afname`-blad. T5 en T6 staan er bewust niet bij:
+  dat zijn *telegemeten* klanten, een metersoort en geen volgende schijf. Ze op
+  verbruik kiezen zou een grootverbruiker met een gewone meter in T5 laten
+  belanden, mét een capaciteitsterm die daar niet geldt.
+- **vaste term en databeheer zijn jaarbedragen**, naar dagen verdeeld. Het
+  werkboek zegt het zelf: "Voor de facturatie van de vaste term en het tarief
+  databeheer worden de jaartarieven geproratiseerd over het aantal dagen die de
+  gemeten periode bestrijkt."
+- **het volume wordt met RLP0 over de tariefperiodes verdeeld, niet naar
+  dagen.** Ook dat staat er: "Voor de effectief toe te passen tarieven dienen
+  de gemeten kWh over de verschillende tariefperioden verdeeld te worden op
+  basis van het reëel lastprofiel RLP0." Gas is winterzwaar — over
+  25/06/2025-30/04/2026 valt **53,8%** van het volume in de 120 dagen van
+  januari tot april, waar een verdeling naar dagen 32,9% geeft. De tarieven van
+  2026 liggen hoger, dus naar dagen verdelen rekent structureel te weinig aan.
+
+**Twee data-fouten die dit blootlegde.**
+
+*Het databeheertarief hing aan de verkeerde sleutel.* Het werkboek zet AMR, MMR
+en Jaaropname onder "3) Tarief databeheer", elk met één bedrag in één
+willekeurige kolom: AMR in de T5-kolom, MMR en Jaaropname in de T1-kolom. Met
+de vaste kolomkaart van de normalizer kregen ze daardoor `GAS_T5` en `GAS_T1`
+als klanttype — alsof ze alleen voor díé tariefgroep golden. Een gezin in T2
+vond geen databeheertarief en betaalde er dus geen: 17,62 EUR op een
+distributiekost van 196,24, bijna 9%, en niets faalde. Ze hebben nu een eigen
+klanttype (`GAS_DBH_AMR`, `GAS_DBH_MMR`, `GAS_DBH_JAAROPNAME`). Dezelfde klasse
+als `ELEK_LS_DC`.
+
+*Het ODV-tarief had geen naam.* "II. Het tarief openbaredienstverplichtingen"
+staat in kolom 0 in plaats van kolom 1, waardoor 24 rijen per tariefjaar een
+lege `Tariefdetail` droegen — een tarief dat alleen op zijn eenheid te vinden
+was. De normalizer valt nu terug op kolom 0.
+
+Migratie 0023 ruimt beide op: een SCD2-upsert kent invoegen en afsluiten, geen
+*verhuizen*, dus een herimport laat de oude sleutels naast de nieuwe staan.
+
+### De gasheffingen stonden onvolledig
+
+Dezelfde referentiefactuur legde drie gaten bloot in de handgeschreven
+masterdata, alle drie in het regime van vóór de hervorming van 01/08/2026 — de
+bestanden waren daar eerlijk over ("nog niet gedekt"), maar de factuur ís een
+primaire bron voor precies die periode.
+
+- **De bijdrage op de energie stond op nul.** Exact dezelfde fout als bij
+  elektriciteit: vtest.be toont die post niet, maar dat is iets anders dan dat
+  hij nul is. De afrekening rekent hem als aparte regel aan — 12,15 EUR,
+  afgedrukt als 0,9975 EUR/MWh. Het zakelijke tarief droeg al 0,9978, langs een
+  andere weg gekalibreerd; die twee bevestigen elkaar.
+- **De bijzondere accijns stond op 8,2300** uit een secundaire bron. De factuur
+  drukt 8,2415 EUR/MWh af en rekent 100,39 EUR aan op 12.181 kWh.
+- **Het vervoerstarief begon pas op 01/01/2026**, waardoor een berekening over
+  een eerdere periode hard faalde. De factuur drukt 1,5599 EUR/MWh af over
+  25/06/2025-30/04/2026, één tarief voor de hele periode.
+
+`geverifieerd = true` slaat bij de eerste twee op de **waarde**, niet op de
+ingangsdatum: wat vaststaat is dat deze tarieven golden over de periode van de
+afrekening. Het vervoerstarief blijft `geverifieerd = false` — dat één
+leverancier dit tarief toepaste, zegt niet dat het algemeen gold.
+
 ### Het tariefjaar komt uit het werkboek, niet uit het versie-id
 
 `cli/db.py` leidde het tariefjaar af met `jaar = int(version_id[:4])`. Dat is de

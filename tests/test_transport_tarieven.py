@@ -133,9 +133,15 @@ class TestBerekening:
 
 class TestOntbrekendeData:
     def test_datum_voor_de_masterdata_faalt_hard(self, repo):
-        """Liever stoppen dan met een tarief rekenen dat toen niet gold."""
-        with pytest.raises(TransportTariefError, match="2026-01-01"):
-            repo.tarief("aardgas", "niet_zakelijk", date(2025, 6, 1))
+        """Liever stoppen dan met een tarief rekenen dat toen niet gold.
+
+        De ondergrens is verschoven van 2026-01-01 naar 2023-01-01: de
+        referentiefactuur bewijst welk tarief er over 2025-2026 gold, en zonder
+        die rij was een berekening over die periode onmogelijk. Wat de test
+        bewaakt is niet het jaartal maar het gedrag — vóór de masterdata wordt
+        er geweigerd, niet teruggevallen op het oudste bekende tarief."""
+        with pytest.raises(TransportTariefError, match="2023-01-01"):
+            repo.tarief("aardgas", "niet_zakelijk", date(2022, 6, 1))
 
     def test_onbekende_energievorm_faalt_hard(self, repo):
         """Elektriciteit heeft dit gat niet: het transporttarief van Elia zit

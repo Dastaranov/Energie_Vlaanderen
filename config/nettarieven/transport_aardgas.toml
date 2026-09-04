@@ -74,6 +74,31 @@
 energievorm = "aardgas"
 bron = "CREG-nota (Z)3230 van 11/06/2026 + vtest.be kalibratie 2026-08-31"
 
+# Vóór 2026. De masterdata begon op 01/01/2026, waardoor een berekening over
+# een periode die eerder start hard faalt -- correct gedrag bij ontbrekende
+# data, maar het maakte de referentiefactuur onberekenbaar.
+#
+# De eindafrekening drukt 1,5599 EUR/MWh af over 25/06/2025-30/04/2026 en
+# rekent 19,00 EUR aan op 12.181 kWh. Eén tarief voor de hele periode, dus
+# geen mengeling van twee jaargangen -- de leverancier paste in 2025 hetzelfde
+# tarief toe als in 2026.
+#
+# `geverifieerd = false`, en met opzet: wat vaststaat is dat *deze* leverancier
+# dit tarief toepaste over *deze* periode. Of het al langer gold, en of andere
+# leveranciers hetzelfde rekenden, is niet nagegaan. De CREG-nota noemt 1,56
+# uniform sinds 01/01/2026 en zegt niets over de periode ervoor.
+#
+# Let op het verschil met de rij eronder: 1,5599 hier tegenover 1,5565 vanaf
+# 2026. Dat is dezelfde onverklaarde 0,22%-afwijking tussen vtest.be en de
+# CREG-nota die hierboven beschreven staat -- de factuur zit aan de CREG-kant.
+
+[[tarief]]
+klantcategorie = "niet_zakelijk"
+eur_per_kwh = "0.0015599"
+geldig_vanaf = "2023-01-01"
+geverifieerd = false
+bron = "ENGIE-eindafrekening 25/06/2025-30/04/2026: 19,00 EUR op 12.181 kWh, tarief afgedrukt als 1,5599 EUR/MWh. Ingangsdatum niet vastgesteld"
+
 [[tarief]]
 klantcategorie = "niet_zakelijk"
 eur_per_kwh = "0.0015565"
