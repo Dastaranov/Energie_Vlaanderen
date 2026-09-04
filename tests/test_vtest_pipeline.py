@@ -1,3 +1,10 @@
+"""De bulkexport van werkboek tot CSV, in één keer.
+
+De pipeline weigert liever dan half te slagen: ongeldige data gaat er niet door,
+een bestaand doel wordt niet overschreven, en een fout in het werkboek komt naar
+buiten als een pipelinefout in plaats van een traceback. De precisietest hoort
+hier omdat dit de laatste stap is waar een decimaal nog verloren kan gaan.
+"""
 from __future__ import annotations
 from decimal import Decimal
 
@@ -8,6 +15,9 @@ import pandas as pd
 import pytest
 
 from energie_vlaanderen.ingest.vtest.pipeline import VTestPipeline, VTestPipelineError
+
+
+pytestmark = pytest.mark.parsers
 
 
 def write_workbook(path: Path, price: str = "30,50") -> None:

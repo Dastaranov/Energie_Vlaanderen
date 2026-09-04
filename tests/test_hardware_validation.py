@@ -6,12 +6,17 @@ een fout — elk model start ongeverifieerd).
 """
 from __future__ import annotations
 
+import pytest
+
 from energie_vlaanderen.hardware.models import BatterijSpec, OmvormerSpec
 from energie_vlaanderen.hardware.repository import BatterijRepository, OmvormerRepository
 from energie_vlaanderen.hardware.validation import (
     controleer_batterijen,
     controleer_omvormers,
 )
+
+
+pytestmark = pytest.mark.masterdata
 
 
 def _batterijspec(**overrides) -> BatterijSpec:

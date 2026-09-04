@@ -1,3 +1,14 @@
+"""De kern van `Calculator`: leverancierskost, formules en injectie.
+
+De formuletak rekent een variabel product uit zijn eigen indexformule. Weigeren
+zonder indexwaarde is hier het punt en niet de uitzondering: terugvallen op de
+meegeleverde prijs zag er jarenlang goed uit terwijl 58 van de 61 variabele
+producten hun formule nooit gebruikten.
+
+De injectietak legt vast dat injectie op de *injectie*reeks gewaardeerd wordt.
+Zonneproductie piekt wanneer de marktprijs laag staat; met de afnamereeks werd
+dezelfde injectie twintig keer te hoog gewaardeerd.
+"""
 from decimal import Decimal as D
 
 import pandas as pd
@@ -10,6 +21,9 @@ from energie_vlaanderen.calculation.calculator import Calculator
 from energie_vlaanderen.data.repository import DataRepository, DataRepositoryError
 from energie_vlaanderen.domain.models import Cost, Product, Profile
 from energie_vlaanderen.settings import Settings
+
+
+pytestmark = pytest.mark.rekenen
 
 
 def test_variable_formula():

@@ -22,6 +22,9 @@ from energie_vlaanderen.infrastructure.db.schema import energie_product, leveran
 KOP = "vreg_id;supplier_raw;product_raw;energy;green_type;segment;postcode\n"
 
 
+pytestmark = pytest.mark.databank
+
+
 @pytest.fixture
 def conn():
     engine = sa.create_engine("sqlite://")

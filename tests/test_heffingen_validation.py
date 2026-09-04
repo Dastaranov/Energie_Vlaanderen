@@ -6,6 +6,8 @@ een validator die een gat níet vindt, is erger dan geen validator.
 
 from __future__ import annotations
 
+import pytest
+
 from datetime import date
 from decimal import Decimal as D
 
@@ -24,6 +26,9 @@ from energie_vlaanderen.heffingen.validation import (
 )
 
 INGANG = date(2026, 8, 1)
+
+
+pytestmark = pytest.mark.masterdata
 
 
 def _schijf(van: str, tot: str | None, *, tarief: str = "46", categorie: str = "wonen"):

@@ -29,6 +29,9 @@ PERSOONSGEGEVENS = (
 )
 
 
+pytestmark = pytest.mark.databank
+
+
 @pytest.fixture(scope="module")
 def inhoud() -> str:
     if not DUMP.is_file():

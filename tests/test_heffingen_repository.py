@@ -13,6 +13,9 @@ from energie_vlaanderen.heffingen.repository import HeffingenError, HeffingenRep
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config" / "heffingen"
 
 
+pytestmark = pytest.mark.masterdata
+
+
 @pytest.fixture(scope="module")
 def repo() -> HeffingenRepository:
     return HeffingenRepository.load(CONFIG_DIR)

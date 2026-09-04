@@ -33,6 +33,9 @@ from energie_vlaanderen.gebruikers.models import (
 )
 
 
+pytestmark = pytest.mark.dossier
+
+
 @pytest.fixture
 def gebruiker() -> Gebruiker:
     return Gebruiker()

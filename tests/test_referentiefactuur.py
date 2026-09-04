@@ -32,6 +32,9 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTUUR = ROOT / "tests" / "fixturen" / "facturen" / "engie_easy_vast_2025_2026.toml"
 
 
+pytestmark = pytest.mark.rekenen
+
+
 @pytest.fixture(scope="module")
 def factuur() -> dict:
     if not FIXTUUR.is_file():

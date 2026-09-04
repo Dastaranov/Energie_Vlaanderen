@@ -15,6 +15,9 @@ from energie_vlaanderen.ingest.vtest.calibration import (
 )
 
 
+pytestmark = pytest.mark.scrape
+
+
 def _meting(kwh: int, **componenten: Decimal) -> Meting:
     return Meting(
         kwh=kwh,

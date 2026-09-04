@@ -54,7 +54,16 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = [".", "src"]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra --strict-markers"
 markers = [
-    "integration: tests die een volledige lokale dataset vereisen",
+    "integration: tests die een databank of een volledige lokale dataset vereisen",
+    "bronnen: bronbestanden ophalen, bewaren en de marktprijsbronnen",
+    "parsers: werkboeken lezen en normaliseren naar een canonieke vorm",
+    "scrape: de live weg naar vtest.be (Selenium, HTML, kalibratie)",
+    "databank: import, SCD2-historiek en de controles op de databank",
+    "masterdata: handgeschreven gegevens in config/ (heffingen, hardware, netbeheerders)",
+    "rekenen: de rekenengine en de hardwaremodellen",
+    "dossier: het gebruikersdossier: model, inlezen, periodes, berekening",
+    "cli: de commandoschil",
+    "suite: controles op de organisatie van het pakket en de testsuite zelf",
 ]

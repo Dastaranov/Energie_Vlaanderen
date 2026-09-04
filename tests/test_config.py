@@ -1,3 +1,9 @@
+"""`Settings`, de projectwortel en de netbeheerderlijst.
+
+Een verkeerd gelezen instelling is stil: een timeout van 0 of een downloadlimiet
+die als tekst blijft staan valt pas op als een download afbreekt. Daarom wordt
+elke ondergrens hier expliciet geweigerd in plaats van overgenomen.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +16,9 @@ from energie_vlaanderen.settings import (
     Settings,
     discover_project_root,
 )
+
+
+pytestmark = pytest.mark.bronnen
 
 
 def test_discover_project_root(tmp_path: Path):

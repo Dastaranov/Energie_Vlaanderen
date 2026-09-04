@@ -57,6 +57,9 @@ TABELLEN = (
 )
 
 
+pytestmark = pytest.mark.dossier
+
+
 @pytest.fixture
 def conn():
     engine = sa.create_engine("sqlite://")

@@ -36,6 +36,9 @@ from energie_vlaanderen.heffingen.repository import HeffingenRepository
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config" / "heffingen"
 
 
+pytestmark = pytest.mark.dossier
+
+
 @pytest.fixture(scope="module")
 def heffingen() -> HeffingenRepository:
     return HeffingenRepository.load(CONFIG_DIR)

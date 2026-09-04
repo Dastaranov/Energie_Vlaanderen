@@ -25,6 +25,9 @@ ELEK = FIXTUREN / "fluvius_elektriciteit_kwartier.voorbeeld.csv"
 GAS = FIXTUREN / "fluvius_gas_uur.voorbeeld.csv"
 
 
+pytestmark = pytest.mark.dossier
+
+
 @pytest.fixture(scope="module")
 def elek():
     if not ELEK.is_file():

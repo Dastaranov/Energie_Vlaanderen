@@ -28,6 +28,9 @@ KOP = (
 )
 
 
+pytestmark = pytest.mark.databank
+
+
 @pytest.fixture
 def conn():
     engine = sa.create_engine("sqlite://")

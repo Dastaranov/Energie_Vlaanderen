@@ -15,6 +15,9 @@ import pytest
 from energie_vlaanderen.settings import Settings, _read_dotenv
 
 
+pytestmark = pytest.mark.bronnen
+
+
 class TestDotenvLezen:
     def test_leest_sleutel_en_waarde(self, tmp_path):
         pad = tmp_path / ".env"

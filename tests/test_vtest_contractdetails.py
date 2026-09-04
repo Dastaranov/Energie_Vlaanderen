@@ -35,6 +35,9 @@ _RESULTITEM = (
 )
 
 
+pytestmark = pytest.mark.scrape
+
+
 @pytest.fixture
 def fragment() -> str:
     return FIXTUUR.read_text(encoding="utf-8")

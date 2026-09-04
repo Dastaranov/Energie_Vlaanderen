@@ -16,6 +16,9 @@ import pytest
 from energie_vlaanderen.ingest.tariffs.workbook import TariffWorkbookParser
 
 
+pytestmark = pytest.mark.parsers
+
+
 def _write_rows(writer: pd.ExcelWriter, sheet_name: str, rows: list[list], startrow: int = 0) -> None:
     pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, header=False, index=False, startrow=startrow)
 

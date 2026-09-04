@@ -40,6 +40,9 @@ meter = "digitaal"
 """
 
 
+pytestmark = pytest.mark.dossier
+
+
 def schrijf(tmp_path, inhoud: str):
     pad = tmp_path / "gebruiker.toml"
     pad.write_text(inhoud, encoding="utf-8")

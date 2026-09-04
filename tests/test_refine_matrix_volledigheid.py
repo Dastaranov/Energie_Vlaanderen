@@ -14,11 +14,16 @@ coöperatie.
 
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timezone
 from pathlib import Path
 
 from energie_vlaanderen.ingest.vtest.refine_matrix import VTestRefineMatrix
 from energie_vlaanderen.ingest.vtest.refine_pipeline import VTestRefinePipelineResult
+
+
+pytestmark = pytest.mark.scrape
 
 
 def _resultaat(segment: str, energy: str, postcode: str, aantal: int):

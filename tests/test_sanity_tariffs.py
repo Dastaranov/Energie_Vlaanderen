@@ -9,6 +9,8 @@ controle sloeg daardoor stil over en de sanity check meldde "geslaagd" zonder
 
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 from energie_vlaanderen.audit.sanity import SanityChecker
@@ -18,6 +20,9 @@ from energie_vlaanderen.settings import Settings
 VERSION_ID = "20260820T120000Z-1234abcd"
 
 KOP = "Netbeheerder;Contracttype;Tarieftype;Tariefdetail;Tariefnotering;Klanttype;Prijs_num\n"
+
+
+pytestmark = pytest.mark.databank
 
 
 def _checker(tmp_path: Path, *bestanden: tuple[str, str]) -> SanityChecker:

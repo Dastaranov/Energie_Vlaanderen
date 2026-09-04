@@ -28,6 +28,9 @@ DNB_COLUMNS = [
 ]
 
 
+pytestmark = pytest.mark.rekenen
+
+
 class FakeGridRepository:
     """Een minimale, geldige DNB-tabel waarin elk tarief expliciet 0 is.
 

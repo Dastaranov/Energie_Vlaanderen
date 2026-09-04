@@ -1,3 +1,9 @@
+"""De bladindeling van het V-test-werkboek.
+
+VREG wisselt kop-rijen, bladnamen en taal tussen jaargangen. Wat hier vastligt is
+hoe een blad herkend wordt en wanneer het genegeerd hoort te worden; op een vaste
+index lezen zou data aan de verkeerde kolom hangen zonder dat er iets faalt.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,6 +29,9 @@ BASE_COLUMNS = [
     "Productnaam",
     "Prijsonderdeel",
 ]
+
+
+pytestmark = pytest.mark.parsers
 
 
 def write_sheet_with_title(

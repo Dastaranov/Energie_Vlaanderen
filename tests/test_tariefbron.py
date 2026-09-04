@@ -21,6 +21,9 @@ from energie_vlaanderen.data.repository import DataRepository
 BRONNEN = (DataRepository, DbDataRepository)
 
 
+pytestmark = pytest.mark.rekenen
+
+
 @pytest.mark.parametrize("bron", BRONNEN, ids=lambda k: k.__name__)
 class TestContract:
     def test_alle_leden_van_het_protocol_bestaan(self, bron):

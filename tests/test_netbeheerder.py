@@ -27,6 +27,9 @@ from energie_vlaanderen.utility.constants import DNB_CODES
 GEMEENTE_CSV = Path(__file__).resolve().parents[1] / "data" / "current" / "DnbPerGemeente.csv"
 
 
+pytestmark = pytest.mark.masterdata
+
+
 @pytest.fixture(scope="module")
 def register() -> NetbeheerderRegister:
     if not GEMEENTE_CSV.is_file():

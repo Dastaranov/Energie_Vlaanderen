@@ -21,6 +21,9 @@ from energie_vlaanderen.market.energy_charts import (
 from energie_vlaanderen.market.entsoe import EntsoeMarketData
 
 
+pytestmark = pytest.mark.bronnen
+
+
 def _antwoord(punten: list[tuple[int, float | None]], eenheid: str = "EUR / MWh") -> dict:
     return {
         "unix_seconds": [t for t, _ in punten],

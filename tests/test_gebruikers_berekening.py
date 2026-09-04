@@ -52,6 +52,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "config" / "heffingen"
 
 
+pytestmark = pytest.mark.dossier
+
+
 @pytest.fixture(scope="module")
 def heffingen() -> HeffingenRepository:
     return HeffingenRepository.load(CONFIG_DIR)

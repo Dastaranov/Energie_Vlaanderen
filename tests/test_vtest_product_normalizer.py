@@ -1,3 +1,9 @@
+"""De losse velden van een gescrapet contract.
+
+Datums, looptijden en prijsindicaties komen als vrije tekst van vtest.be.
+Onleesbare invoer levert hier `None` op en nooit een gok: een looptijd die niet
+herkend wordt is onbekend, niet één jaar.
+"""
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
@@ -15,6 +21,9 @@ from energie_vlaanderen.ingest.vtest.product_normalizer import (
     normalize_energy,
 )
 from energie_vlaanderen.ingest.vtest.product_parser import RawVTestProduct
+
+
+pytestmark = pytest.mark.scrape
 
 
 def _make_raw(**kwargs) -> RawVTestProduct:

@@ -25,6 +25,9 @@ BATTERIJEN_DIR = Path(__file__).resolve().parents[1] / "config" / "hardware" / "
 OMVORMERS_DIR = Path(__file__).resolve().parents[1] / "config" / "hardware" / "omvormers"
 
 
+pytestmark = pytest.mark.masterdata
+
+
 @pytest.fixture(scope="module")
 def batterij_repo() -> BatterijRepository:
     return BatterijRepository.load(BATTERIJEN_DIR)

@@ -32,6 +32,9 @@ from energie_vlaanderen.gebruikers.schatting import (
 )
 
 
+pytestmark = pytest.mark.dossier
+
+
 def kwartieren(aantal: int, gewicht: float, start: str = "2026-01-01") -> pd.DataFrame:
     return pd.DataFrame(
         {

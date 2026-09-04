@@ -1,4 +1,13 @@
+"""De poort tussen normaliseren en wegschrijven.
+
+Twee soorten controle. Per rij: een vast product zonder prijs is een fout, een
+variabel product zonder prijs maar mét formule niet. En over het geheel: elke
+bronrij moet precies één keer in precies één tabel terechtkomen — een rij die in
+beide tabellen belandt of stil verdwijnt wordt hier gevonden.
+"""
 from __future__ import annotations
+
+import pytest
 
 from decimal import Decimal
 from pathlib import Path
@@ -7,6 +16,9 @@ import pandas as pd
 
 from energie_vlaanderen.ingest.vtest.validator import VTestDataValidator
 from energie_vlaanderen.ingest.vtest.workbook import ParsedSheet, ParsedVTestWorkbook
+
+
+pytestmark = pytest.mark.parsers
 
 
 def make_row() -> dict[str, object]:

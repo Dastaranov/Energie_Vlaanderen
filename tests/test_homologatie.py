@@ -52,6 +52,9 @@ VERVALLEN = C1026Vermelding(
 )
 
 
+pytestmark = pytest.mark.masterdata
+
+
 @pytest.fixture
 def lijst(tmp_path):
     return C1026Lijst(

@@ -44,6 +44,9 @@ from energie_vlaanderen.ingest.sources import (
 )
 
 
+pytestmark = pytest.mark.bronnen
+
+
 def make_xlsx_bytes(
     *,
     extra_content: bytes = b"",

@@ -8,9 +8,14 @@ gerapporteerd.
 
 from __future__ import annotations
 
+import pytest
+
 import pandas as pd
 
 from energie_vlaanderen.ingest.curves.workbook import CurvesWorkbookParser
+
+
+pytestmark = pytest.mark.parsers
 
 
 class TestTijdstempelConversie:

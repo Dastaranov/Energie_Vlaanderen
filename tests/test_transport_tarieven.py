@@ -23,6 +23,9 @@ CONFIG_DIR = Path(__file__).resolve().parents[1] / "config" / "nettarieven"
 PEILDATUM = date(2026, 8, 31)
 
 
+pytestmark = pytest.mark.masterdata
+
+
 @pytest.fixture(scope="module")
 def repo() -> TransportTariefRepository:
     return TransportTariefRepository.load(CONFIG_DIR)

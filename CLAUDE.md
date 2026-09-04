@@ -1323,9 +1323,20 @@ decimalen zou 4,218 stil 4,22 worden.
 
 ### Tests: herkomst boven aantal
 
-De testsuite telt ongeveer 395 tests en draait in 6 seconden. Het aantal is
-geen probleem en snoeien erin is geen doel — de kosten zitten niet in de
-runtime.
+De testsuite telt 979 tests over 66 bestanden; zonder de integratietests draait
+ze in ongeveer 11 seconden. Het aantal is geen probleem en snoeien erin is geen
+doel — de kosten zitten niet in de runtime.
+
+**`tests/README.md` beschrijft per bestand wat het bewaakt.** Elk testbestand
+draagt één categoriemarker op modulehoogte (`bronnen`, `parsers`, `scrape`,
+`databank`, `masterdata`, `rekenen`, `dossier`, `cli`), geregistreerd in
+`pyproject.toml`. `pytest -m rekenen` draait één domein. Dat de som van de
+categorieën de hele suite is, is zelf een test: `tests/test_suite_indeling.py`
+eist per bestand precies één bekende categorie, want een bestand zonder marker
+draait wél mee in `pytest -q` maar valt weg uit `pytest -m <categorie>` — groen,
+en toch stil minder. `--strict-markers` staat aan. `integration` staat daarnaast
+en niet in de plaats ervan: die tests hebben PostgreSQL of een volledige lokale
+dataset nodig.
 
 **De regel die hier wél telt: een test die een getal vastlegt, moet in het
 bestand zelf zeggen waar dat getal vandaan komt.**

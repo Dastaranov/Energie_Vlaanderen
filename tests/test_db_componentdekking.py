@@ -15,6 +15,8 @@ de normalizer niet meer stilzwijgend prijzen kan laten verdampen.
 
 from __future__ import annotations
 
+import pytest
+
 from energie_vlaanderen.infrastructure.db.importer import (
     METER_TYPES,
     _map_component_code_to_field,
@@ -23,6 +25,9 @@ from energie_vlaanderen.ingest.vtest.normalizer import (
     COMPONENT_MAPPING,
     FORMULA_COMPONENTS,
 )
+
+
+pytestmark = pytest.mark.databank
 
 
 def _wordt_geimporteerd(code: str) -> bool:

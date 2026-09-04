@@ -21,6 +21,9 @@ from energie_vlaanderen.infrastructure.db.importer import _scd2_upsert
 from energie_vlaanderen.infrastructure.db.schema import energie_product, leverancier, tarief_afname
 
 
+pytestmark = pytest.mark.databank
+
+
 @pytest.fixture
 def conn():
     """SQLite in het geheugen; de SCD2-logica is dialectonafhankelijk.

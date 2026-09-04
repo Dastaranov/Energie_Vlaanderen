@@ -21,6 +21,9 @@ from energie_vlaanderen.utility.normalizer import (
 )
 
 
+pytestmark = pytest.mark.parsers
+
+
 class TestSplitsen:
     @pytest.mark.parametrize(
         ("ruw", "naam", "entiteit"),

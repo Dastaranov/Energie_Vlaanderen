@@ -22,6 +22,9 @@ from energie_vlaanderen.ingest.profielen.workbook import (
 )
 
 
+pytestmark = pytest.mark.parsers
+
+
 def _schrijf_nationaal_werkboek(pad, sheet_naam="ENU_UTC"):
     wb = openpyxl.Workbook()
     ws = wb.active

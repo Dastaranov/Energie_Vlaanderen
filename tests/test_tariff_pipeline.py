@@ -9,6 +9,9 @@ import pytest
 from energie_vlaanderen.ingest.tariffs.pipeline import TariffPipeline
 
 
+pytestmark = pytest.mark.parsers
+
+
 def _write_rows(writer: pd.ExcelWriter, sheet_name: str, rows: list[list]) -> None:
     pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, header=False, index=False)
 

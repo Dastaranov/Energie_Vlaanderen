@@ -16,9 +16,14 @@ unieke sleutel van `netbeheerder_tarief`.
 
 from __future__ import annotations
 
+import pytest
+
 import pandas as pd
 
 from energie_vlaanderen.ingest.tariffs.normalizer import TariffDataNormalizer
+
+
+pytestmark = pytest.mark.parsers
 
 
 def _blad(*rijen: tuple[str, str, str], sheet: str = "FA ELEK Afname") -> pd.DataFrame:

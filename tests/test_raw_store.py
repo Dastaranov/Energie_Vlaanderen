@@ -1,3 +1,10 @@
+"""De ruwe bronbestanden en hun checksums.
+
+Dit is de enige plek waar het origineel nog onaangeroerd ligt. Verifiëren moet
+daarom drie dingen onderscheiden die niet hetzelfde zijn: een gewijzigd bestand
+(fout), een ontbrekend bestand (fout) en een extra bestand (waarschuwing — het
+schaadt de herleidbaarheid niet).
+"""
 from __future__ import annotations
 
 import hashlib
@@ -22,6 +29,9 @@ KINDS_TO_FILENAMES = {
     "electricity_tariffs": "electricity_tariffs.xlsx",
     "gas_tariffs": "gas_tariffs.xlsx",
 }
+
+
+pytestmark = pytest.mark.bronnen
 
 
 def make_xlsx_bytes(

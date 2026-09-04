@@ -11,8 +11,13 @@ een tegenstrijdigheid).
 
 from __future__ import annotations
 
+import pytest
+
 from energie_vlaanderen.ingest.profielen.validator import ProfielenValidator
 from energie_vlaanderen.ingest.profielen.workbook import ProfielRow
+
+
+pytestmark = pytest.mark.parsers
 
 
 def _rij(tijdstip: str, waarde: float | None, gln: str | None = None, naam: str | None = None) -> ProfielRow:

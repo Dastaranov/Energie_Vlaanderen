@@ -1,3 +1,11 @@
+"""Twee littekens, bewust klein gehouden.
+
+Een nulprijs is geen ontbrekende prijs, en decimaaltekst mag bij het wegschrijven
+niet stil afgerond worden. Beide fouten hebben ooit gedraaid zonder ook maar één
+uitzondering te gooien. Ze staan apart omdat ze de foutklasse van dit project
+vertegenwoordigen en niet bij één module horen.
+"""
+import pytest
 from decimal import Decimal
 from pathlib import Path
 
@@ -9,6 +17,9 @@ from energie_vlaanderen.ingest.vtest.workbook import (
     ParsedSheet,
     ParsedVTestWorkbook,
 )
+
+
+pytestmark = pytest.mark.parsers
 
 
 def test_csv_value_preserves_decimal_text() -> None:

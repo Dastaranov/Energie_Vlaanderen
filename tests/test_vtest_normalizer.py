@@ -1,3 +1,11 @@
+"""De V-test-bulkexport naar een canonieke vorm.
+
+Twee dingen die stil kunnen misgaan en hier vastliggen. De indexformules bestaan
+in een oud en een nieuw schema, waarbij de oude constante `d` de nieuwe `z` is —
+door elkaar halen geeft een plausibele maar verkeerde prijs. En de vaste
+vergoeding hangt aan de meteropstelling: enkelvoudig, tweevoudig en exclusief
+nacht zijn drie verschillende bedragen, geen drie namen voor hetzelfde.
+"""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -9,6 +17,9 @@ from energie_vlaanderen.ingest.vtest.normalizer import (
     VTestDataNormalizer,
 )
 from energie_vlaanderen.ingest.vtest.validator import VTestDataValidator
+
+
+pytestmark = pytest.mark.parsers
 
 
 def make_fixed_row() -> dict[str, object]:

@@ -19,6 +19,9 @@ import pytest
 from energie_vlaanderen.audit.databank import Bevinding, DatabankRapport
 
 
+pytestmark = pytest.mark.databank
+
+
 class TestErnst:
     """Fout betekent: de import is stuk. Waarschuwing: de bron levert het niet."""
 

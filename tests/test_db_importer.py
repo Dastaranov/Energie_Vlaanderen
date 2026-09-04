@@ -1,4 +1,10 @@
-"""Tests voor infrastructure/db/importer.py — netbeheerder code/naam-koppeling.
+"""Tests voor infrastructure/db/importer.py.
+
+Het breedste testbestand van het databankdomein, meegegroeid met de importer:
+componentcodes naar kolommen, netbeheerdercode naar naam, de marktcurves, het
+afsluiten van een tariefjaar, en de metadata-snapshots die alleen een nieuwe rij
+geven wanneer er echt iets gewijzigd is — een hernieuwde scrape met dezelfde
+inhoud hoort de historiek niet te laten groeien.
 
 De pure-Python logica (_dnb_code) wordt als gewone unit-test gedraaid. Tests
 die effectief tegen de Postgres-databank draaien (seed_netbeheerder,
@@ -26,6 +32,9 @@ from energie_vlaanderen.infrastructure.db.importer import (
 from energie_vlaanderen.utility.constants import DNB_CODES
 
 DB_CONNECT_TIMEOUT_SECONDS = 2
+
+
+pytestmark = pytest.mark.databank
 
 
 class TestDnbCode:

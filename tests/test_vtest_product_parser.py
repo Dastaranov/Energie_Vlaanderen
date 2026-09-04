@@ -1,3 +1,11 @@
+"""De resultatenpagina en het detailpaneel van vtest.be.
+
+Draait tegen echte, opgeslagen markup. De leveranciersnaam staat in het
+`alt`-attribuut van een logo en de tariefkaartlinks in een `matomoLinks(...)`-
+aanroep — vorm die bij elke herwerking van de site kan schuiven, en die dan hier
+en niet in de databank opvalt. Lege of contractloze HTML levert een lege lijst,
+geen uitzondering.
+"""
 from __future__ import annotations
 
 import pytest
@@ -66,6 +74,9 @@ _HTML_RESULTITEM = """\
 </div>
 </body></html>
 """
+
+
+pytestmark = pytest.mark.scrape
 
 
 class TestVTestProductParser:

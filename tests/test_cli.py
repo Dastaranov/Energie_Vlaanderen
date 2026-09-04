@@ -1,3 +1,10 @@
+"""De commandoschil, op vorm en op doorstroming.
+
+Het grootste deel toetst dat elk `<groep> <actie>` bestaat, zijn opties aanvaardt
+en `--json` kent — goedkope tests die een tikfout in de parserboom vangen voordat
+een gebruiker hem vindt. Daarnaast lopen `run_publish` en `run_db_import` hier
+volledig door, want dat zijn de twee handelingen die de actieve versie wijzigen.
+"""
 import argparse
 from datetime import date
 from pathlib import Path
@@ -8,6 +15,9 @@ import pytest
 from energie_vlaanderen.cli import build_parser, run_paths, run_publish
 from energie_vlaanderen.data.paths import DataPaths
 from energie_vlaanderen.settings import Settings
+
+pytestmark = pytest.mark.cli
+
 
 def test_paths_command_runs(
     tmp_path: Path,

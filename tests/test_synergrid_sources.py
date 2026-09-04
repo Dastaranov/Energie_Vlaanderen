@@ -17,6 +17,9 @@ from energie_vlaanderen.ingest.synergrid_sources import SynergridSourceScraper
 from energie_vlaanderen.settings import Settings
 
 
+pytestmark = pytest.mark.bronnen
+
+
 def _settings(tmp_path) -> Settings:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     return Settings.load(project_root=tmp_path, environ={})

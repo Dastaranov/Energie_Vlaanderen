@@ -1,3 +1,11 @@
+"""De vergelijkingsregels van de golden master.
+
+`audit golden` legt de gestagede waarden cel voor cel naast het bron-XLSX. Alles
+staat of valt bij wanneer twee cellen "gelijk" heten: een lege cel tegenover 0,
+een Belgische komma tegenover een punt, `None` tegenover 0. Elk van die gevallen
+is óf ruis die honderd valse verschillen meldt, óf een echt verschil dat
+weggemoffeld wordt — vandaar dat ze hier stuk voor stuk vastliggen.
+"""
 from __future__ import annotations
 
 import io
@@ -19,6 +27,9 @@ from energie_vlaanderen.audit.golden import (
 # ---------------------------------------------------------------------------
 # Unit tests: decimal comparison helper
 # ---------------------------------------------------------------------------
+
+pytestmark = pytest.mark.databank
+
 
 def test_decimals_equal_both_zero() -> None:
     assert _decimals_equal("0", Decimal("0"))

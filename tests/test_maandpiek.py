@@ -12,10 +12,15 @@ waarschuwing, alleen een te laag getal.
 
 from __future__ import annotations
 
+import pytest
+
 from decimal import Decimal
 
 from energie_vlaanderen.domain.models import Profile
 from energie_vlaanderen.utility.constants import D
+
+
+pytestmark = pytest.mark.rekenen
 
 
 def test_de_standaardschatting_is_de_vtest_waarde():

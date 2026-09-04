@@ -21,6 +21,9 @@ import pytest
 from energie_vlaanderen.data.db_repository import DbDataRepository
 
 
+pytestmark = pytest.mark.databank
+
+
 class TestProductOpbouw:
     """De databank staat in brede vorm (één rij per register), `Product`
     verwacht de lange vorm (één sleutel per component). Die vertaling is de kern

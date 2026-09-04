@@ -1,3 +1,10 @@
+"""De versiemappenstructuur en de actieve-versiewijzer.
+
+`current.txt` bepaalt met welke data er gerekend wordt. Wat hier vastligt is dat
+hij nooit naar iets kan wijzen dat er niet is: activeren van een onbestaande
+versie faalt, een versie-id met padtekens erin wordt geweigerd, en een ontbrekend
+bestand wordt gemeld in plaats van als leeg gelezen.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -10,6 +17,9 @@ from energie_vlaanderen.data.paths import (
     DataPathsError,
 )
 from energie_vlaanderen.settings import Settings
+
+
+pytestmark = pytest.mark.bronnen
 
 
 @pytest.fixture

@@ -11,6 +11,9 @@ from energie_vlaanderen.ingest.vtest.product_matcher import (
 )
 
 
+pytestmark = pytest.mark.scrape
+
+
 def _vtest_row(vreg_id, supplier_raw, product_raw, segment="woning", energy="Elektriciteit"):
     return {
         "vreg_id": vreg_id, "supplier_raw": supplier_raw, "product_raw": product_raw,

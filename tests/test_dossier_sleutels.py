@@ -18,6 +18,9 @@ from energie_vlaanderen.gebruikers.models import GebruikersError
 from energie_vlaanderen.gebruikers.toml_io import _controleer_sleutels
 
 
+pytestmark = pytest.mark.dossier
+
+
 class TestOnbekendeSleutel:
     def test_de_sleutel_die_dit_veroorzaakte_wordt_geweigerd(self):
         with pytest.raises(GebruikersError, match="afname_kwh"):

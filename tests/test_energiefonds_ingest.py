@@ -30,6 +30,9 @@ FIXTUUR = (
 )
 
 
+pytestmark = pytest.mark.masterdata
+
+
 @pytest.fixture(scope="module")
 def rijen():
     if not FIXTUUR.is_file():

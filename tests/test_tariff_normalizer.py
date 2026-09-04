@@ -7,6 +7,9 @@ import pytest
 from energie_vlaanderen.ingest.tariffs.normalizer import TariffDataNormalizer
 
 
+pytestmark = pytest.mark.parsers
+
+
 def _elek_row(col0, desc, hs1=None, hs2=None, ms1=None, ms2=None, ls_dc=None,
               digi=None, ana=None, pro=None, sheet="FA ELEK Afname", source_row=10):
     """Bouw een minimale elektriciteitsrij met de vereiste kolomindices.

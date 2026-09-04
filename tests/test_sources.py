@@ -43,6 +43,9 @@ from energie_vlaanderen.ingest.sources import (
 LT = chr(60)
 GT = chr(62)
 
+pytestmark = pytest.mark.bronnen
+
+
 def html_anchor(
     url: str,
     text: str,
