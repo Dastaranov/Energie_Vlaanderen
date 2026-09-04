@@ -1021,6 +1021,48 @@ daardoor 35 geldige kaarten af als "geen PDF" — echte kaarten van 214 kB die
 pdfinfo en pdftotext zonder morren lezen. ISO 32000-1 §7.5.2 laat de kop binnen
 de eerste 1024 bytes toe; er wordt nu daar gezocht en de offset wordt bewaard.
 
+**En dan de inhoud.** `ingest/tariefkaart_parser.py` haalt uit een kaart wat de
+export niet geeft: de coëfficiënt, de index, de constante, de eenheid en de
+btw-vlag. Achtentwintig leveranciers, achtentwintig opmaken — maar de formule
+komt in **drie** schrijfwijzen voor, en meer zijn het er niet:
+
+    A   0,102 X BELPEX-RLP-M + 3,001      coëfficiënt eerst   (Eneco, Ebem)
+    B   Belpex * 1,168 + 16,90            index eerst         (Bolt, OCTA+)
+    C   -1,5470 + (0,0449 x EPEXDAM)      constante eerst     (ENGIE)
+
+176 van de 302 kaarten leveren zo minstens één formule. `scripts/parse_tariefkaarten.py`
+legt ze naast `tarief_afname` van de maand van de kaart, en **die toets is de
+validatie**: waar de coëfficiënt overeenkomt is de lezing bevestigd, waar ze
+verschilt is er iets te onderzoeken. Dat oordeel hoort niet in een regex.
+Stand: **92 van de 101 toetsbare kaarten bevestigd**, 22 vaste producten
+(die dragen geen indexcoëfficiënt), 9 echte afwijkingen.
+
+**De eenheid is het gevaarlijke deel, en de databank leidt hem af.**
+`0,102 x BELPEX + 3,001` levert ct/kWh, `Belpex * 1,168 + 16,90` levert
+EUR/MWh — een factor tien, en op een kaart staat dat soms alleen in de
+kolomkop. De parser raadt niet: een onherkende eenheid blijft leeg, want een
+verkeerd omgerekend getal is erger dan een onomgerekend getal (het eerste ziet
+er plausibel uit). De toets probeert daarna ×1, ×0,1 en ×100 en meldt welke
+klopt — een factor die uitkomt is *bewijs* voor de eenheid, geen aanname
+erover. Zo bleek dat 53 kaarten in EUR/MWh rekenen, 37 in ct/kWh en 2 in
+EUR/kWh.
+
+Twee dingen die de toets nog moest leren. Een **vast** product draagt geen
+indexcoëfficiënt: de formule op zo'n kaart hoort bij de optionele dynamische
+afrekening en niet bij de contractprijs, dus ertegen toetsen meldt een
+afwijking die er geen is. En een kaart drukt vaak **minder decimalen** af dan
+de export draagt — Luminus zet 0,0923 waar de databank 0,092320 heeft. Er
+wordt daarom ook op het aantal decimalen van de kaart vergeleken, en niet met
+een tolerantie: die zou ook een echt verschil doorlaten.
+
+**De vaste vergoeding levert kandidaten, geen antwoord.** Bij Eneco staan het
+verbruikstarief (17,67) en de vaste vergoeding (65,00) naast elkaar in dezelfde
+tabel, en `pdftotext -layout` houdt de kolommen naast elkaar maar niet uit
+elkaar. Er wordt daarom een handvol getallen doorgegeven in plaats van er één
+te kiezen. Dat 65,00 de juiste is, blijkt uit de databank: 61,321 EUR/jaar
+exclusief btw maal 1,06 is precies 65,00 — en dat is meteen de bevestiging dat
+de kaart inclusief btw rekent en de export exclusief.
+
 **Het register wordt tussentijds weggeschreven.** Dit zijn 350 verzoeken naar
 evenveel externe sites en het duurt minuten; een run die halverwege afgebroken
 wordt — en dat gebeurde — had anders wél de documenten op schijf maar geen

@@ -102,6 +102,7 @@ overgeslagen wanneer die er niet zijn, en draaien in CI tegen de zaaddump
 | `test_leveranciersnamen.py` | VREG schrijft dezelfde leverancier op meerdere manieren; alle gevallen komen letterlijk uit de export. |
 | `test_utility_normalizer.py` | `dec()`: tekst naar `Decimal`. Eén test, op de plek waar elk bedrag van de brondata binnenkomt. |
 | `test_p0_regressions.py` | Een nulprijs is geen ontbrekende prijs, en decimaaltekst wordt niet stil afgerond. |
+| `test_tariefkaart_parser.py` | De prijsformule uit een tariefkaart: drie schrijfwijzen, en de eenheid die er soms alleen in de kolomkop staat — ct/kWh tegenover EUR/MWh is een factor tien. |
 
 ## `scrape` — de live weg naar vtest.be
 
