@@ -222,6 +222,23 @@ class TestPlausibiliteit:
     controle waarvan niet vaststaat dát ze afgaat, is geen controle.
     """
 
+    # `marktcurve` en `verbruiksprofiel_waarde` zitten niet in de zaaddump
+    # (`met_zware_tabellen = False`, samen ruim 130.000 rijen). Een uitlokking
+    # die een bestaande rij aanpast, raakt daar dus niets — de update slaagt op
+    # nul rijen, de regel gaat terecht niet af, en de test faalt op een melding
+    # die naar de auditregel wijst in plaats van naar de lege tabel. Vandaar
+    # dat de zware gevallen hun eigen rij aanleveren; ze rollen mee terug.
+    VOORBEREIDING = {
+        # `version_id` heeft een foreign key naar `data_version`; een verzonnen
+        # id laat de insert stuklopen. Vandaar een bestaande versie.
+        "RLP/SPP altijd positief": (
+            "insert into marktcurve "
+            "(version_id, curve_type, energie_type, groep, waarde) "
+            "select version_id, 'RLP', 'elektriciteit', 'test', 0.25 "
+            "from data_version limit 1"
+        ),
+    }
+
     @pytest.mark.parametrize("regel,sql", [
         (
             "Max vaste vergoeding overschreden",
@@ -249,7 +266,19 @@ class TestPlausibiliteit:
 
         from energie_vlaanderen.audit.databank import DatabankAudit
 
-        db_conn.execute(sa.text(sql))
+        voorbereiding = self.VOORBEREIDING.get(regel)
+        if voorbereiding is not None:
+            db_conn.execute(sa.text(voorbereiding))
+
+        geraakt = db_conn.execute(sa.text(sql)).rowcount
+        # Zonder deze controle is de test hierboven stil leeg: een update op nul
+        # rijen verandert niets, en het uitblijven van de bevinding zou dan als
+        # een kapotte auditregel gelezen worden.
+        assert geraakt > 0, (
+            f"de uitlokking voor '{regel}' raakte geen enkele rij — de tabel is "
+            "leeg in deze databank, dus deze test controleert niets"
+        )
+
         regels = {b.regel for b in DatabankAudit(db_conn).run().fouten}
         assert regel in regels, f"{regel} werd niet opgemerkt"
 
