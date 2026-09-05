@@ -516,6 +516,13 @@ aansluitingspunt = sa.Table(
     # capaciteitstarief (`meter`). Drie verschillende getallen.
     sa.Column("aansluitingsvermogen_kva", sa.Numeric(9, 3), nullable=True),
     sa.Column("aantal_fasen", sa.SmallInteger, nullable=True),
+    # Gebouwkenmerken (migratie 0026) — vrije tekst en geen vaste lijst, zie
+    # `gebruikers.models.Aansluitingspunt.bebouwingstype`. Vandaag enkel
+    # meegenomen, nog door geen berekening gelezen; invoer voor een
+    # toekomstig gebouw-warmtevraagmodel (zie CLAUDE.md "Uitbreiding
+    # dossiermodel").
+    sa.Column("bebouwingstype", sa.Text, nullable=False, server_default=""),
+    sa.Column("bewoonbare_oppervlakte_m2", sa.Numeric(7, 1), nullable=True),
     sa.Column("geldig_van", sa.Date, nullable=True),
     sa.Column("geldig_tot", sa.Date, nullable=True),
     sa.Column("aangemaakt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
@@ -565,6 +572,15 @@ installatie_asset = sa.Table(
     # AC- of DC-gekoppeld bepaalt of PV de batterij kan laden zonder de meter te
     # passeren — een modeldimensie, geen detail.
     sa.Column("topologie", sa.Text, nullable=True),
+    # Migratie 0026. `richting` hoort bij een PV-string ("oost"/"zuid"/"west");
+    # meerdere PV-rijen op hetzelfde aansluitingspunt is het model voor
+    # oriëntatie, geen geneste sub-structuur — zie
+    # `gebruikers.models.InstallatieAsset`'s docstring. `vermogen_kw`/`doel`
+    # horen bij `AssetType.GASTOESTEL` (thermisch vermogen, en waartoe het
+    # toestel dient — "ruimteverwarming"/"warm_water"/"beide").
+    sa.Column("richting", sa.Text, nullable=False, server_default=""),
+    sa.Column("vermogen_kw", sa.Numeric(9, 3), nullable=True),
+    sa.Column("doel", sa.Text, nullable=False, server_default=""),
     sa.Column("geldig_van", sa.Date, nullable=True),
     sa.Column("geldig_tot", sa.Date, nullable=True),
     sa.Index("ix_installatie_asset_aansluitingspunt", "aansluitingspunt_id", "type"),

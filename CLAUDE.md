@@ -1885,6 +1885,78 @@ onmogelijk maakt. `[gebruiker].id` in `gebruiker.toml` is nu een optioneel
 veld (een zelf gegenereerde UUID) dat die identiteit vastzet; zonder blijft
 het oude gedrag ongewijzigd.
 
+### Het dossiermodel kent nu gastoestellen, PV-oriëntatie en gebouwkenmerken
+
+Drie dingen die Gert aanleverde als voorbeeld van wat een dossier nog niet kon
+vastleggen: een gaskachel/-ketel naast een warmtepomp, zonnepanelen in meerdere
+oriëntaties (oost/zuid/west), en gebouwkenmerken (bebouwingstype, bewoonbare
+oppervlakte). Migratie 0026 legt dit vast — bewust **enkel het vastleggen van
+de data**, niet de fysieke modellen die ze ooit zou voeden (zie hieronder).
+
+**Een lucht-lucht warmtepomp paste al in het bestaande model, zonder
+codewijziging.** `WarmtepompSpec.type_wp` is al vrije tekst ("lucht-water",
+"geothermisch", en nu ook "lucht-lucht"), en `Warmtepomp.verwarm()`/
+`_bereken_actuele_cop()` rekenen generiek met bron-/afgiftetemperatuur — voor
+lucht-lucht is dat buitenlucht/binnenlucht in plaats van buitenlucht/
+verwarmingswater, dezelfde formule. Enkel een masterdata-item met de juiste
+`t_afgifte_nominaal_c` (kamertemperatuur, niet 35°C vloerverwarming) ontbreekt
+nog. Voor Gerts eigen Daikin 5MX (multisplit, 5 binnenunits) bleek dat item
+niet zomaar te schrijven: Daikin publiceert voor een multisplit-buitenunit
+géén vast nominaal vermogen — de capaciteit hangt af van *welke* binnenunits
+eraan hangen (het technische datasheet rekent expliciet met de som van de
+aangesloten binnenunit-capaciteitsklassen, niet met één cijfer voor de
+buitenunit). Zonder de werkelijke capaciteitsklasse van elk van de vijf
+binnenunits zou dit veld een gok zijn — precies wat dit project nergens doet.
+`config/hardware/warmtepompen/daikin_5mx.toml` staat er daarom nog niet; het
+volgt zodra die vijf klassen bekend zijn.
+
+**Gastoestellen krijgen een nieuw `AssetType`.** `AssetType.GASTOESTEL` dekt
+kachel, ketel en toekomstige varianten in één waarde — het *doel*
+(`InstallatieAsset.doel`: "ruimteverwarming"/"warm_water"/"beide") maakt het
+onderscheid, net zoals `type_wp` dat al voor warmtepomptypes doet. Een aparte
+enumwaarde per toestelsoort zou bij elk nieuw toestel een migratie vergen.
+`InstallatieAsset` kreeg drie nieuwe, optionele velden: `vermogen_kw`
+(generiek nominaal vermogen — voor een warmtepomp blijft `hardware.WarmtepompSpec`
+via `merk`/`model` de bron van waarheid), `doel`, en `richting`.
+
+**PV-oriëntatie is geen nieuwe sub-structuur, maar meerdere PV-assets op
+hetzelfde punt.** `dossier.assets` is al een tuple; een installatie met
+oost/zuid/west-strings is drie `InstallatieAsset(type=PV, ...)`-rijen, elk met
+haar eigen `kwp`/`omvormer_kva`/`richting`. `[[aansluiting.zonnepaneel]]` in
+`gebruiker.toml` (lijst, één sectie per string) bestaat náást de bestaande
+enkelvoudige `pv_kwp`/`omvormer_kva` — beide samen geven gewoon extra assets.
+`[[aansluiting.gastoestel]]` volgt hetzelfde patroon voor gastoestellen, en
+hangt aan het gaspunt, niet het elektriciteitspunt.
+
+**Gebouwkenmerken staan op `Aansluitingspunt`**, naast `postcode`/`gemeente`:
+`bebouwingstype` (vrije tekst) en `bewoonbare_oppervlakte_m2`. Overwogen en
+verworpen: een apart `Gebouw`-model op gebruikersniveau (een gebruiker kan
+aansluitingspunten op meerdere adressen hebben, dus strikt genomen hoort een
+gebouw niet bij één aansluitingspunt) — voor twee velden is dat overbouwd;
+zodra er een derde/vierde gebouwkenmerk bijkomt (voor het warmtevraagmodel
+hieronder) is een apart model het punt waarop dat alsnog verdient gebouwd te
+worden.
+
+**Wat dit nog niet doet — drie modellen, elk apart te plannen:**
+
+- Een productiemodel dat per PV-string een eigen dagprofiel aflegt in plaats
+  van het huidige, gedeelde SPP-profiel (`productie_uit_kwp()`/
+  `productiereeks()` sommeren vandaag nog gewoon over alle PV-assets op een
+  punt, ongeacht `richting`). Vereist een zoninstralingsmodel.
+- Een gemengde verwarmingsdispatch (warmtepomp + gasketel/-kachel als
+  back-up of gedeeltelijke vervanging) — `WarmtepompScenario(vervangt_gas=True)`
+  ondersteunt vandaag alleen volledige vervanging.
+- Een gebouw-warmtevraagmodel dat `bewoonbare_oppervlakte_m2`/`bebouwingstype`
+  omzet naar een geschatte `warmtevraag_kwh_jaar` — vandaag moet de gebruiker
+  dat jaartotaal nog zelf aanleveren aan `WarmtepompScenario`. Dit is het stuk
+  dat een echte aanbeveling pas mogelijk maakt (het achterliggende doel — zie
+  hierboven), en verdient een eigen validatieronde tegen een echte gasfactuur,
+  zoals elk ander schattingsmodel in dit project.
+
+Alle vijf nieuwe velden lopen automatisch mee in `dossier_snapshot()`
+(scenario-persistentie, zie hierboven) zodra ze op de dataclasses staan — geen
+aparte aanpassing nodig, wat bevestigt dat die serialisatie generiek genoeg is.
+
 ### Environment variables
 
 | Variable | Default | Purpose |

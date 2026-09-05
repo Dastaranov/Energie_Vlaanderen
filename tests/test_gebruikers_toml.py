@@ -127,6 +127,108 @@ class TestAansluitingen:
         assert meter.registerschema is Registerschema.EXCLUSIEF_NACHT
         assert meter.meterregime is Meterregime.DIGITAAL
 
+    def test_gebouwkenmerken_worden_ingelezen(self, tmp_path):
+        pad = schrijf(
+            tmp_path,
+            MINIMAAL + 'bebouwingstype = "halfopen"\nbewoonbare_oppervlakte_m2 = 350\n',
+        )
+        (punt,) = lees_dossier(pad).aansluitingspunten
+        assert punt.bebouwingstype == "halfopen"
+        assert punt.bewoonbare_oppervlakte_m2 == D("350")
+
+    def test_zonder_gebouwkenmerken_blijven_ze_leeg(self, tmp_path):
+        (punt,) = lees_dossier(schrijf(tmp_path, MINIMAAL)).aansluitingspunten
+        assert punt.bebouwingstype == ""
+        assert punt.bewoonbare_oppervlakte_m2 is None
+
+
+class TestZonnepaneelStrings:
+    """`[[aansluiting.zonnepaneel]]` — een PV-string per oriëntatie, náást de
+    bestaande enkelvoudige `pv_kwp`/`omvormer_kva`."""
+
+    def test_meerdere_strings_worden_aparte_pv_assets(self, tmp_path):
+        inhoud = MINIMAAL + (
+            "\n[[aansluiting.zonnepaneel]]\n"
+            "kwp = 4.5\nomvormer_kva = 4.0\nrichting = \"oost\"\n"
+            "\n[[aansluiting.zonnepaneel]]\n"
+            "kwp = 4.2\nomvormer_kva = 4.0\nrichting = \"west\"\n"
+        )
+        dossier = lees_dossier(schrijf(tmp_path, inhoud))
+        pv_assets = [a for a in dossier.assets if a.type is AssetType.PV]
+        assert len(pv_assets) == 2
+        assert {a.richting for a in pv_assets} == {"oost", "west"}
+        assert {a.kwp for a in pv_assets} == {D("4.5"), D("4.2")}
+
+    def test_werkt_naast_de_bestaande_enkelvoudige_vorm(self, tmp_path):
+        inhoud = (
+            MINIMAAL.replace("meter = \"digitaal\"", "meter = \"digitaal\"\nzonnepanelen = true\npv_kwp = 5.0\n")
+            + "\n[[aansluiting.zonnepaneel]]\nkwp = 4.5\nrichting = \"oost\"\n"
+        )
+        dossier = lees_dossier(schrijf(tmp_path, inhoud))
+        pv_assets = [a for a in dossier.assets if a.type is AssetType.PV]
+        assert len(pv_assets) == 2
+        assert any(a.richting == "" and a.kwp == D("5.0") for a in pv_assets)
+        assert any(a.richting == "oost" and a.kwp == D("4.5") for a in pv_assets)
+
+    def test_zonder_kwp_is_een_duidelijke_fout(self, tmp_path):
+        inhoud = MINIMAAL + "\n[[aansluiting.zonnepaneel]]\nrichting = \"oost\"\n"
+        with pytest.raises(GebruikersError, match="geen kwp"):
+            lees_dossier(schrijf(tmp_path, inhoud))
+
+    def test_zonder_elektriciteitsaansluiting_is_een_fout(self, tmp_path):
+        inhoud = (
+            "[gebruiker]\npostcode = \"9300\"\n\n[aansluiting]\n"
+            "elektriciteit = false\ngas = true\nmeter = \"digitaal\"\n"
+            "\n[[aansluiting.zonnepaneel]]\nkwp = 4.5\n"
+        )
+        with pytest.raises(GebruikersError, match="elektriciteitsaansluiting"):
+            lees_dossier(schrijf(tmp_path, inhoud))
+
+    def test_een_onbekende_sleutel_wordt_geweigerd(self, tmp_path):
+        inhoud = MINIMAAL + "\n[[aansluiting.zonnepaneel]]\nkwp = 4.5\nkleur = \"blauw\"\n"
+        with pytest.raises(GebruikersError, match="kent de sleutel"):
+            lees_dossier(schrijf(tmp_path, inhoud))
+
+
+class TestGastoestellen:
+    """`[[aansluiting.gastoestel]]` — een verwarmingstoestel op gas, los van
+    het bestaande gasverbruik-jaartotaal."""
+
+    def _met_gas(self, extra: str) -> str:
+        return (
+            "[gebruiker]\npostcode = \"9300\"\ngemeente = \"Aalst\"\n\n[aansluiting]\n"
+            "elektriciteit = true\ngas = true\nmeter = \"digitaal\"\n" + extra
+        )
+
+    def test_kachel_en_ketel_worden_aparte_assets(self, tmp_path):
+        inhoud = self._met_gas(
+            "\n[[aansluiting.gastoestel]]\ntype = \"kachel\"\nvermogen_kw = 6\n"
+            "doel = \"ruimteverwarming\"\n"
+            "\n[[aansluiting.gastoestel]]\ntype = \"ketel\"\nvermogen_kw = 25\n"
+            "doel = \"beide\"\n"
+        )
+        dossier = lees_dossier(schrijf(tmp_path, inhoud))
+        gastoestellen = [a for a in dossier.assets if a.type is AssetType.GASTOESTEL]
+        assert len(gastoestellen) == 2
+        kachel = next(a for a in gastoestellen if a.model == "kachel")
+        assert kachel.vermogen_kw == D("6")
+        assert kachel.doel == "ruimteverwarming"
+        ketel = next(a for a in gastoestellen if a.model == "ketel")
+        assert ketel.vermogen_kw == D("25")
+        assert ketel.doel == "beide"
+
+    def test_hangt_aan_het_gaspunt_niet_het_elektriciteitspunt(self, tmp_path):
+        inhoud = self._met_gas("\n[[aansluiting.gastoestel]]\ntype = \"ketel\"\nvermogen_kw = 25\n")
+        dossier = lees_dossier(schrijf(tmp_path, inhoud))
+        (asset,) = [a for a in dossier.assets if a.type is AssetType.GASTOESTEL]
+        gas_punt = next(p for p in dossier.aansluitingspunten if p.energie_type is EnergieType.GAS)
+        assert asset.aansluitingspunt_id == gas_punt.id
+
+    def test_zonder_gasaansluiting_is_een_fout(self, tmp_path):
+        inhoud = MINIMAAL + "\n[[aansluiting.gastoestel]]\ntype = \"ketel\"\nvermogen_kw = 25\n"
+        with pytest.raises(GebruikersError, match="gasaansluiting"):
+            lees_dossier(schrijf(tmp_path, inhoud))
+
 
 class TestAannames:
     def test_de_standaardmaandpiek_draagt_haar_bron(self, tmp_path):

@@ -134,10 +134,17 @@ _SLEUTELS: dict[str, frozenset[str]] = {
         "elektriciteit", "gas", "ean_elektriciteit", "ean_gas",
         "aansluitingsvermogen_kva", "aantal_fasen", "meter", "registerschema",
         "zonnepanelen", "terugdraaiend", "gemeten_maandpiek_kw", "omvormer_kva",
-        "pv_kwp", "batterij", "omvormer",
+        "pv_kwp", "batterij", "omvormer", "zonnepaneel", "gastoestel",
+        "bebouwingstype", "bewoonbare_oppervlakte_m2",
     }),
     "aansluiting.batterij": frozenset({"merk", "model", "topologie"}),
     "aansluiting.omvormer": frozenset({"merk", "model"}),
+    # Eén rij per PV-string — naast de enkelvoudige pv_kwp/omvormer_kva
+    # hierboven, bedoeld voor een installatie met meerdere oriëntaties.
+    "aansluiting.zonnepaneel": frozenset({"kwp", "omvormer_kva", "richting"}),
+    # `type` is puur beschrijvend ("kachel"/"ketel", ...) en gaat niet in
+    # `AssetType` — zie `InstallatieAsset.doel` voor waarom.
+    "aansluiting.gastoestel": frozenset({"type", "vermogen_kw", "doel"}),
     "verbruik": frozenset({
         "jaar", "periode_van", "periode_tot", "bron", "fluvius_csv",
         "resolutie", "ontbrekende_data",
@@ -371,6 +378,10 @@ def lees_dossier(
                     aansluiting_raw, "aansluitingsvermogen_kva", "aansluiting"
                 ),
                 aantal_fasen=aansluiting_raw.get("aantal_fasen"),
+                bebouwingstype=_tekst(aansluiting_raw, "bebouwingstype", "aansluiting"),
+                bewoonbare_oppervlakte_m2=_getal(
+                    aansluiting_raw, "bewoonbare_oppervlakte_m2", "aansluiting"
+                ),
             )
         )
         if ean is None:
@@ -496,6 +507,67 @@ def lees_dossier(
                 omvormer_kva=omvormer_kva,
             )
         )
+
+    # `[[aansluiting.zonnepaneel]]` — een PV-string per oriëntatie, náást de
+    # enkelvoudige `pv_kwp`/`omvormer_kva` hierboven (die blijft het
+    # eenvoudige, éénrichting-geval). Onafhankelijk van de
+    # `zonnepanelen`-vlag: de lijst zelf is het signaal dat er panelen zijn.
+    zonnepaneel_raw = aansluiting_raw.get("zonnepaneel")
+    if zonnepaneel_raw is not None:
+        if isinstance(zonnepaneel_raw, Mapping):
+            zonnepaneel_raw = [zonnepaneel_raw]
+        if not isinstance(zonnepaneel_raw, list):
+            raise GebruikersError("[[aansluiting.zonnepaneel]] moet een lijst secties zijn.")
+        if elek_punt is None:
+            raise GebruikersError(
+                "[[aansluiting.zonnepaneel]] staat er, maar er is geen "
+                "elektriciteitsaansluiting om de PV-string aan te hangen."
+            )
+        for volgnummer, rij in enumerate(zonnepaneel_raw, start=1):
+            _controleer_sleutels(rij, "aansluiting.zonnepaneel")
+            string_kwp = _getal(rij, "kwp", "aansluiting.zonnepaneel")
+            if string_kwp is None:
+                raise GebruikersError(
+                    f"[[aansluiting.zonnepaneel]] regel {volgnummer} heeft geen "
+                    "kwp: het SPP-profiel geeft productie per kWp, geen verdeling."
+                )
+            assets.append(
+                InstallatieAsset(
+                    aansluitingspunt_id=elek_punt.id,
+                    type=AssetType.PV,
+                    kwp=string_kwp,
+                    omvormer_kva=_getal(rij, "omvormer_kva", "aansluiting.zonnepaneel"),
+                    richting=_tekst(rij, "richting", "aansluiting.zonnepaneel"),
+                )
+            )
+
+    # `[[aansluiting.gastoestel]]` — een verwarmingstoestel op het
+    # gasaansluitingspunt (kachel, ketel, ...). `type` is puur beschrijvend
+    # en gaat in `InstallatieAsset.model`, niet in `AssetType` (zie
+    # `AssetType.GASTOESTEL`'s docstring).
+    gastoestel_raw = aansluiting_raw.get("gastoestel")
+    if gastoestel_raw is not None:
+        if isinstance(gastoestel_raw, Mapping):
+            gastoestel_raw = [gastoestel_raw]
+        if not isinstance(gastoestel_raw, list):
+            raise GebruikersError("[[aansluiting.gastoestel]] moet een lijst secties zijn.")
+        gas_punt = next((p for p in punten if p.energie_type is EnergieType.GAS), None)
+        if gas_punt is None:
+            raise GebruikersError(
+                "[[aansluiting.gastoestel]] staat er, maar er is geen "
+                "gasaansluiting om het toestel aan te hangen."
+            )
+        for rij in gastoestel_raw:
+            _controleer_sleutels(rij, "aansluiting.gastoestel")
+            assets.append(
+                InstallatieAsset(
+                    aansluitingspunt_id=gas_punt.id,
+                    type=AssetType.GASTOESTEL,
+                    model=_tekst(rij, "type", "aansluiting.gastoestel"),
+                    vermogen_kw=_getal(rij, "vermogen_kw", "aansluiting.gastoestel"),
+                    doel=_tekst(rij, "doel", "aansluiting.gastoestel"),
+                )
+            )
 
     batterij_raw = _sectie(aansluiting_raw, "batterij", verplicht=False)
     _controleer_sleutels(batterij_raw, "aansluiting.batterij")

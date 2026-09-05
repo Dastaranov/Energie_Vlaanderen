@@ -52,6 +52,33 @@ terugdraaiend = false
 zonnepanelen = true
 pv_kwp = 4.6              # paneelvermogen; SPP geeft opbrengst *per kWp*
 
+# Halfopen bebouwing, gesloten of open — vrije tekst, geen vaste lijst.
+# Vandaag enkel meegenomen (nog door geen berekening gelezen); invoer voor een
+# toekomstig gebouw-warmtevraagmodel.
+# bebouwingstype = "halfopen"
+# bewoonbare_oppervlakte_m2 = 350
+
+# Een installatie met meerdere oriëntaties: één `[[aansluiting.zonnepaneel]]`
+# per string, náást (niet in plaats van) de enkelvoudige pv_kwp hierboven.
+# Elke string heeft haar eigen kwp/omvormer_kva/richting.
+# [[aansluiting.zonnepaneel]]
+# kwp = 4.5
+# omvormer_kva = 4.0
+# richting = "oost"
+#
+# [[aansluiting.zonnepaneel]]
+# kwp = 4.2
+# omvormer_kva = 4.0
+# richting = "west"
+
+# Een verwarmingstoestel op gas (kachel, ketel, ...), los van het
+# gasverbruik-jaartotaal in [verbruik]/[[verbruiksopgave]]. `type` is puur
+# beschrijvend. `doel`: "ruimteverwarming", "warm_water" of "beide".
+# [[aansluiting.gastoestel]]
+# type = "ketel"
+# vermogen_kw = 25
+# doel = "beide"
+
 [aansluiting.batterij]
 merk = "Marstek"
 model = "Venus E"
@@ -63,6 +90,13 @@ topologie = "ac_gekoppeld"
 [aansluiting.omvormer]
 merk = ""
 model = ""
+
+# Een warmtepomp is een InstallatieAsset met type "warmtepomp" — vandaag nog
+# niet via een eigen [aansluiting.warmtepomp]-sectie in te lezen (enkel via de
+# scenario-API, zie `energie_vlaanderen.scenario.WarmtepompScenario`). Zowel
+# lucht-water als lucht-lucht (bv. een multisplit) passen in hetzelfde model:
+# `hardware.WarmtepompSpec.type_wp` is vrije tekst en de simulatie rekent
+# generiek met bron-/afgiftetemperatuur.
 
 # Een onbekende sleutel wordt geweigerd, niet genegeerd. `afname_kwh` in plaats
 # van `afname_dag_kwh` leverde eerder een opgave van 0 kWh op — en dus een

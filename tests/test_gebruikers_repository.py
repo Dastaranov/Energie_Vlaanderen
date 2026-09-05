@@ -11,6 +11,7 @@ TIMESTAMP-kolom.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal as D
 
@@ -213,6 +214,49 @@ class TestRondrit:
         )
         (terug,) = repo.assets(punt.id)
         assert terug.topologie is Topologie.HYBRIDE
+
+    def test_gastoestel_behoudt_vermogen_en_doel(self, conn, dossier):
+        gebruiker, punt = dossier
+        repo = GebruikersRepository(conn)
+        repo.bewaar_gebruiker(gebruiker)
+        repo.bewaar_aansluitingspunt(punt)
+        repo.bewaar_asset(
+            InstallatieAsset(
+                punt.id, AssetType.GASTOESTEL,
+                model="ketel", vermogen_kw=D("25"), doel="beide",
+            )
+        )
+        (terug,) = repo.assets(punt.id)
+        assert terug.type is AssetType.GASTOESTEL
+        assert terug.vermogen_kw == D("25")
+        assert terug.doel == "beide"
+
+    def test_pv_string_behoudt_haar_richting(self, conn, dossier):
+        gebruiker, punt = dossier
+        repo = GebruikersRepository(conn)
+        repo.bewaar_gebruiker(gebruiker)
+        repo.bewaar_aansluitingspunt(punt)
+        repo.bewaar_asset(
+            InstallatieAsset(punt.id, AssetType.PV, kwp=D("4.5"), richting="oost")
+        )
+        repo.bewaar_asset(
+            InstallatieAsset(punt.id, AssetType.PV, kwp=D("4.2"), richting="west")
+        )
+        assets = repo.assets(punt.id)
+        assert {a.richting for a in assets} == {"oost", "west"}
+
+    def test_aansluitingspunt_behoudt_gebouwkenmerken(self, conn, dossier):
+        gebruiker, punt = dossier
+        punt_met_gebouw = replace(
+            punt, bebouwingstype="halfopen", bewoonbare_oppervlakte_m2=D("350"),
+        )
+        repo = GebruikersRepository(conn)
+        repo.bewaar_gebruiker(gebruiker)
+        repo.bewaar_aansluitingspunt(punt_met_gebouw)
+
+        (terug,) = repo.aansluitingspunten(gebruiker.id)
+        assert terug.bebouwingstype == "halfopen"
+        assert terug.bewoonbare_oppervlakte_m2 == D("350")
 
 
 class TestIdempotentie:

@@ -146,6 +146,12 @@ class AssetType(StrEnum):
     BATTERIJ = "batterij"
     EV = "ev"
     WARMTEPOMP = "warmtepomp"
+    # Eén type voor elk gasverwarmingstoestel (kachel, ketel, ...) — het
+    # *doel* (InstallatieAsset.doel: "ruimteverwarming"/"warm_water"/"beide")
+    # onderscheidt de variant, net zoals `WarmtepompSpec.type_wp` dat al doet
+    # voor warmtepomptypes. Een aparte enumwaarde per toestelsoort zou bij elk
+    # nieuw toestel een migratie vergen.
+    GASTOESTEL = "gastoestel"
 
 
 class Topologie(StrEnum):
@@ -319,6 +325,13 @@ class Aansluitingspunt:
     spanningsniveau: Spanningsniveau = Spanningsniveau.LAAG
     aansluitingsvermogen_kva: Optional[Decimal] = None
     aantal_fasen: Optional[int] = None
+    # Gebouwkenmerken, vrije tekst en geen vaste lijst — net als `type_wp` op
+    # een warmtepomp: een derde/vierde variant (bv. "gesloten") mag niet op
+    # een codewijziging wachten. Bedoeld als invoer voor een toekomstig
+    # gebouw-warmtevraagmodel (zie CLAUDE.md "Uitbreiding dossiermodel");
+    # vandaag enkel meegenomen en niet door een berekening gelezen.
+    bebouwingstype: str = ""
+    bewoonbare_oppervlakte_m2: Optional[Decimal] = None
     geldig_van: Optional[date] = None
     geldig_tot: Optional[date] = None
     id: UUID = field(default_factory=uuid4)
@@ -341,6 +354,8 @@ class Aansluitingspunt:
             and self.aansluitingsvermogen_kva <= 0
         ):
             raise GebruikersError("Aansluitingsvermogen moet groter dan nul zijn.")
+        if self.bewoonbare_oppervlakte_m2 is not None and self.bewoonbare_oppervlakte_m2 <= 0:
+            raise GebruikersError("Bewoonbare oppervlakte moet groter dan nul zijn.")
         _controleer_periode(self.geldig_van, self.geldig_tot, "aansluitingspunt")
 
 
@@ -384,12 +399,22 @@ class Meter:
 
 @dataclass(frozen=True)
 class InstallatieAsset:
-    """PV, batterij, EV of warmtepomp achter één aansluitingspunt.
+    """PV, batterij, EV, warmtepomp of gastoestel achter één aansluitingspunt.
 
     `merk`/`model` sluiten aan op de sleutel `(merk, model)` van
     `hardware.BatterijRepository` en `hardware.OmvormerRepository`, zodat een
     asset naar een nameplate-specificatie met bronvermelding wijst in plaats van
     naar losse getallen.
+
+    **Meerdere PV-assets op hetzelfde aansluitingspunt is het model voor
+    oriëntatie**, niet een geneste sub-structuur: een installatie met
+    oost/zuid/west-strings is drie `InstallatieAsset(type=PV, ...)`-rijen, elk
+    met zijn eigen `kwp`/`omvormer_kva`/`richting`. Eén asset zonder
+    `richting` (het eenvoudige, éénrichting-geval) blijft het bestaande
+    gedrag — `productie_uit_kwp()`/`productiereeks()` sommeren vandaag nog
+    gewoon over alle PV-assets op het punt, ongeacht `richting`; een
+    oriëntatie-afhankelijk productiemodel is een latere stap (zie CLAUDE.md
+    "Uitbreiding dossiermodel").
     """
 
     aansluitingspunt_id: UUID
@@ -401,6 +426,18 @@ class InstallatieAsset:
     omvormer_model: str = ""
     omvormer_kva: Optional[Decimal] = None
     topologie: Optional[Topologie] = None
+    # Oriëntatie van een PV-string ("oost"/"zuid"/"west", of een gradengetal
+    # als tekst) — vrije tekst, geen vaste lijst, om dezelfde reden als
+    # `Aansluitingspunt.bebouwingstype`. Leeg voor elk ander asset-type.
+    richting: str = ""
+    # Generiek nominaal vermogen: voor een `GASTOESTEL` het thermisch
+    # vermogen. Een warmtepomp haalt haar vermogens uit `hardware.WarmtepompSpec`
+    # (via `merk`/`model`), dus dit veld is daar niet de bron van waarheid.
+    vermogen_kw: Optional[Decimal] = None
+    # Waartoe het toestel dient: "ruimteverwarming"/"warm_water"/"beide" voor
+    # een `GASTOESTEL`. Vrije tekst om dezelfde reden als `type_wp` op een
+    # warmtepomp: een derde doel (bv. koken) mag niet op een migratie wachten.
+    doel: str = ""
     geldig_van: Optional[date] = None
     geldig_tot: Optional[date] = None
     id: UUID = field(default_factory=uuid4)
@@ -416,6 +453,8 @@ class InstallatieAsset:
                 "Een batterij zonder topologie is niet te simuleren: AC- en "
                 "DC-gekoppeld verschillen in welke kWh de meter passeert."
             )
+        if self.vermogen_kw is not None and self.vermogen_kw <= 0:
+            raise GebruikersError("vermogen_kw moet groter dan nul zijn.")
         _controleer_periode(self.geldig_van, self.geldig_tot, "installatie")
 
 

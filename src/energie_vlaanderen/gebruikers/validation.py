@@ -275,4 +275,28 @@ def _controleer_hardware(dossier: Dossier, batterijen, omvormers) -> list[Bevind
                         f"{asset.omvormer_merk} {asset.omvormer_model}: {exc}",
                     )
                 )
+        if asset.type is AssetType.GASTOESTEL:
+            # Geen harde fout: een gastoestel zonder deze velden telt vandaag
+            # nog niet mee in de berekening (het gasverbruik komt uit
+            # [[verbruiksopgave]], niet uit dit toestel — zie CLAUDE.md
+            # "Uitbreiding dossiermodel"). De ontbrekende data is straks wel
+            # nodig zodra een warmtevraagmodel het toestel wél gebruikt, dus
+            # ze mag niet stil onopgemerkt blijven.
+            if asset.vermogen_kw is None:
+                uit.append(
+                    Bevinding(
+                        "waarschuwing",
+                        "installatie/gastoestel",
+                        f"Gastoestel {asset.model or '(zonder naam)'} heeft geen vermogen_kw.",
+                    )
+                )
+            if not asset.doel:
+                uit.append(
+                    Bevinding(
+                        "waarschuwing",
+                        "installatie/gastoestel",
+                        f"Gastoestel {asset.model or '(zonder naam)'} heeft geen doel "
+                        "(ruimteverwarming/warm_water/beide).",
+                    )
+                )
     return uit
