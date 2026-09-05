@@ -104,6 +104,60 @@ class TestZelfconsumptieEerst:
         assert resultaat.loc[0, "batterij_soc_pct"] < resultaat.loc[1, "batterij_soc_pct"]
 
 
+class TestAcVermogenbegrenzing:
+    """`ac_vermogen_max_w` modelleert een hybride omvormer of een
+    plug-and-play batterij die trager laadt/ontlaadt dan de batterijcellen
+    zelf zouden toelaten — het laagste van de twee moet gelden."""
+
+    def test_laadvermogen_wordt_begrensd_door_de_omvormer_niet_de_batterij(self):
+        """Zelfde 0,6 kWh/kwartier overschot als
+        `test_overschot_laadt_de_batterij` (2400 W aangeboden), maar nu
+        achter een 800 W-omvormer: 800 W x 0,25 h = 0,2 kWh, ruim onder de
+        2000 W-nameplate van de batterij zelf."""
+        batterij = _kale_batterij()
+        verbruik = _kwartieren([0.4, 0.0])
+        productie = _kwartieren([1.0, 0.0])
+
+        resultaat = simuleer_batterij_dispatch(
+            batterij, verbruik, productie, topologie=Topologie.DC_GEKOPPELD,
+            ac_vermogen_max_w=800.0,
+        )
+
+        assert resultaat.loc[0, "batterij_laad_kwh"] == pytest.approx(0.2)
+        assert resultaat.loc[0, "injectie_kwh"] == pytest.approx(1.0 - 0.4 - 0.2)
+
+    def test_ontlaadvermogen_wordt_begrensd_door_de_omvormer(self):
+        """Zelfde 0,5 kWh/kwartier tekort als `test_tekort_ontlaadt_de_batterij`
+        (1500 W-nameplate zou 0,375 kWh toelaten), nu achter een 800 W-omvormer:
+        800 W x 0,25 h = 0,2 kWh, dus 0,3 kWh moet alsnog van het net komen."""
+        batterij = _kale_batterij()
+        verbruik = _kwartieren([0.7, 0.0])
+        productie = _kwartieren([0.2, 0.0])
+
+        resultaat = simuleer_batterij_dispatch(
+            batterij, verbruik, productie, topologie=Topologie.DC_GEKOPPELD,
+            ac_vermogen_max_w=800.0,
+        )
+
+        assert resultaat.loc[0, "batterij_ontlaad_kwh"] == pytest.approx(0.2)
+        assert resultaat.loc[0, "afname_kwh"] == pytest.approx(0.5 - 0.2)
+
+    def test_een_ruimere_omvormer_dan_de_batterij_verandert_niets(self):
+        """Een 2500 W-plug-and-playgrens ligt boven de 2000 W-nameplate van
+        de batterij — de nameplate blijft dan de bindende grens, exact het
+        ongewijzigde gedrag van `test_overschot_laadt_de_batterij`."""
+        batterij = _kale_batterij()
+        verbruik = _kwartieren([0.4, 0.0])
+        productie = _kwartieren([1.0, 0.0])
+
+        resultaat = simuleer_batterij_dispatch(
+            batterij, verbruik, productie, topologie=Topologie.DC_GEKOPPELD,
+            ac_vermogen_max_w=2500.0,
+        )
+
+        assert resultaat.loc[0, "batterij_laad_kwh"] == pytest.approx(0.5)
+
+
 def _uren(prijzen: list[float]) -> pd.DataFrame:
     tijdstippen = pd.date_range("2026-01-01", periods=len(prijzen), freq="h", tz="UTC")
     return pd.DataFrame({"tijdstip": tijdstippen, "kwh": [0.0] * len(prijzen)})

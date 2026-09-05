@@ -122,6 +122,26 @@ class TestPasToe:
         assert "Venus E" in scenario.naam
 
 
+class TestAcVermogenMax:
+    """Het scenario zelf simuleert geen dispatch (dat gebeurt in
+    `simuleer_metingen()`/`voer_uit()`, getest tegen een echte databank) —
+    hier wordt enkel getoetst dat de parameter zelf zich gedraagt zoals een
+    scenario-invoer hoort: valide waarden geaccepteerd, een ongeldige
+    geweigerd, en zichtbaar in de omschrijving."""
+
+    def test_weigert_een_niet_positief_vermogen(self):
+        with pytest.raises(ValueError, match="ac_vermogen_max_w"):
+            BatterijScenario(merk="Marstek", model="Venus E", ac_vermogen_max_w=D("0"))
+
+    def test_omschrijving_vermeldt_de_begrenzing(self):
+        scenario = BatterijScenario(merk="Marstek", model="Venus E", ac_vermogen_max_w=D("800"))
+        assert "800" in scenario.omschrijving
+
+    def test_zonder_begrenzing_blijft_de_omschrijving_ongewijzigd(self):
+        scenario = BatterijScenario(merk="Marstek", model="Venus E")
+        assert "W AC" not in scenario.omschrijving
+
+
 class TestVerbruiksreeks:
     def test_gebruikt_de_fluvius_meting_als_die_er_is(self):
         punt = _elektriciteitspunt()

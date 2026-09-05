@@ -91,6 +91,26 @@ class BatterijScenario(Scenario):
     `prijsarbitrage=True` laat de batterij ook laden/ontladen op basis van de
     Belpex-dagprijs (zie de moduledocstring) — enkel toegepast als het
     elektriciteitscontract voor de hele periode dynamisch is.
+
+    `ac_vermogen_max_w` begrenst het laad-/ontlaadvermogen extra, los van de
+    nameplate van de batterij zelf (`merk`/`model` bepalen die via
+    `hardware.repository.BatterijRepository`) — het laagste van de twee
+    geldt (zie `calculation.dispatch._effectief_vermogen_w()`). Dit dekt de
+    scenario's waarin niet de batterijcellen maar wat ertussen en het net in
+    zit de beperkende factor is:
+
+    - **een hybride omvormer** die de bestaande PV-omvormer vervangt (of
+      ernaast komt) met zijn eigen, doorgaans lagere AC-vermogen dan wat de
+      batterij zelf zou aankunnen;
+    - **een plug-and-play batterij** op een gewone stopcontactaansluiting
+      (een balkoncentrale-achtige opstelling) — in België vandaag doorgaans
+      begrensd op 800 W, sommige installaties tot 2500 W enkelfasig. Beide
+      cijfers zijn geen constanten in dit project: de regelgeving errond
+      wijzigt, dus dit blijft een vrij in te vullen scenarioparameter in
+      plaats van een vaste keuze tussen "800" of "2500".
+
+    Zonder opgave (`None`, de standaard) geldt enkel de nameplate van de
+    batterij, zoals voorheen.
     """
 
     merk: str
@@ -98,9 +118,14 @@ class BatterijScenario(Scenario):
     topologie: Topologie = Topologie.DC_GEKOPPELD
     jaarverbruik_kwh: Optional[Decimal] = None
     prijsarbitrage: bool = False
+    ac_vermogen_max_w: Optional[Decimal] = None
     hardware_config_dir: Optional[str] = None
 
     def __post_init__(self) -> None:
+        if self.ac_vermogen_max_w is not None and self.ac_vermogen_max_w <= 0:
+            raise ValueError(
+                f"ac_vermogen_max_w moet groter dan nul zijn, kreeg {self.ac_vermogen_max_w}."
+            )
         if not self.naam:
             self.naam = f"Batterij: {self.merk} {self.model}"
         if not self.omschrijving:
@@ -108,6 +133,10 @@ class BatterijScenario(Scenario):
                 f"Wat als er een {self.merk} {self.model}-batterij "
                 f"({self.topologie}) bijkomt op de elektriciteitsaansluiting?"
                 + (" met prijsarbitrage" if self.prijsarbitrage else "")
+                + (
+                    f", begrensd op {self.ac_vermogen_max_w:g} W AC"
+                    if self.ac_vermogen_max_w is not None else ""
+                )
             )
 
     def pas_toe(self, dossier: Dossier) -> Dossier:
@@ -218,6 +247,9 @@ class BatterijScenario(Scenario):
 
         dispatch = simuleer_batterij_dispatch(
             batterij, verbruik, productie, topologie=self.topologie, marktprijzen=marktprijzen,
+            ac_vermogen_max_w=(
+                float(self.ac_vermogen_max_w) if self.ac_vermogen_max_w is not None else None
+            ),
         )
 
         # Het dag/nacht-register van elk interval overnemen van de echte

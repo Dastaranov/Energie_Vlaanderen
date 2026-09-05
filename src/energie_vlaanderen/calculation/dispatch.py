@@ -109,18 +109,45 @@ def _koppel_marktprijzen(samen: pd.DataFrame, marktprijzen: pd.DataFrame) -> pd.
     return gekoppeld.drop(columns=["market_ts", "timestamp"])
 
 
+def _effectief_vermogen_w(batterij: "Battery", ac_vermogen_max_w: Optional[float]) -> tuple[float, float]:
+    """Het werkelijk beschikbare laad-/ontlaadvermogen (W): het laagste van de
+    batterij-nameplate en een eventuele AC-vermogenbegrenzing.
+
+    Die begrenzing is niet de batterij zelf maar wat ertussen zit: een
+    hybride omvormer die de bestaande vervangt (of ernaast komt), of een
+    plug-and-play batterij (een balkoncentrale-achtige aansluiting, in
+    België doorgaans 800 W, soms tot 2500 W enkelfasig — beide waarden
+    wijzigen met de regelgeving en zijn hier dus geen constanten maar een
+    vrij in te vullen scenarioparameter). Een batterij die zelf 2500 W aankan
+    maar achter een 800 W-omvormer hangt, laadt en ontlaadt nooit sneller dan
+    die 800 W — ongeacht wat haar eigen `max_charge_w`/`max_discharge_w` toelaat.
+    """
+    laad_w = batterij.max_charge_w
+    ontlaad_w = batterij.max_discharge_w
+    if ac_vermogen_max_w is not None:
+        laad_w = min(laad_w, ac_vermogen_max_w)
+        ontlaad_w = min(ontlaad_w, ac_vermogen_max_w)
+    return laad_w, ontlaad_w
+
+
 def _arbitragedrempels(
     gekoppeld: pd.DataFrame, batterij: "Battery", duur_uren: float,
+    *, ac_vermogen_max_w: Optional[float] = None,
 ) -> pd.Series:
     """Per lokale kalenderdag: onder welke prijs kopen, boven welke verkopen.
 
     Een dagvenster, want Belpex day-ahead-prijzen worden per kalenderdag
     gepubliceerd en de batterij cyclust hooguit een paar keer per dag rond.
     De drempel is niet geraden maar afgeleid uit de batterij zelf: het aantal
-    kwartieren dat nodig is om haar **vanaf leeg volledig te laden** (aan
-    `max_charge_w`) bepaalt hoeveel van de goedkoopste uren "koop" zijn; het
-    aantal om haar **volledig te ontladen tot de minimumgrens** (aan
-    `max_discharge_w`) bepaalt hoeveel van de duurste uren "verkoop" zijn.
+    kwartieren dat nodig is om haar **vanaf leeg volledig te laden** (aan het
+    effectieve laadvermogen — de batterij-nameplate, of de lagere
+    AC-vermogenbegrenzing als die er is, zie `_effectief_vermogen_w()`)
+    bepaalt hoeveel van de goedkoopste uren "koop" zijn; het aantal om haar
+    **volledig te ontladen tot de minimumgrens** bepaalt hoeveel van de
+    duurste uren "verkoop" zijn. Een 800 W-omvormer heeft dus meer uren nodig
+    om dezelfde batterij vol te laden dan de 2500 W-nameplate zou doen, en
+    dat telt hier mee — anders zou de drempel "koop"-uren aanwijzen die de
+    batterij, begrensd door haar omvormer, nooit op tijd kan benutten.
     Dat is een dagvooruitzicht-heuristiek (perfect-foresight binnen de dag),
     geen optimale oplossing over meerdere dagen — vandaar dat de oproeper dit
     als `Aanname` meegeeft.
@@ -133,8 +160,9 @@ def _arbitragedrempels(
     punten krijgt daarom geen drempel (nooit arbitrage die dag, wel gewoon
     zelfconsumptie).
     """
-    laad_kwh_per_slot = batterij.max_charge_w / 1000.0 * duur_uren
-    ontlaad_kwh_per_slot = batterij.max_discharge_w / 1000.0 * duur_uren
+    laad_w, ontlaad_w = _effectief_vermogen_w(batterij, ac_vermogen_max_w)
+    laad_kwh_per_slot = laad_w / 1000.0 * duur_uren
+    ontlaad_kwh_per_slot = ontlaad_w / 1000.0 * duur_uren
     bruikbare_capaciteit = batterij.max_capacity * (batterij.max_depth_of_discharge / 100.0)
 
     laad_sloten = max(1, math.ceil(batterij.max_capacity / laad_kwh_per_slot)) if laad_kwh_per_slot > 0 else 0
@@ -191,8 +219,20 @@ def simuleer_batterij_dispatch(
     *,
     topologie: Topologie,
     marktprijzen: Optional[pd.DataFrame] = None,
+    ac_vermogen_max_w: Optional[float] = None,
 ) -> pd.DataFrame:
     """Simuleert de batterijdispatch, interval per interval.
+
+    `ac_vermogen_max_w` begrenst het laad-/ontlaadvermogen extra, los van de
+    batterij-nameplate (`max_charge_w`/`max_discharge_w`) — het laagste van
+    de twee geldt (zie `_effectief_vermogen_w()`). Dit modelleert wat er
+    tussen de batterijcellen en het net in zit: een hybride omvormer die de
+    bestaande PV-omvormer vervangt (of ernaast komt) met zijn eigen
+    vermogen, of een plug-and-play batterij die op een vaste
+    stopcontactaansluiting draait (in België vandaag doorgaans 800 W,
+    sommige installaties tot 2500 W enkelfasig — dit project hardcodeert
+    geen van beide: `None` laat enkel de nameplate van de batterij gelden,
+    zoals voorheen).
 
     `verbruik`/`productie` zijn DataFrames met kolommen `tijdstip` en `kwh` —
     dezelfde vorm als `gebruikers.schatting.verdeel_jaarverbruik()` en
@@ -246,10 +286,13 @@ def simuleer_batterij_dispatch(
     samen = _samengevoegd(verbruik, productie)
     duur_s = _duur_s(samen)
     duur_uren = duur_s / 3600.0
+    effectief_laad_w, effectief_ontlaad_w = _effectief_vermogen_w(batterij, ac_vermogen_max_w)
 
     if marktprijzen is not None and not marktprijzen.empty:
         samen = _koppel_marktprijzen(samen, marktprijzen)
-        koopdrempel, verkoopdrempel = _arbitragedrempels(samen, batterij, duur_uren)
+        koopdrempel, verkoopdrempel = _arbitragedrempels(
+            samen, batterij, duur_uren, ac_vermogen_max_w=ac_vermogen_max_w,
+        )
         samen = samen.assign(
             koopdrempel=koopdrempel.to_numpy(), verkoopdrempel=verkoopdrempel.to_numpy(),
             piekgrens_kwh=_bestaande_maandpiek_kwh(samen).to_numpy(),
@@ -272,12 +315,12 @@ def simuleer_batterij_dispatch(
                 # zodanig dat de resulterende afname (-netto_kwh + laad_kwh)
                 # de piek van die maand niet overschrijdt.
                 wenselijk_kwh = min(
-                    batterij.max_charge_w / 1000.0 * duur_uren,
+                    effectief_laad_w / 1000.0 * duur_uren,
                     max(0.0, rij.piekgrens_kwh + netto_kwh),
                 )
             elif rij.price_eur_mwh >= rij.verkoopdrempel:
                 modus = "arbitrage_verkoop"
-                wenselijk_kwh = -(batterij.max_discharge_w / 1000.0 * duur_uren)
+                wenselijk_kwh = -(effectief_ontlaad_w / 1000.0 * duur_uren)
             else:
                 wenselijk_kwh = netto_kwh
         else:
@@ -286,10 +329,10 @@ def simuleer_batterij_dispatch(
         laad_kwh = 0.0
         ontlaad_kwh = 0.0
         if wenselijk_kwh > 0:
-            vermogen_w = (wenselijk_kwh / duur_uren) * 1000.0
+            vermogen_w = min((wenselijk_kwh / duur_uren) * 1000.0, effectief_laad_w)
             laad_kwh = batterij.laad(vermogen_w=vermogen_w, duur_s=duur_s)
         elif wenselijk_kwh < 0:
-            vermogen_w = (-wenselijk_kwh / duur_uren) * 1000.0
+            vermogen_w = min((-wenselijk_kwh / duur_uren) * 1000.0, effectief_ontlaad_w)
             ontlaad_kwh = batterij.ontlaad(vermogen_w=vermogen_w, duur_s=duur_s)
 
         netto_net_kwh = -netto_kwh + laad_kwh - ontlaad_kwh
