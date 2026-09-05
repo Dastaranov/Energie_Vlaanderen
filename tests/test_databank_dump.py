@@ -25,7 +25,7 @@ MANIFEST = ROOT / "tests" / "fixturen" / "databank" / "manifest.json"
 PERSOONSGEGEVENS = (
     "gebruiker", "gebruiker_persoonsgegeven", "aansluitingspunt", "meter",
     "installatie_asset", "leveringscontract", "verbruiksopgave", "toestemming",
-    "meterinterval", "simulatie", "simulatie_regel",
+    "meterinterval", "simulatie",
 )
 
 

@@ -1822,6 +1822,69 @@ documenteren ze het bedoelde gedrag dat die herschrijving moet reproduceren —
 inclusief de tariefwissel op 01/08/2026. Weggooien ná de herschrijving, niet
 ervoor.
 
+### Simulaties worden nu bewaard, met herkomst
+
+`energie_vlaanderen.scenario` (`AnderContractScenario`/`BatterijScenario`/
+`ZonnepaneelScenario`/`ElektrischeWagenScenario`/`WarmtepompScenario`, en de
+258-kandidaten-vergelijking `scenario.optimaliseer`) draait al een tijd, maar
+niets schreef een resultaat ooit weg: `scenario.opslag.sla_op()` (JSON/YAML)
+werd nergens automatisch aangeroepen, en de databanktabellen `simulatie`/
+`simulatie_regel` (migratie 0017) waren dood — gebouwd voor één
+leverancier/product per rij, een vorm die bij geen van de huidige
+scenariotypes meer past, en `GebruikersRepository.bewaar_simulatie()` werd
+door geen enkel scenario of CLI-commando aangeroepen.
+
+Migratie 0025 vervangt `simulatie` (en schrapt `simulatie_regel`, zonder
+vervanging: het detail zit nu in een JSON-veld) door een generieke vorm.
+Expliciet gevraagd, niet afgeleid: elke simulatie moet later **exact
+reproduceerbaar** zijn — met welke databankversie, welke code en welk
+dossier — én simulaties moeten **snel vergelijkbaar** zijn tussen
+gebruikers, zonder de kwartierdata zelf te herhalen. Dat geeft drie
+herkomstvelden (`src/energie_vlaanderen/scenario/herkomst.py`):
+
+- `data_version_id` — de actieve databankversie op het moment van de run
+  (`DossierResultaat.dataversie`, al bestaand).
+- `code_commit`/`code_dirty` — de git-commit-SHA van de code die het
+  resultaat produceerde, plus of de werkboom toen gewijzigde bestanden had.
+  `(None, False)` buiten een git-repo of bij eender welke andere fout:
+  herkomst vastleggen mag een berekening nooit laten mislukken.
+- `dossier_hash`/`dossier_snapshot` — het volledige dossier op dat moment,
+  **zonder** `Persoonsgegevens` en zonder EAN-code (Manifest §5.2/§5.3 noemen
+  beide expliciet gevoelig, en geen van beide is nodig om de berekening zelf
+  te reproduceren) en zonder lokale bestandspaden (`fluvius_csv`/`bron`
+  worden tot een boolean/weggelaten herleid). De hash laat twee simulaties op
+  exact hetzelfde uitgangspunt herkennen zonder de hele snapshot te
+  vergelijken.
+
+**"Data is macht, zoveel mogelijk bijhouden"** — expliciete keuze van de
+gebruiker. `resultaat` (JSON) draagt daarom het volledige scenarioresultaat,
+en voor een optimalisatie **alle** doorgerekende kandidaten (tot 258 stuks),
+niet enkel de winnaar. Vier kolommen staan daar bewust náást als eigen
+kolom — `verschil_eur`, `beste_leverancier`, `beste_product`,
+`beste_contracttype` — want dat is precies waarop "snel vergelijken tussen
+gebruikers" filtert en sorteert, en JSON-velden zijn daar traag op te
+doorzoeken.
+
+**Automatisch, niet opt-in.** `ScenarioContext.voer_scenario_uit()` (de
+facade die een echte databankverbinding opent) schrijft na elke run
+automatisch weg; `bewaar=False` schakelt dat uit voor een rooktest.
+`optimaliseer_elektriciteitscontract()` heeft dezelfde knop. Dit raakt
+bewust **niet** `Scenario.voer_uit()` zelf — die blijft puur en testbaar met
+een nep-connectie zoals de bestaande scenario-tests dat overal doen; enkel de
+laag die al een echte `sa.Connection` heeft, persisteert. Een opslagfout
+(bv. een databank zonder deze migratie) verschijnt als waarschuwing op het
+resultaat in plaats van de al voltooide berekening te laten crashen — of stil
+te verdwijnen.
+
+**Een gebruiker heeft nu een optionele, stabiele identiteit.**
+`Gebruiker.id` kreeg tot nu toe bij elke inlezing van `gebruiker.toml` een
+nieuwe, willekeurige UUID (`default_factory=uuid4`, niets in het bestand
+overschreef dat) — genoeg om te rekenen, maar elke simulatierun zag er dan
+een andere "gebruiker" in, wat vergelijken tussen runs van dezelfde persoon
+onmogelijk maakt. `[gebruiker].id` in `gebruiker.toml` is nu een optioneel
+veld (een zelf gegenereerde UUID) dat die identiteit vastzet; zonder blijft
+het oude gedrag ongewijzigd.
+
 ### Environment variables
 
 | Variable | Default | Purpose |

@@ -40,12 +40,85 @@ class ScenarioContext:
 
     def voer_scenario_uit(
         self, scenario: "Scenario", van: date, tot: date,
-        *, basislijn: Optional[DossierResultaat] = None,
+        *, basislijn: Optional[DossierResultaat] = None, bewaar: bool = True,
     ) -> "ScenarioResultaat":
-        return scenario.voer_uit(
+        """Voert `scenario` uit en schrijft het resultaat automatisch weg naar
+        de databank (`bewaar=False` schakelt dat uit — bv. voor een
+        rooktest die de simulatietabel niet wil vervuilen).
+
+        De basislijn wordt hier (en niet pas binnen `Scenario.voer_uit()`)
+        berekend zodra ze niet is meegegeven, want `DossierResultaat.dataversie`
+        is nodig om de simulatie van haar databankversie te voorzien —
+        dezelfde berekening, enkel op het punt waar de herkomst ervan nog
+        beschikbaar is.
+        """
+        if basislijn is None:
+            basislijn = self.bereken(van, tot)
+        resultaat = scenario.voer_uit(
             self.dossier, conn=self.conn, settings=self.settings, van=van, tot=tot,
             basislijn=basislijn,
         )
+        if not bewaar:
+            return resultaat
+
+        fout = self._bewaar_simulatie(scenario, resultaat, van, tot, data_version_id=basislijn.dataversie)
+        if fout is not None:
+            from dataclasses import replace
+
+            resultaat = replace(resultaat, warnings=resultaat.warnings + (fout,))
+        return resultaat
+
+    def _bewaar_simulatie(
+        self, scenario: "Scenario", resultaat: "ScenarioResultaat", van: date, tot: date,
+        *, data_version_id: Optional[str],
+    ) -> Optional[str]:
+        """Schrijft `resultaat` weg naar `simulatie`, met genoeg herkomst
+        (databankversie, code-commit, dossiersnapshot — zie
+        `scenario.herkomst`) om het later exact te reproduceren en snel
+        tegen andere gebruikers af te zetten.
+
+        Geeft `None` terug bij succes, anders een waarschuwingstekst. Een
+        opslagfout (bv. een databank zonder de nieuwste migratie) mag het al
+        berekende scenarioresultaat niet ongeldig maken — maar ze mag ook niet
+        stil verdwijnen, vandaar de teruggegeven waarschuwing in plaats van
+        enkel een logregel.
+        """
+        from energie_vlaanderen.gebruikers.repository import GebruikersRepository
+        from energie_vlaanderen.scenario import herkomst, opslag
+
+        try:
+            repo = GebruikersRepository(self.conn)
+            repo.bewaar_gebruiker(self.dossier.gebruiker)
+            snapshot = herkomst.dossier_snapshot(self.dossier)
+            commit, dirty = herkomst.huidige_commit(self.settings.project_root)
+            repo.bewaar_simulatie(
+                gebruiker_id=self.dossier.gebruiker.id,
+                scenario_type=type(scenario).__name__,
+                scenario_naam=resultaat.naam,
+                scenario_parameters=herkomst.scenario_parameters(scenario),
+                periode_van=van,
+                periode_tot=tot,
+                dossier_hash=herkomst.dossier_hash(snapshot),
+                dossier_snapshot=snapshot,
+                resultaat=opslag.naar_dict(resultaat),
+                exactheidsklasse=resultaat.exactheidsklasse,
+                data_version_id=data_version_id,
+                code_commit=commit,
+                code_dirty=dirty,
+                basislijn_totaal_eur=resultaat.totaal_basislijn,
+                scenario_totaal_eur=resultaat.totaal_scenario,
+                verschil_eur=resultaat.verschil_eur.get("totaal"),
+                beste_leverancier=str(getattr(scenario, "leverancier", "")) or None,
+                beste_product=str(getattr(scenario, "product", "")) or None,
+                beste_contracttype=(
+                    str(scenario.contracttype) if hasattr(scenario, "contracttype") else None
+                ),
+                aannames=resultaat.aannames,
+                warnings=resultaat.warnings,
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001 - opslag mag de berekening nooit laten falen
+            return f"Simulatie kon niet weggeschreven worden naar de databank: {exc}"
 
 
 @contextmanager

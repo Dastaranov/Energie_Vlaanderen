@@ -53,7 +53,6 @@ TABELLEN = (
     "toestemming",
     "meterinterval",
     "simulatie",
-    "simulatie_regel",
 )
 
 
@@ -295,8 +294,9 @@ class TestMetingen:
 
 
 class TestSimulatie:
-    def test_een_simulatie_bewaart_haar_exactheidsklasse_en_regels(self, conn, dossier):
-        """Zonder klasse, bronversies en aannames is een bedrag niet te beoordelen."""
+    def test_een_simulatie_bewaart_haar_herkomst_en_resultaat(self, conn, dossier):
+        """Zonder klasse, herkomst (databankversie/commit/dossier) en
+        aannames is een bedrag niet te beoordelen, en niet reproduceerbaar."""
         gebruiker, punt = dossier
         repo = GebruikersRepository(conn)
         repo.bewaar_gebruiker(gebruiker)
@@ -304,33 +304,61 @@ class TestSimulatie:
 
         simulatie_id = repo.bewaar_simulatie(
             gebruiker_id=gebruiker.id,
-            aansluitingspunt_id=punt.id,
+            scenario_type="batterij",
+            scenario_naam="Batterij: Marstek Venus E",
+            scenario_parameters={"merk": "Marstek", "model": "Venus E"},
             periode_van=date(2026, 1, 1),
             periode_tot=date(2027, 1, 1),
-            totalen={"supplier": D("562.21"), "totaal": D("1141.36")},
+            dossier_hash="a" * 64,
+            dossier_snapshot={"aansluitingspunten": [{"postcode": "9300"}]},
+            resultaat={"scenario": {"elektriciteit": {"totalen": {"totaal": "1141.36"}}}},
             exactheidsklasse=Exactheidsklasse.GESCHAT,
-            regels=[
-                {
-                    "periode_van": date(2026, 1, 1),
-                    "periode_tot": date(2026, 8, 1),
-                    "leverancier": "Bolt",
-                    "product": "Bolt Vast",
-                    "totaal_eur": D("652.82"),
-                    "exactheidsklasse": "geschat",
-                    "redenen": ["venstergrens"],
-                }
-            ],
+            data_version_id="20260101T000000Z-abcd1234",
+            code_commit="a" * 40,
+            code_dirty=False,
+            basislijn_totaal_eur=D("1419.27"),
+            scenario_totaal_eur=D("1141.36"),
+            verschil_eur=D("277.90"),
             aannames=[Aanname(veld="pv_kwp", waarde="5.0", bron="omvormer_kva")],
         )
 
         rij = conn.execute(
-            sa.select(schema.simulatie.c.exactheidsklasse, schema.simulatie.c.totaal_eur).where(
-                schema.simulatie.c.id == simulatie_id
-            )
+            sa.select(
+                schema.simulatie.c.exactheidsklasse, schema.simulatie.c.verschil_eur,
+                schema.simulatie.c.code_commit, schema.simulatie.c.dossier_hash,
+            ).where(schema.simulatie.c.id == simulatie_id)
         ).first()
         assert rij[0] == "geschat"
-        assert D(str(rij[1])) == D("1141.36")
+        assert D(str(rij[1])) == D("277.90")
+        assert rij[2] == "a" * 40
+        assert rij[3] == "a" * 64
 
-        regels = conn.execute(sa.select(schema.simulatie_regel)).mappings().all()
-        assert len(regels) == 1
-        assert regels[0]["leverancier"] == "Bolt"
+        volledig = repo.simulatie(simulatie_id)
+        assert volledig["resultaat"]["scenario"]["elektriciteit"]["totalen"]["totaal"] == "1141.36"
+        assert volledig["dossier_snapshot"]["aansluitingspunten"][0]["postcode"] == "9300"
+
+    def test_simulaties_filtert_op_gebruiker_en_scenariotype(self, conn, dossier):
+        gebruiker, punt = dossier
+        repo = GebruikersRepository(conn)
+        repo.bewaar_gebruiker(gebruiker)
+        repo.bewaar_aansluitingspunt(punt)
+
+        repo.bewaar_simulatie(
+            gebruiker_id=gebruiker.id, scenario_type="batterij", scenario_naam="A",
+            scenario_parameters={}, periode_van=date(2026, 1, 1), periode_tot=date(2027, 1, 1),
+            dossier_hash="a" * 64, dossier_snapshot={}, resultaat={},
+            exactheidsklasse=Exactheidsklasse.GESCHAT, verschil_eur=D("100"),
+        )
+        repo.bewaar_simulatie(
+            gebruiker_id=gebruiker.id, scenario_type="ander_contract", scenario_naam="B",
+            scenario_parameters={}, periode_van=date(2026, 1, 1), periode_tot=date(2027, 1, 1),
+            dossier_hash="b" * 64, dossier_snapshot={}, resultaat={},
+            exactheidsklasse=Exactheidsklasse.GESCHAT, verschil_eur=D("50"),
+        )
+
+        alles = repo.simulaties(gebruiker_id=gebruiker.id)
+        assert len(alles) == 2
+
+        enkel_batterij = repo.simulaties(gebruiker_id=gebruiker.id, scenario_type="batterij")
+        assert len(enkel_batterij) == 1
+        assert enkel_batterij[0]["scenario_naam"] == "A"

@@ -41,6 +41,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Optional
+from uuid import UUID
 
 from energie_vlaanderen.gebruikers.models import (
     Aanname,
@@ -128,7 +129,7 @@ class Dossier:
 # Ze weigeren zou bestaande bestanden breken, ze weglaten zou ze onzichtbaar
 # maken — vandaar dat ze toegestaan zijn met deze vermelding.
 _SLEUTELS: dict[str, frozenset[str]] = {
-    "gebruiker": frozenset({"postcode", "gemeente", "segment", "naam"}),
+    "gebruiker": frozenset({"id", "postcode", "gemeente", "segment", "naam"}),
     "aansluiting": frozenset({
         "elektriciteit", "gas", "ean_elektriciteit", "ean_gas",
         "aansluitingsvermogen_kva", "aantal_fasen", "meter", "registerschema",
@@ -308,7 +309,25 @@ def lees_dossier(
     gemeente = _tekst(gebruiker_raw, "gemeente", "gebruiker")
     segment = _segment(_tekst(gebruiker_raw, "segment", "gebruiker") or "Woning")
 
-    gebruiker = Gebruiker(segment=segment)
+    id_raw = _tekst(gebruiker_raw, "id", "gebruiker")
+    if id_raw:
+        try:
+            gebruiker_id = UUID(id_raw)
+        except ValueError as exc:
+            raise GebruikersError(
+                f"[gebruiker].id moet een geldige UUID zijn, kreeg '{id_raw}'."
+            ) from exc
+        gebruiker = Gebruiker(id=gebruiker_id, segment=segment)
+    else:
+        # Zonder een opgegeven id krijgt elke inlezing een nieuwe, willekeurige
+        # identiteit (Gebruiker.id's default_factory) — dat volstaat om te
+        # rekenen, maar twee runs van hetzelfde dossier worden dan niet als
+        # dezelfde persoon herkend. Voor een berekening op zich maakt dat niets
+        # uit; voor `scenario.opslag`/de simulatiehistoriek (die per gebruiker
+        # vergelijkt) wel — zet dan zelf een vaste `id = "<uuid>"` in
+        # `[gebruiker]` (eenmalig te genereren, bv. met `python -c "import
+        # uuid; print(uuid.uuid4())"`).
+        gebruiker = Gebruiker(segment=segment)
     naam = _tekst(gebruiker_raw, "naam", "gebruiker")
     persoonsgegevens = (
         Persoonsgegevens(

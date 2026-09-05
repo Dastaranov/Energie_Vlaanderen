@@ -10,6 +10,12 @@
 postcode = "9300"
 gemeente = "Aalst"        # nodig zodra één postcode meerdere netbeheerders kent
 segment = "Woning"        # Woning of Onderneming
+# id = "00000000-0000-0000-0000-000000000000"  # optioneel, vaste identiteit
+# Zonder id krijgt elke inlezing van dit bestand een nieuwe, willekeurige
+# gebruikersidentiteit — prima om te rekenen, maar de simulatiehistoriek
+# (scenario's die naar de databank wegschrijven) herkent twee runs dan niet
+# als dezelfde persoon. Zet een eigen, eenmalig gegenereerde UUID hier zodra
+# je simulaties over meerdere runs heen wil kunnen vergelijken.
 
 # Elektriciteit en gas worden apart doorgerekend en apart getoond. Zet er één
 # op `false` en er wordt alleen die andere gerekend — een dossier met alleen

@@ -71,6 +71,34 @@ class TestMinimum:
             lees_dossier(tmp_path / "bestaat_niet.toml")
 
 
+class TestGebruikerId:
+    """Een vaste `id` maakt de gebruiker herkenbaar over meerdere inlezingen
+    van hetzelfde bestand heen — nodig voor de simulatiehistoriek
+    (`scenario.herkomst`), niet voor de berekening zelf."""
+
+    def test_zonder_id_krijgt_elke_inlezing_een_andere_gebruiker(self, tmp_path):
+        pad = schrijf(tmp_path, MINIMAAL)
+        eerste = lees_dossier(pad)
+        tweede = lees_dossier(pad)
+        assert eerste.gebruiker.id != tweede.gebruiker.id
+
+    def test_met_id_blijft_de_gebruiker_dezelfde_over_meerdere_inlezingen(self, tmp_path):
+        inhoud = MINIMAAL.replace(
+            "[gebruiker]\n", '[gebruiker]\nid = "12345678-1234-5678-1234-567812345678"\n',
+        )
+        pad = schrijf(tmp_path, inhoud)
+        eerste = lees_dossier(pad)
+        tweede = lees_dossier(pad)
+        assert str(eerste.gebruiker.id) == "12345678-1234-5678-1234-567812345678"
+        assert eerste.gebruiker.id == tweede.gebruiker.id
+
+    def test_een_ongeldige_id_is_een_duidelijke_fout(self, tmp_path):
+        inhoud = MINIMAAL.replace("[gebruiker]\n", '[gebruiker]\nid = "geen-uuid"\n')
+        pad = schrijf(tmp_path, inhoud)
+        with pytest.raises(GebruikersError, match="geldige UUID"):
+            lees_dossier(pad)
+
+
 class TestAansluitingen:
     def test_gas_krijgt_zijn_eigen_aansluitingspunt(self, tmp_path):
         """Eén EAN per energiedrager, dus twee punten — geen boolean-veld."""

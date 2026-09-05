@@ -180,6 +180,57 @@ def test_kiest_het_goedkoopste_contract_zonder_batterij(monkeypatch):
     assert resultaat.winst_batterij_zelfde_contract is None
 
 
+def test_een_opslagfout_verschijnt_als_waarschuwing_en_laat_het_resultaat_niet_vervallen(monkeypatch):
+    """`conn=object()` heeft geen `.execute()` — `_bewaar_optimalisatie()`
+    moet die fout opvangen (net als `ScenarioContext._bewaar_simulatie()`) en
+    als waarschuwing teruggeven, niet de al berekende vergelijking laten
+    crashen."""
+    punt = _punt()
+    dossier = _dossier(punt, contracten=(
+        Leveringscontract(
+            aansluitingspunt_id=punt.id, leverancier="ENGIE", product="Easy",
+            contracttype=Contracttype.VAST, geldig_van=date(2025, 1, 1),
+        ),
+    ))
+    monkeypatch.setattr(optimaliseer, "kandidaat_contracten", lambda conn, **kw: [])
+    monkeypatch.setattr(optimaliseer, "bereken_dossier", lambda *a, **kw: _dossierresultaat(punt, D("800")))
+
+    resultaat = optimaliseer_elektriciteitscontract(
+        dossier, conn=object(), settings=object(), van=date(2026, 1, 1), tot=date(2027, 1, 1),
+    )
+
+    assert any("niet weggeschreven" in w for w in resultaat.warnings)
+    assert resultaat.huidige_kost_eur == D("800")  # het resultaat zelf blijft geldig
+
+
+def test_bewaar_false_slaat_niets_op_en_geeft_geen_opslagwaarschuwing(monkeypatch):
+    punt = _punt()
+    dossier = _dossier(punt, contracten=(
+        Leveringscontract(
+            aansluitingspunt_id=punt.id, leverancier="ENGIE", product="Easy",
+            contracttype=Contracttype.VAST, geldig_van=date(2025, 1, 1),
+        ),
+    ))
+    monkeypatch.setattr(optimaliseer, "kandidaat_contracten", lambda conn, **kw: [])
+    monkeypatch.setattr(optimaliseer, "bereken_dossier", lambda *a, **kw: _dossierresultaat(punt, D("800")))
+
+    aangeroepen = {"n": 0}
+
+    def zou_niet_mogen(*a, **kw):
+        aangeroepen["n"] += 1
+        return None
+
+    monkeypatch.setattr(optimaliseer, "_bewaar_optimalisatie", zou_niet_mogen)
+
+    resultaat = optimaliseer_elektriciteitscontract(
+        dossier, conn=object(), settings=object(), van=date(2026, 1, 1), tot=date(2027, 1, 1),
+        bewaar=False,
+    )
+
+    assert aangeroepen["n"] == 0
+    assert resultaat.warnings == ()
+
+
 def test_een_falende_kandidaat_laat_de_rest_niet_vervallen(monkeypatch):
     """CLAUDE.md: "Een fout op het ene punt laat het andere niet vervallen"
     — hier toegepast op kandidaten in plaats van aansluitingspunten."""

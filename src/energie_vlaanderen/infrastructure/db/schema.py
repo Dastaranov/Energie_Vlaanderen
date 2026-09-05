@@ -646,54 +646,79 @@ meterinterval = sa.Table(
     sa.UniqueConstraint("aansluitingspunt_id", "tijdstip", name="uq_meterinterval_punt_tijdstip"),
 )
 
+# Migratie 0025 verving de oorspronkelijke, product-specifieke vorm (één
+# leverancier/product/vreg_id per rij, met `simulatie_regel` als kind voor de
+# deelperiodes) door deze generieke: `scenario.Scenario` omvat vandaag
+# BatterijScenario/AnderContractScenario/ZonnepaneelScenario/... en de
+# 258-kandidaten-vergelijking van `scenario.optimaliseer`, en geen van die
+# vormen past nog in "één leverancier, één product". Niets schreef ooit naar
+# de oude vorm (`GebruikersRepository.bewaar_simulatie()` werd door geen
+# scenario of CLI-commando aangeroepen), dus de migratie kon vervangen in
+# plaats van omvormen.
+#
+# Het doel — expliciet gevraagd, niet afgeleid — is dat elke simulatie later
+# exact reproduceerbaar is én snel vergelijkbaar is tussen gebruikers, zonder
+# de volledige kwartierdata te herhalen: `data_version_id` + `code_commit` +
+# `dossier_snapshot` samen bepalen ondubbelzinnig welke code, welke tarieven
+# en welk uitgangspunt tot dit resultaat leidden (zie `scenario.herkomst`).
+# `dossier_snapshot` bevat geen `Persoonsgegevens` en geen EAN — Manifest
+# §5.2/§5.3 noemt beide expliciet gevoelig, en geen van beide is nodig om de
+# berekening zelf na te rekenen.
 simulatie = sa.Table(
     "simulatie",
     metadata,
     sa.Column("id", sa.Uuid, primary_key=True),
     sa.Column("gebruiker_id", sa.Uuid, sa.ForeignKey("gebruiker.id", ondelete="CASCADE"), nullable=False),
-    sa.Column("aansluitingspunt_id", sa.Uuid, sa.ForeignKey("aansluitingspunt.id", ondelete="CASCADE"), nullable=True),
-    sa.Column("version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=True),
-    sa.Column("vreg_id", sa.Text, nullable=True),
-    sa.Column("leverancier", sa.Text, nullable=True),
-    sa.Column("product", sa.Text, nullable=True),
-    sa.Column("periode_van", sa.Date, nullable=True),
-    sa.Column("periode_tot", sa.Date, nullable=True),
-    sa.Column("supplier_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("grid_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("levies_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("injection_credit_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("vat_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("totaal_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    # Manifest §5.8: zonder deze drie is een bedrag niet te beoordelen — was het
-    # gemeten, gereconstrueerd of geschat, waarop steunde het, en wat is er
-    # ingevuld dat de gebruiker niet aangeleverd heeft.
+    # "batterij" | "ander_contract" | "zonnepaneel" | "elektrische_wagen" |
+    # "warmtepomp" | "optimaliseer_elektriciteitscontract" — vrije tekst, geen
+    # database-enum: een nieuw scenariotype mag niet op een migratie wachten.
+    sa.Column("scenario_type", sa.Text, nullable=False),
+    sa.Column("scenario_naam", sa.Text, nullable=False, server_default=""),
+    # De constructor-argumenten van het scenario zelf (merk/model/topologie/
+    # ac_vermogen_max_w/prijsarbitrage/... of, voor een optimalisatie,
+    # segment/peildatum) — genoeg om `Scenario(**parameters)` opnieuw te
+    # bouwen zonder de code te lezen.
+    sa.Column("scenario_parameters", sa.JSON, nullable=False, server_default="{}"),
+    sa.Column("periode_van", sa.Date, nullable=False),
+    sa.Column("periode_tot", sa.Date, nullable=False),
+    sa.Column("data_version_id", sa.String(26), sa.ForeignKey("data_version.version_id"), nullable=True),
+    # Git-commit-SHA van de code die dit resultaat produceerde, plus of de
+    # werkboom op dat moment gewijzigde bestanden had (`git status
+    # --porcelain` niet leeg). Beide `None`/`false` buiten een git-repo — dat
+    # mag een berekening nooit laten mislukken, enkel de herkomst verzwakken.
+    sa.Column("code_commit", sa.String(40), nullable=True),
+    sa.Column("code_dirty", sa.Boolean, nullable=False, server_default=sa.false()),
+    # sha256 van `dossier_snapshot`, zodat twee simulaties op exact hetzelfde
+    # uitgangspunt herkenbaar zijn zonder de hele snapshot te vergelijken.
+    sa.Column("dossier_hash", sa.String(64), nullable=False),
+    sa.Column("dossier_snapshot", sa.JSON, nullable=False),
+    sa.Column("basislijn_totaal_eur", sa.Numeric(14, 2), nullable=True),
+    sa.Column("scenario_totaal_eur", sa.Numeric(14, 2), nullable=True),
+    # basislijn - scenario: positief is een besparing. Voor een optimalisatie
+    # is dit de winst van de beste combinatie (winst_gecombineerd) — de drie
+    # aparte winstcijfers (batterij alleen/contractwissel alleen/gecombineerd)
+    # staan daar in `resultaat`.
+    sa.Column("verschil_eur", sa.Numeric(14, 2), nullable=True),
+    # Ingevuld waar van toepassing (AnderContractScenario, of de winnaar van
+    # een optimalisatie) — als eigen kolom en niet enkel in `resultaat`, want
+    # dit is precies waarop "snelle vergelijkingen tussen gebruikers" filtert
+    # en sorteert (bv. "hoe vaak wint leverancier X").
+    sa.Column("beste_leverancier", sa.Text, nullable=True),
+    sa.Column("beste_product", sa.Text, nullable=True),
+    sa.Column("beste_contracttype", sa.Text, nullable=True),
+    # Manifest §5.8: zonder dit is een bedrag niet te beoordelen — was het
+    # gemeten, gereconstrueerd of geschat.
     sa.Column("exactheidsklasse", sa.Text, nullable=False, server_default="geschat"),
-    sa.Column("bronversies", sa.JSON, nullable=False, server_default="{}"),
+    # Het volledige resultaat: basislijn/scenario per energiedrager (zoals
+    # `scenario.opslag.naar_dict()` het al bouwt), en voor een optimalisatie
+    # alle doorgerekende kandidaten — niet enkel de top-10. "Data is macht":
+    # de indexeerbare kolommen hierboven zijn voor snel filteren/sorteren, dit
+    # veld is er om nooit een herberekening nodig te hebben voor het detail.
+    sa.Column("resultaat", sa.JSON, nullable=False, server_default="{}"),
     sa.Column("aannames", sa.JSON, nullable=False, server_default="[]"),
     sa.Column("warnings", sa.JSON, nullable=False, server_default="[]"),
     sa.Column("aangemaakt_op", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
-)
-
-# Eén rij per deelperiode uit `gebruikers.periodes.snijd()`. Bestaat omdat een
-# jaartotaal niet uitlegt waarom het zo hoog is: een contractwissel op 01/08 en
-# een accijnswissel op diezelfde dag zijn twee verschillende oorzaken, en
-# `redenen` bewaart welke van beide deze knip veroorzaakte.
-simulatie_regel = sa.Table(
-    "simulatie_regel",
-    metadata,
-    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
-    sa.Column("simulatie_id", sa.Uuid, sa.ForeignKey("simulatie.id", ondelete="CASCADE"), nullable=False),
-    sa.Column("periode_van", sa.Date, nullable=False),
-    sa.Column("periode_tot", sa.Date, nullable=False),
-    sa.Column("leverancier", sa.Text, nullable=False, server_default=""),
-    sa.Column("product", sa.Text, nullable=False, server_default=""),
-    sa.Column("supplier_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("grid_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("levies_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("injection_credit_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("vat_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("totaal_eur", sa.Numeric(12, 2), nullable=False, server_default="0"),
-    sa.Column("exactheidsklasse", sa.Text, nullable=False, server_default="geschat"),
-    sa.Column("redenen", sa.JSON, nullable=False, server_default="[]"),
-    sa.Index("ix_simulatie_regel_simulatie", "simulatie_id", "periode_van"),
+    sa.Index("ix_simulatie_gebruiker", "gebruiker_id", "aangemaakt_op"),
+    sa.Index("ix_simulatie_vergelijking", "scenario_type", "verschil_eur"),
+    sa.Index("ix_simulatie_dossier_hash", "dossier_hash"),
 )

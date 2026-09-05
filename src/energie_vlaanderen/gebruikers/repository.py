@@ -451,22 +451,38 @@ class GebruikersRepository:
         ]
 
     # -- simulatieresultaat ------------------------------------------------
+    #
+    # Herkomst boven detail: `data_version_id` + `code_commit` +
+    # `dossier_hash`/`dossier_snapshot` samen maken een simulatie exact
+    # reproduceerbaar (zie `scenario.herkomst`), zonder dat de meetdata zelf
+    # herhaald moet worden. `resultaat` draagt het volledige scenarioresultaat
+    # (of, voor een optimalisatie, alle doorgerekende kandidaten) — de
+    # aparte kolommen (`verschil_eur`, `beste_leverancier`, ...) bestaan naast
+    # dat JSON-veld specifiek om snel te kunnen filteren/sorteren over veel
+    # gebruikers heen zonder JSON te moeten uitpakken.
 
     def bewaar_simulatie(
         self,
         *,
         gebruiker_id: UUID,
-        aansluitingspunt_id: Optional[UUID],
+        scenario_type: str,
+        scenario_naam: str,
+        scenario_parameters: dict[str, Any],
         periode_van: date,
         periode_tot: date,
-        totalen: dict[str, Decimal],
+        dossier_hash: str,
+        dossier_snapshot: dict[str, Any],
+        resultaat: dict[str, Any],
         exactheidsklasse: Exactheidsklasse,
-        regels: Sequence[dict[str, Any]] = (),
-        leverancier: str = "",
-        product: str = "",
-        vreg_id: Optional[str] = None,
-        version_id: Optional[str] = None,
-        bronversies: Optional[dict[str, Any]] = None,
+        data_version_id: Optional[str] = None,
+        code_commit: Optional[str] = None,
+        code_dirty: bool = False,
+        basislijn_totaal_eur: Optional[Decimal] = None,
+        scenario_totaal_eur: Optional[Decimal] = None,
+        verschil_eur: Optional[Decimal] = None,
+        beste_leverancier: Optional[str] = None,
+        beste_product: Optional[str] = None,
+        beste_contracttype: Optional[str] = None,
         aannames: Sequence[Aanname] = (),
         warnings: Sequence[str] = (),
     ) -> UUID:
@@ -475,56 +491,65 @@ class GebruikersRepository:
             sa.insert(schema.simulatie).values(
                 id=simulatie_id,
                 gebruiker_id=gebruiker_id,
-                aansluitingspunt_id=aansluitingspunt_id,
-                version_id=version_id,
-                vreg_id=vreg_id,
-                leverancier=leverancier,
-                product=product,
+                scenario_type=scenario_type,
+                scenario_naam=scenario_naam,
+                scenario_parameters=scenario_parameters,
                 periode_van=periode_van,
                 periode_tot=periode_tot,
-                supplier_eur=totalen.get("supplier", Decimal("0")),
-                grid_eur=totalen.get("grid", Decimal("0")),
-                levies_eur=totalen.get("levies", Decimal("0")),
-                injection_credit_eur=totalen.get("injection_credit", Decimal("0")),
-                vat_eur=totalen.get("vat", Decimal("0")),
-                totaal_eur=totalen.get("totaal", Decimal("0")),
+                data_version_id=data_version_id,
+                code_commit=code_commit,
+                code_dirty=code_dirty,
+                dossier_hash=dossier_hash,
+                dossier_snapshot=dossier_snapshot,
+                basislijn_totaal_eur=basislijn_totaal_eur,
+                scenario_totaal_eur=scenario_totaal_eur,
+                verschil_eur=verschil_eur,
+                beste_leverancier=beste_leverancier,
+                beste_product=beste_product,
+                beste_contracttype=beste_contracttype,
                 exactheidsklasse=str(exactheidsklasse),
-                bronversies=bronversies or {},
+                resultaat=resultaat,
                 aannames=[asdict(a) for a in aannames],
                 warnings=list(warnings),
             )
         )
-        if regels:
-            self.conn.execute(
-                sa.insert(schema.simulatie_regel),
-                [self._regel(simulatie_id, regel) for regel in regels],
-            )
         return simulatie_id
 
-    @staticmethod
-    def _regel(simulatie_id: UUID, regel: dict[str, Any]) -> dict[str, Any]:
-        """Vult de bedragvelden expliciet aan in plaats van op de databank te steunen.
+    def simulaties(
+        self,
+        *,
+        gebruiker_id: Optional[UUID] = None,
+        scenario_type: Optional[str] = None,
+        limiet: int = 100,
+    ) -> list[dict[str, Any]]:
+        """De samenvattende kolommen van eerdere simulaties, nieuwste eerst —
+        het "snel vergelijken tussen gebruikers"-pad. Draagt bewust niet
+        `resultaat`/`dossier_snapshot` mee (dat kan groot zijn); haal die per
+        rij op via `simulatie(id)` zodra het detail nodig is."""
+        kolommen = (
+            schema.simulatie.c.id, schema.simulatie.c.gebruiker_id,
+            schema.simulatie.c.scenario_type, schema.simulatie.c.scenario_naam,
+            schema.simulatie.c.periode_van, schema.simulatie.c.periode_tot,
+            schema.simulatie.c.data_version_id, schema.simulatie.c.code_commit,
+            schema.simulatie.c.basislijn_totaal_eur, schema.simulatie.c.scenario_totaal_eur,
+            schema.simulatie.c.verschil_eur, schema.simulatie.c.beste_leverancier,
+            schema.simulatie.c.beste_product, schema.simulatie.c.beste_contracttype,
+            schema.simulatie.c.exactheidsklasse, schema.simulatie.c.aangemaakt_op,
+        )
+        query = sa.select(*kolommen)
+        if gebruiker_id is not None:
+            query = query.where(schema.simulatie.c.gebruiker_id == gebruiker_id)
+        if scenario_type is not None:
+            query = query.where(schema.simulatie.c.scenario_type == scenario_type)
+        query = query.order_by(schema.simulatie.c.aangemaakt_op.desc()).limit(limiet)
+        return [dict(r) for r in self.conn.execute(query).mappings()]
 
-        De kolommen hebben een server_default van 0, maar daarop vertrouwen
-        betekent dat een oproeper die een component vergeet stil een nul krijgt
-        in plaats van een fout. Hier staan ze er altijd, en een ontbrekend veld
-        is dan een zichtbare nul en geen toeval.
-        """
-        volledig = {
-            "simulatie_id": simulatie_id,
-            "supplier_eur": Decimal("0"),
-            "grid_eur": Decimal("0"),
-            "levies_eur": Decimal("0"),
-            "injection_credit_eur": Decimal("0"),
-            "vat_eur": Decimal("0"),
-            "totaal_eur": Decimal("0"),
-            "leverancier": "",
-            "product": "",
-            "exactheidsklasse": "geschat",
-            "redenen": [],
-        }
-        volledig.update(regel)
-        return volledig
+    def simulatie(self, simulatie_id: UUID) -> Optional[dict[str, Any]]:
+        """Eén simulatie in volledig detail, inclusief `resultaat` en `dossier_snapshot`."""
+        rij = self.conn.execute(
+            sa.select(schema.simulatie).where(schema.simulatie.c.id == simulatie_id)
+        ).mappings().first()
+        return dict(rij) if rij is not None else None
 
     # -- hulp --------------------------------------------------------------
 

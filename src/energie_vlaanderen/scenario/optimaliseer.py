@@ -21,7 +21,7 @@ tariefformule prijzen.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 from typing import Optional
@@ -39,6 +39,7 @@ from energie_vlaanderen.scenario.batterij import BatterijScenario
 from energie_vlaanderen.scenario.contract import AnderContractScenario
 from energie_vlaanderen.settings import Settings
 from energie_vlaanderen.utility.constants import D
+from energie_vlaanderen.utility.normalizer import money
 
 ZONDER_BATTERIJ = "zonder batterij"
 MET_BATTERIJ = "met batterij"
@@ -74,6 +75,7 @@ class OptimalisatieResultaat:
     beste_zonder_batterij: Optional[ContractResultaat]
     beste_met_batterij: Optional[ContractResultaat]
     huidig_contract_met_batterij: Optional[ContractResultaat]
+    warnings: tuple[str, ...] = ()
 
     @property
     def winst_contractwissel_alleen(self) -> Optional[Decimal]:
@@ -173,6 +175,7 @@ def optimaliseer_elektriciteitscontract(
     batterij: Optional[BatterijScenario] = None,
     segment: str = "Woning",
     peildatum: Optional[date] = None,
+    bewaar: bool = True,
 ) -> OptimalisatieResultaat:
     """De volledige markt tegen dit dossier afzetten — optioneel mét batterij.
 
@@ -182,6 +185,12 @@ def optimaliseer_elektriciteitscontract(
     kandidaat (`Kostberekening.zoek_product()` weigert per maand die het
     product niet vindt) — precies zoals dat ook bij een echte, bestaande
     afrekening gebeurt.
+
+    `bewaar=True` (standaard) schrijft het volledige resultaat — alle
+    kandidaten, niet enkel de winnaar — automatisch weg naar `simulatie`, met
+    dezelfde herkomst als `ScenarioContext.voer_scenario_uit()`
+    (`scenario.herkomst`). Zet op `False` voor een rooktest die de
+    simulatietabel niet wil vullen.
     """
     punt = dossier.punt(EnergieType.ELEKTRICITEIT)
     if punt is None:
@@ -293,7 +302,7 @@ def optimaliseer_elektriciteitscontract(
         key=lambda r: r.totaal_eur, default=None,
     )
 
-    return OptimalisatieResultaat(
+    optimalisatie = OptimalisatieResultaat(
         kandidaten=tuple(sorted(
             resultaten, key=lambda r: (not r.gelukt, r.totaal_eur if r.gelukt else D("0")),
         )),
@@ -302,3 +311,116 @@ def optimaliseer_elektriciteitscontract(
         beste_met_batterij=beste_met,
         huidig_contract_met_batterij=huidig_contract_met_batterij,
     )
+
+    if bewaar:
+        fout = _bewaar_optimalisatie(
+            dossier, optimalisatie, conn=conn, settings=settings, van=van, tot=tot,
+            batterij=batterij, segment=segment, peildatum=peildatum,
+        )
+        if fout is not None:
+            optimalisatie = replace(optimalisatie, warnings=optimalisatie.warnings + (fout,))
+
+    return optimalisatie
+
+
+def _contractresultaat_naar_dict(resultaat: Optional[ContractResultaat]) -> Optional[dict]:
+    if resultaat is None:
+        return None
+    return {
+        "leverancier": resultaat.leverancier,
+        "product": resultaat.product,
+        "contracttype": str(resultaat.contracttype),
+        "modus": resultaat.modus,
+        "totaal_eur": str(money(resultaat.totaal_eur)) if resultaat.totaal_eur is not None else None,
+        "exactheidsklasse": str(resultaat.exactheidsklasse) if resultaat.exactheidsklasse is not None else None,
+        "fout": resultaat.fout,
+    }
+
+
+def optimalisatie_naar_dict(resultaat: OptimalisatieResultaat) -> dict:
+    """Het volledige resultaat als plat dict — inclusief **alle** kandidaten,
+    niet enkel de winnaars. Gebruikt door `_bewaar_optimalisatie()`, en
+    bruikbaar op zich voor wie dit los wil wegschrijven (zie
+    `scenario.opslag.sla_op()`'s patroon)."""
+    return {
+        "huidige_kost_eur": str(money(resultaat.huidige_kost_eur)),
+        "beste_zonder_batterij": _contractresultaat_naar_dict(resultaat.beste_zonder_batterij),
+        "beste_met_batterij": _contractresultaat_naar_dict(resultaat.beste_met_batterij),
+        "huidig_contract_met_batterij": _contractresultaat_naar_dict(resultaat.huidig_contract_met_batterij),
+        "winst_contractwissel_alleen": (
+            str(money(w)) if (w := resultaat.winst_contractwissel_alleen) is not None else None
+        ),
+        "winst_batterij_zelfde_contract": (
+            str(money(w)) if (w := resultaat.winst_batterij_zelfde_contract) is not None else None
+        ),
+        "winst_gecombineerd": (
+            str(money(w)) if (w := resultaat.winst_gecombineerd) is not None else None
+        ),
+        "aantal_kandidaten": len(resultaat.kandidaten),
+        "aantal_gefaald": sum(1 for k in resultaat.kandidaten if not k.gelukt),
+        "kandidaten": [_contractresultaat_naar_dict(k) for k in resultaat.kandidaten],
+    }
+
+
+def _bewaar_optimalisatie(
+    dossier: Dossier,
+    resultaat: OptimalisatieResultaat,
+    *,
+    conn,
+    settings: Settings,
+    van: date,
+    tot: date,
+    batterij: Optional[BatterijScenario],
+    segment: str,
+    peildatum: Optional[date],
+) -> Optional[str]:
+    """Schrijft `resultaat` weg naar `simulatie`. Geeft `None` terug bij
+    succes, anders een waarschuwingstekst — zelfde regel als
+    `ScenarioContext._bewaar_simulatie()`: een opslagfout mag de al
+    berekende vergelijking niet ongeldig maken, maar ook niet stil
+    verdwijnen."""
+    from energie_vlaanderen.gebruikers.repository import GebruikersRepository
+    from energie_vlaanderen.scenario import herkomst
+
+    winnaar = resultaat.beste_met_batterij if batterij is not None else resultaat.beste_zonder_batterij
+    verschil = resultaat.winst_gecombineerd if batterij is not None else resultaat.winst_contractwissel_alleen
+    exactheidsklasse = Exactheidsklasse.zwakste(
+        [k.exactheidsklasse for k in resultaat.kandidaten if k.exactheidsklasse is not None]
+        + [Exactheidsklasse.SCENARIO]
+    )
+
+    try:
+        repo = GebruikersRepository(conn)
+        repo.bewaar_gebruiker(dossier.gebruiker)
+        snapshot = herkomst.dossier_snapshot(dossier)
+        commit, dirty = herkomst.huidige_commit(settings.project_root)
+        repo.bewaar_simulatie(
+            gebruiker_id=dossier.gebruiker.id,
+            scenario_type="optimaliseer_elektriciteitscontract",
+            scenario_naam=(
+                "Contractoptimalisatie met batterij" if batterij is not None
+                else "Contractoptimalisatie"
+            ),
+            scenario_parameters={
+                "segment": segment,
+                "peildatum": (peildatum or van).isoformat(),
+                "batterij": herkomst.scenario_parameters(batterij) if batterij is not None else None,
+            },
+            periode_van=van,
+            periode_tot=tot,
+            dossier_hash=herkomst.dossier_hash(snapshot),
+            dossier_snapshot=snapshot,
+            resultaat=optimalisatie_naar_dict(resultaat),
+            exactheidsklasse=exactheidsklasse,
+            code_commit=commit,
+            code_dirty=dirty,
+            basislijn_totaal_eur=resultaat.huidige_kost_eur,
+            scenario_totaal_eur=winnaar.totaal_eur if winnaar is not None else None,
+            verschil_eur=verschil,
+            beste_leverancier=winnaar.leverancier if winnaar is not None else None,
+            beste_product=winnaar.product if winnaar is not None else None,
+            beste_contracttype=str(winnaar.contracttype) if winnaar is not None else None,
+        )
+        return None
+    except Exception as exc:  # noqa: BLE001 - opslag mag de vergelijking nooit laten falen
+        return f"Optimalisatie kon niet weggeschreven worden naar de databank: {exc}"
