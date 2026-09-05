@@ -45,6 +45,12 @@ from energie_vlaanderen.scenario.batterij import BatterijScenario
 from energie_vlaanderen.scenario.contract import AnderContractScenario
 from energie_vlaanderen.scenario.context import ScenarioContext, open_scenario
 from energie_vlaanderen.scenario.elektrische_wagen import ElektrischeWagenScenario
+from energie_vlaanderen.scenario.optimaliseer import (
+    ContractResultaat,
+    OptimalisatieResultaat,
+    kandidaat_contracten,
+    optimaliseer_elektriciteitscontract,
+)
 from energie_vlaanderen.scenario.vergelijk import vergelijk_contracten
 from energie_vlaanderen.scenario.warmtepomp import WarmtepompScenario
 from energie_vlaanderen.scenario.zonnepaneel import ZonnepaneelScenario
@@ -52,12 +58,16 @@ from energie_vlaanderen.scenario.zonnepaneel import ZonnepaneelScenario
 __all__ = [
     "AnderContractScenario",
     "BatterijScenario",
+    "ContractResultaat",
     "ElektrischeWagenScenario",
+    "OptimalisatieResultaat",
     "Scenario",
     "ScenarioContext",
     "ScenarioResultaat",
     "WarmtepompScenario",
     "ZonnepaneelScenario",
+    "kandidaat_contracten",
     "open_scenario",
+    "optimaliseer_elektriciteitscontract",
     "vergelijk_contracten",
 ]

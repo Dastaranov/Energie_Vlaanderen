@@ -29,7 +29,7 @@ from energie_vlaanderen.gebruikers.models import (
 from energie_vlaanderen.gebruikers.orchestratie import DossierResultaat
 from energie_vlaanderen.gebruikers.schatting import SchattingError
 from energie_vlaanderen.gebruikers.toml_io import Dossier
-from energie_vlaanderen.scenario.batterij import BatterijScenario, _contract_is_overal_dynamisch
+from energie_vlaanderen.scenario.batterij import BatterijScenario, contract_is_overal_dynamisch
 from energie_vlaanderen.scenario.reeksen import productiereeks, verbruiksreeks
 
 pytestmark = pytest.mark.dossier
@@ -284,14 +284,14 @@ class TestContractIsOveralDynamisch:
         contract = self._contract(Contracttype.DYNAMISCH, date(2025, 1, 1), None, punt)
         dossier = _dossier(punt, contracten=(contract,))
 
-        assert _contract_is_overal_dynamisch(dossier, punt, date(2026, 1, 1), date(2027, 1, 1))
+        assert contract_is_overal_dynamisch(dossier, punt, date(2026, 1, 1), date(2027, 1, 1))
 
     def test_vast_contract_faalt_de_toets(self):
         punt = _elektriciteitspunt()
         contract = self._contract(Contracttype.VAST, date(2025, 1, 1), None, punt)
         dossier = _dossier(punt, contracten=(contract,))
 
-        assert not _contract_is_overal_dynamisch(dossier, punt, date(2026, 1, 1), date(2027, 1, 1))
+        assert not contract_is_overal_dynamisch(dossier, punt, date(2026, 1, 1), date(2027, 1, 1))
 
     def test_gedeeltelijk_dynamisch_faalt_de_toets(self):
         """Half het venster dynamisch, half vast — de dispatch zou voor het
@@ -303,14 +303,14 @@ class TestContractIsOveralDynamisch:
         )
         dossier = _dossier(punt, contracten=contracten)
 
-        assert not _contract_is_overal_dynamisch(dossier, punt, date(2026, 1, 1), date(2027, 1, 1))
+        assert not contract_is_overal_dynamisch(dossier, punt, date(2026, 1, 1), date(2027, 1, 1))
 
     def test_gat_in_de_contracthistoriek_faalt_de_toets(self):
         punt = _elektriciteitspunt()
         contract = self._contract(Contracttype.DYNAMISCH, date(2026, 6, 1), None, punt)
         dossier = _dossier(punt, contracten=(contract,))
 
-        assert not _contract_is_overal_dynamisch(dossier, punt, date(2026, 1, 1), date(2027, 1, 1))
+        assert not contract_is_overal_dynamisch(dossier, punt, date(2026, 1, 1), date(2027, 1, 1))
 
 
 class TestPrijsarbitrageInScenario:
@@ -326,4 +326,4 @@ class TestPrijsarbitrageInScenario:
         # `pas_toe()` alleen raakt geen contracten, dus de toets op het
         # gewijzigde dossier ziet nog steeds het bestaande vaste contract.
         gewijzigd = scenario.pas_toe(dossier)
-        assert not _contract_is_overal_dynamisch(gewijzigd, punt, date(2026, 1, 1), date(2027, 1, 1))
+        assert not contract_is_overal_dynamisch(gewijzigd, punt, date(2026, 1, 1), date(2027, 1, 1))

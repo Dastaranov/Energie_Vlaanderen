@@ -189,6 +189,7 @@ overhouden en de vergelijking weggooien zou de waarde van die test omkeren.
 | `test_scenario_reeksen.py` | `dag_nacht_masker()`/`verdeel_dag_nacht()` — de regressietest voor een echte fout: een gesimuleerde reeks zonder dag/nacht-registers viel bij `Kostberekening` terug op "alles is dagverbruik", wat zonnepanelen toevoegen op de echte databank een gestégen kost gaf en EV-nachtladen tegen het dure dagtarief rekende. |
 | `test_scenario_zonnepaneel.py` | `ZonnepaneelScenario`'s dossiersurgerie: voegt de PV-asset met het gevraagde vermogen toe, muteert het origineel niet. |
 | `test_scenario_elektrische_wagen_warmtepomp.py` | Idem voor `ElektrischeWagenScenario`/`WarmtepompScenario`, inclusief `vervangt_gas` dat het gasverbruik op nul zet zonder het origineel te raken. |
+| `test_scenario_optimaliseer.py` | `optimaliseer_elektriciteitscontract()`, de "zware calculator" die elk kandidaatcontract afzet tegen het dossier: `kandidaat_contracten()`'s SQL-filters (energievorm, segment, peildatum) en dat hetzelfde product in twee contracttypes (variabel/dynamisch) twee aparte kandidaten oplevert; dat een gefaalde kandidaat de rest niet laat vervallen; en dat een batterij drie modi oplevert (zonder/met batterij/met arbitrage, dat laatste enkel op een dynamisch contract mét marktprijzen) met de drie gevraagde deltas (winst_contractwissel_alleen, winst_batterij_zelfde_contract, winst_gecombineerd) correct berekend. |
 
 ## `cli` — de commandoschil
 

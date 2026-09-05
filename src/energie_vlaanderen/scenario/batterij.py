@@ -37,6 +37,8 @@ from decimal import Decimal
 from typing import Optional
 from uuid import uuid4
 
+import pandas as pd
+
 from energie_vlaanderen.calculation.batterySpec import Battery
 from energie_vlaanderen.calculation.dispatch import simuleer_batterij_dispatch
 from energie_vlaanderen.gebruikers.models import (
@@ -55,7 +57,7 @@ from energie_vlaanderen.scenario.reeksen import dag_nacht_masker, productiereeks
 from energie_vlaanderen.settings import Settings
 
 
-def _contract_is_overal_dynamisch(dossier: Dossier, punt, van: date, tot: date) -> bool:
+def contract_is_overal_dynamisch(dossier: Dossier, punt, van: date, tot: date) -> bool:
     """Dekt `[van, tot)` volledig met `Contracttype.DYNAMISCH`-contracten?
 
     Geen contract voor een deel van het venster telt hier als "niet
@@ -128,7 +130,7 @@ class BatterijScenario(Scenario):
         )
         return replace(dossier, assets=dossier.assets + (asset,))
 
-    def voer_uit(
+    def simuleer_metingen(
         self,
         basis_dossier: Dossier,
         *,
@@ -136,11 +138,27 @@ class BatterijScenario(Scenario):
         settings: Settings,
         van: date,
         tot: date,
-        basislijn=None,
-    ) -> ScenarioResultaat:
-        if basislijn is None:
-            basislijn = bereken_dossier(basis_dossier, conn=conn, settings=settings, van=van, tot=tot)
+        basislijn,
+        marktprijzen_override: Optional[pd.DataFrame] = None,
+    ) -> tuple[pd.DataFrame, tuple[Aanname, ...], tuple[str, ...]]:
+        """De dispatch-aangepaste meetreeks, los van welk contract erop komt.
 
+        Dit is precies het deel van `voer_uit()` dat **niet** van het
+        elektriciteitscontract afhangt: de fysieke dispatch (zelfconsumptie,
+        en bij prijsarbitrage de Belpex-drempels) reageert op verbruik,
+        productie en marktprijs, nooit op de retailformule van een specifiek
+        product. Apart getrokken zodat `scenario.optimaliseer` deze dure
+        simulatie **één keer** kan draaien en daarna elk kandidaat-contract
+        goedkoop tegen dezelfde reeks kan prijzen, in plaats van de dispatch
+        per kandidaat te herhalen.
+
+        `marktprijzen_override` omzeilt bewust de dynamisch-contracttoets
+        hieronder: `scenario.optimaliseer` wil de arbitragedispatch precies
+        één keer berekenen (ze hangt toch niet af van wélk dynamisch product
+        het uiteindelijk wordt, enkel van de ruwe Belpex-prijs) en nadien op
+        elk dynamisch kandidaat-contract toepassen — de toets zelf gebeurt
+        daar per kandidaat, niet hier.
+        """
         gewijzigd_dossier = self.pas_toe(basis_dossier)
         punt = basis_dossier.punt(EnergieType.ELEKTRICITEIT)
 
@@ -162,8 +180,10 @@ class BatterijScenario(Scenario):
         marktprijzen = None
         arbitrage_aanname = None
         arbitrage_waarschuwing = None
-        if self.prijsarbitrage:
-            if _contract_is_overal_dynamisch(gewijzigd_dossier, punt, van, tot):
+        if marktprijzen_override is not None:
+            marktprijzen = marktprijzen_override
+        elif self.prijsarbitrage:
+            if contract_is_overal_dynamisch(gewijzigd_dossier, punt, van, tot):
                 marktprijzen = laad_markt(settings, van, tot)
                 if marktprijzen is None or marktprijzen.empty:
                     arbitrage_waarschuwing = (
@@ -214,12 +234,6 @@ class BatterijScenario(Scenario):
         )
         gesimuleerde_metingen = afname_dn.merge(injectie_dn, on="tijdstip")
 
-        scenario_resultaat = bereken_dossier(
-            gewijzigd_dossier, conn=conn, settings=settings, van=van, tot=tot,
-            metingen_override=gesimuleerde_metingen,
-        )
-
-        resultaat = self._verpak(basislijn, scenario_resultaat)
         extra_aannames = tuple(
             a for a in (verbruik_aanname, arbitrage_aanname) if a is not None
         )
@@ -230,6 +244,32 @@ class BatterijScenario(Scenario):
             )
             if w is not None
         )
+        return gesimuleerde_metingen, extra_aannames, extra_warnings
+
+    def voer_uit(
+        self,
+        basis_dossier: Dossier,
+        *,
+        conn,
+        settings: Settings,
+        van: date,
+        tot: date,
+        basislijn=None,
+    ) -> ScenarioResultaat:
+        if basislijn is None:
+            basislijn = bereken_dossier(basis_dossier, conn=conn, settings=settings, van=van, tot=tot)
+
+        gewijzigd_dossier = self.pas_toe(basis_dossier)
+        gesimuleerde_metingen, extra_aannames, extra_warnings = self.simuleer_metingen(
+            basis_dossier, conn=conn, settings=settings, van=van, tot=tot, basislijn=basislijn,
+        )
+
+        scenario_resultaat = bereken_dossier(
+            gewijzigd_dossier, conn=conn, settings=settings, van=van, tot=tot,
+            metingen_override=gesimuleerde_metingen,
+        )
+
+        resultaat = self._verpak(basislijn, scenario_resultaat)
         return replace(
             resultaat,
             aannames=resultaat.aannames + extra_aannames,
