@@ -1,0 +1,43 @@
+# JA SOLAR JAM54S30-440/LR/1500V — "Deep Blue 3.0 Pro", 440 W mono half-cell
+# module, het krachtigste model uit de JAM54S30 415-440-reeks.
+#
+# Bron: officiële JA Solar-datasheet "JAM54S30 415-440/LR/1500V",
+# versie Global_EN_20230522A, opgehaald van
+# https://www.jasolar.com/uploadfile/2023/0606/20230606020959949.pdf .
+#
+# Rechtstreeks van de datasheet overgenomen (ELECTRICAL PARAMETERS AT STC,
+# 440 W-kolom): piekvermogen_wp, v_oc_volt, i_sc_ampere, v_mpp_volt,
+# i_mpp_ampere, de drie temperatuurcoëfficiënten (gelden voor de hele reeks,
+# niet per vermogensklasse), en de afmetingen (1762 x 1134 x 30 mm) waaruit
+# oppervlakte_m2 is afgeleid (1,762 x 1,134 = 1,998 m², exclusief de rand die
+# niet actief is — een lichte overschatting van het actieve oppervlak, geen
+# onderschatting).
+#
+# Degradatie: de datasheet geeft geen twee losse cijfers (eerste jaar / per
+# jaar) maar een grafiek "0,55% Annual Degradation Over 25 years" met een
+# eerstejaarsknik naar 98% (dus 2% in het eerste jaar) en daarna lineair -0,55%
+# per jaar tot 84,8% op 25 jaar — exact de vorm die `degradatie_eerste_jaar_pct`
+# / `degradatie_per_jaar_pct` verwachten, dus rechtstreeks overgenomen en niet
+# de standaardwaarden (2,0/0,5) van deze klasse.
+bron = "JA Solar JAM54S30 415-440/LR/1500V, Global_EN_20230522A, https://www.jasolar.com/uploadfile/2023/0606/20230606020959949.pdf"
+
+[zonnepaneel]
+merk = "JA Solar"
+model = "JAM54S30-440/LR/1500V"
+
+piekvermogen_wp = 440.0
+v_oc_volt = 37.91
+i_sc_ampere = 14.58
+v_mpp_volt = 31.86
+i_mpp_ampere = 13.81
+temperatuur_coeff_pmax_pct_c = -0.350
+temperatuur_coeff_voc_pct_c = -0.275
+
+degradatie_eerste_jaar_pct = 2.0
+degradatie_per_jaar_pct = 0.55
+oppervlakte_m2 = 1.998
+
+geverifieerd = true
+datasheet_versie = "Global_EN_20230522A"
+datasheet_datum = "2023-05-22"
+opgehaald_op = "2026-09-05"

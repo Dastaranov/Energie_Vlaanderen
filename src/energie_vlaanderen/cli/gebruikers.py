@@ -16,14 +16,12 @@ from pathlib import Path
 from energie_vlaanderen.cli.helpers import fail
 from energie_vlaanderen.cli.output import emit, print_kv
 from energie_vlaanderen.gebruikers.models import (
-    EnergieType,
     Exactheidsklasse,
     GebruikersError,
 )
 from energie_vlaanderen.gebruikers.toml_io import Dossier, lees_dossier
 from energie_vlaanderen.gebruikers.validation import controleer_dossier
 from energie_vlaanderen.settings import Settings
-from energie_vlaanderen.utility.constants import D
 from energie_vlaanderen.utility.normalizer import money
 
 LOG = logging.getLogger(__name__)
@@ -259,78 +257,11 @@ def run_gebruiker_controleer(args: argparse.Namespace, settings: Settings) -> in
     return 2 if fouten else 0
 
 
-def _laad_metingen(dossier: Dossier):
-    """De meetreeks uit het Fluvius-bestand van het dossier, plus haar waarschuwingen.
-
-    De waarschuwingen komen mee omdat ze over de *kwaliteit* van het resultaat
-    gaan: hoeveel intervallen Fluvius geschat heeft, hoeveel er ontbreken, of er
-    onderbrekingen zijn. Ze verzwijgen zou een reeks met gaten laten doorgaan
-    voor een volledige meting.
-    """
-    if dossier.fluvius_csv is None or not dossier.fluvius_csv.is_file():
-        return None, ()
-    from energie_vlaanderen.metering.fluvius_csv import (
-        FluviusDataError,
-        FluviusIntervals,
-    )
-
-    try:
-        reeks = FluviusIntervals.read(dossier.fluvius_csv)
-    except FluviusDataError as exc:
-        return None, (str(exc),)
-    if reeks.intervallen.empty:
-        return None, ("Het meetbestand bevat geen bruikbare intervallen.",)
-    return reeks, reeks.waarschuwingen
-
-
-def _laad_markt(settings: Settings, van: date, tot: date):
-    """Day-ahead prijzen uit de lokale cache, zonder de API te bevragen.
-
-    `allow_api=False`: een berekening mag niet stilzwijgend een netwerkoproep
-    doen en dan minutenlang hangen. Wie verse prijzen wil, draait eerst
-    `energievergelijker market sync --start --end`.
-    """
-    from datetime import datetime
-
-    from energie_vlaanderen.data.paths import DataPaths
-    from energie_vlaanderen.market.entsoe import EntsoeMarketData
-
-    cache = DataPaths.from_settings(settings).market / "entsoe_cache.json"
-    if not cache.is_file():
-        return None
-    try:
-        df = EntsoeMarketData(cache=cache).load(
-            datetime(van.year, van.month, van.day),
-            datetime(tot.year, tot.month, tot.day),
-            allow_api=False,
-        )
-    except Exception:
-        # Een ontbrekende of onbruikbare cache is geen fout: enkel dynamische
-        # producten hebben marktprijzen nodig, en die melden het zelf wanneer
-        # ze ontbreken.
-        return None
-    return None if df.empty else df
-
-
-def _nettarieven_uit_databank(conn) -> dict:
-    """Eén repository per tariefjaar dat de databank draagt.
-
-    De nettarieven worden per kalenderjaar vastgesteld, maar een afrekening
-    loopt zelden gelijk met het kalenderjaar. Anders dan bij de bestandsweg
-    hoeft hier niet naar versiemappen gezocht te worden: `netbeheerder_tarief`
-    draagt de jaargangen naast elkaar.
-    """
-    import sqlalchemy as sa
-
-    from energie_vlaanderen.data.db_repository import DbDataRepository
-
-    jaren = [
-        int(r[0]) for r in conn.execute(sa.text(
-            "select distinct extract(year from geldig_van)::int "
-            "from netbeheerder_tarief order by 1"
-        ))
-    ]
-    return {jaar: DbDataRepository(conn, tariefjaar=jaar) for jaar in jaren}
+# `_laad_metingen`/`_laad_markt`/`_nettarieven_uit_databank` stonden hier
+# vroeger; ze zijn verhuisd naar `gebruikers.orchestratie` (als
+# `laad_metingen`/`laad_markt`/`nettarieven_uit_databank`), want elk "wat
+# als"-scenario (`energie_vlaanderen.scenario`) heeft exact dezelfde
+# opzoeklogica nodig als deze CLI-handler.
 
 
 def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
@@ -341,38 +272,17 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
     bedrag persen laat de herkomst van elke post verdwijnen. Wie alleen gas
     heeft, rekent alleen gas door — dat is geen uitzondering maar een gewoon
     dossier.
+
+    De opzoeklogica zelf staat in `gebruikers.orchestratie.bereken_dossier()`
+    — dezelfde functie die een "wat als"-scenario (`energie_vlaanderen.scenario`)
+    gebruikt. Deze handler doet alleen nog de opzet (databankverbinding,
+    dossier inlezen) en de weergave.
     """
-    from energie_vlaanderen.gebruikers.berekening import BerekeningError, Kostberekening
-    from energie_vlaanderen.gebruikers.schatting import gasaandeel_uit_rlp0
-    from energie_vlaanderen.heffingen.repository import HeffingenRepository
-    from energie_vlaanderen.nettarieven.transport import (
-        TransportTariefError,
-        TransportTariefRepository,
-    )
-
-    import sqlalchemy as sa
-
-    from energie_vlaanderen.data.db_repository import (
-        DbDataRepository,  # noqa: F401 - via _nettarieven_uit_databank
-        DbDataRepositoryError,
+    from energie_vlaanderen.gebruikers.orchestratie import (
+        OrchestratieError,
+        bereken_dossier,
     )
     from energie_vlaanderen.infrastructure.db.connection import get_engine
-
-    try:
-        heffingen = HeffingenRepository.load(settings.project_root / "config" / "heffingen")
-    except OSError as exc:
-        return fail("%s", exc)
-
-    # Het vervoerstarief van Fluxys staat in geen VREG-werkboek en komt uit
-    # config/nettarieven/. Zonder dat tarief weigert een gasberekening liever
-    # dan er ongeveer 25 EUR per jaar naast te zitten.
-    try:
-        transport = TransportTariefRepository.load(
-            settings.project_root / "config" / "nettarieven"
-        )
-    except (OSError, TransportTariefError) as exc:
-        transport = None
-        LOG.warning("Vervoerstarief niet geladen, gas kan niet gerekend worden: %s", exc)
 
     # De databank gaat vóór het dossier open, en niet andersom. Het dossier
     # heeft het postcode->netbeheerderregister nodig om een aansluitingspunt aan
@@ -391,112 +301,32 @@ def run_gebruiker_bereken(args: argparse.Namespace, settings: Settings) -> int:
         db_engine.dispose()
         return fail("%s", exc)
 
-    punten = [
-        punt for punt in dossier.aansluitingspunten
-        if punt.energie_type in (EnergieType.ELEKTRICITEIT, EnergieType.GAS)
-    ]
-    if not punten:
-        db_conn.close()
-        db_engine.dispose()
-        return fail(
-            "Geen elektriciteits- of aardgasaansluiting in %s. Zonder "
-            "aansluitingspunt is er geen netbeheerder en dus geen nettarief.",
-            dossier.bron,
-        )
-
-    versie = getattr(args, "version", None)
-
-    # De getoonde dataversie komt uit de databank, niet van de schijf.
-    # `current_data_dir()` stond hier en faalt zodra `data/current.txt`
-    # ontbreekt — dat maakte een lokale dataset een voorwaarde voor een
-    # berekening die verder volledig uit de databank komt.
-    if versie:
-        getoonde_versie = versie
-    else:
-        getoonde_versie = db_conn.execute(sa.text(
-            "select version_id from data_version where status = 'active' "
-            "order by geactiveerd_op desc nulls last limit 1"
-        )).scalar()
-
     try:
-        nettarieven = _nettarieven_uit_databank(db_conn)
-    except DbDataRepositoryError as exc:
-        db_conn.close()
-        db_engine.dispose()
-        return fail("%s", exc)
-    if not nettarieven:
-        db_conn.close()
-        db_engine.dispose()
-        return fail(
-            "Geen nettarieven in de databank. Laad ze met "
-            "`energievergelijker db import --version <id>`."
-        )
-    repo = nettarieven[max(nettarieven)]
-
-    omvormer_kva = next(
-        (a.omvormer_kva for a in dossier.assets if a.omvormer_kva is not None),
-        None,
-    )
-    meetreeks, meetwaarschuwingen = (
-        (None, ()) if getattr(args, "geen_metingen", False) else _laad_metingen(dossier)
-    )
-    metingen = meetreeks.intervallen if meetreeks is not None else None
-    markt = _laad_markt(settings, args.van, args.tot)
-
-    def _gasverdeler(van, tot):
-        return gasaandeel_uit_rlp0(db_conn, van, tot)
-
-    rekenaar = Kostberekening(
-        repo, heffingen,
-        segment=str(dossier.gebruiker.segment),
-        nettarieven_per_jaar=nettarieven,
-        transport=transport,
-        gasverdeler=_gasverdeler,
-    )
-
-    # Per aansluitingspunt één resultaat. Een fout op het ene punt laat het
-    # andere niet vervallen: wie gas én elektriciteit heeft en waarvan alleen
-    # het gascontract ontbreekt, hoort de elektriciteitskost gewoon te zien —
-    # mét de melding waarom gas ontbreekt, want dan is het totaal onvolledig.
-    resultaten: list[tuple] = []
-    mislukt: list[tuple[str, str]] = []
-    try:
-        for punt in punten:
-            try:
-                resultaten.append((punt, rekenaar.bereken(
-                    punt,
-                    dossier.meter_van(punt),
-                    dossier.contracten_van(punt),
-                    dossier.opgaven_van(punt),
-                    args.van,
-                    args.tot,
-                    omvormer_kva=omvormer_kva or 0,
-                    extra_aannames=dossier.aannames,
-                    markt=markt,
-                    # De Fluvius-export in het dossier is de elektriciteitsreeks;
-                    # ze aan een gaspunt meegeven zou elektriciteitskwartieren
-                    # als gasvolume laten doorgaan.
-                    metingen=(
-                        metingen
-                        if punt.energie_type is EnergieType.ELEKTRICITEIT
-                        else None
-                    ),
-                )))
-            except (BerekeningError, GebruikersError) as exc:
-                mislukt.append((str(punt.energie_type), str(exc)))
+        try:
+            uitslag = bereken_dossier(
+                dossier,
+                conn=db_conn,
+                settings=settings,
+                van=args.van,
+                tot=args.tot,
+                versie=getattr(args, "version", None),
+                gebruik_metingen=not getattr(args, "geen_metingen", False),
+            )
+        except OrchestratieError as exc:
+            return fail("%s", exc)
     finally:
         db_conn.close()
         db_engine.dispose()
 
-    if not resultaten:
-        for soort, melding in mislukt:
-            LOG.error("%s: %s", soort, melding)
-        return fail("Geen enkel aansluitingspunt kon doorgerekend worden.")
-
-    totalen = {
-        sleutel: sum((r.totalen[sleutel] for _, r in resultaten), D("0"))
-        for sleutel in resultaten[0][1].totalen
-    }
+    resultaten = list(uitslag.resultaten)
+    mislukt = list(uitslag.mislukt)
+    getoonde_versie = uitslag.dataversie
+    nettarieven = uitslag.nettarieven_jaren
+    metingen = uitslag.metingen
+    meetreeks = uitslag.meetreeks
+    meetwaarschuwingen = uitslag.meetwaarschuwingen
+    markt = uitslag.markt
+    totalen = uitslag.totalen
 
     def _regelblok(punt, resultaat) -> None:
         deel = resultaat.totalen

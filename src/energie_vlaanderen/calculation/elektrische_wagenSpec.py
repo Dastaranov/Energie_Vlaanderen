@@ -9,15 +9,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 import pandas as pd
 
-@dataclass
-class ElektrischeWagenSpec:
-    merk: str
-    model: str
-    batterij_capaciteit_kwh: float
-    verbruik_per_100km_kwh: float
-    max_laadvermogen_ac_w: float
-    max_laadvermogen_dc_w: float
-    onderhoudsinterval_km: float
+# `ElektrischeWagenSpec` woont sinds de masterdata-uitbreiding in
+# `hardware.models`; her-geëxporteerd zodat bestaande imports blijven werken.
+# Zie `hardware.repository.ElektrischeWagenRepository` voor het laden uit
+# `config/hardware/elektrische_wagens/*.toml`.
+from energie_vlaanderen.hardware.models import ElektrischeWagenSpec  # noqa: F401
 
 @dataclass
 class ElektrischeWagen:

@@ -9,20 +9,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 import pandas as pd
 
-@dataclass
-class ZonnepaneelSpec:
-    merk: str
-    model: str
-    piekvermogen_wp: float
-    v_oc_volt: float  # Open-circuit spanning (max voltage, onbelast)
-    i_sc_ampere: float  # Kortsluitstroom
-    v_mpp_volt: float  # Spanning op maximaal vermogen (belast)
-    i_mpp_ampere: float  # Stroom op maximaal vermogen (belast)
-    temperatuur_coeff_pmax_pct_c: float  # Verlies in Wp per graad boven 25°C
-    temperatuur_coeff_voc_pct_c: float   # Stijging/daling in spanning per graad
-    degradatie_eerste_jaar_pct: float = 2.0  # Standaard initiële degradatie
-    degradatie_per_jaar_pct: float = 0.5     # Standaard lineaire degradatie
-    oppervlakte_m2: float = 1.95
+# `ZonnepaneelSpec` woont sinds de masterdata-uitbreiding in
+# `hardware.models` (samen met `BatterijSpec`/`OmvormerSpec`) en wordt hier
+# enkel her-geëxporteerd, zodat bestaande imports
+# (`from energie_vlaanderen.calculation.zonnepaneelSpec import ZonnepaneelSpec`)
+# blijven werken. Zie `hardware.repository.ZonnepaneelRepository` voor hoe een
+# spec nu uit `config/hardware/zonnepanelen/*.toml` geladen wordt.
+from energie_vlaanderen.hardware.models import ZonnepaneelSpec  # noqa: F401
 
 @dataclass
 class Zonnepaneel:

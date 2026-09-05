@@ -14,10 +14,19 @@ import tomllib
 from pathlib import Path
 from typing import Callable, TypeVar
 
-from energie_vlaanderen.hardware.models import BatterijSpec, OmvormerSpec
+from energie_vlaanderen.hardware.models import (
+    BatterijSpec,
+    ElektrischeWagenSpec,
+    OmvormerSpec,
+    WarmtepompSpec,
+    ZonnepaneelSpec,
+)
 
 BATTERIJEN_PATROON = "*.toml"
 OMVORMERS_PATROON = "*.toml"
+ZONNEPANELEN_PATROON = "*.toml"
+ELEKTRISCHE_WAGENS_PATROON = "*.toml"
+WARMTEPOMPEN_PATROON = "*.toml"
 
 T = TypeVar("T")
 
@@ -67,6 +76,63 @@ def _bouw_omvormerspec(sectie: dict, bestandsbron: str) -> OmvormerSpec:
         max_dc_vermogen_w=float(sectie["max_dc_vermogen_w"]),
         num_phase=int(sectie["num_phase"]),
         europees_rendement_pct=float(sectie["europees_rendement_pct"]),
+        geverifieerd=bool(sectie.get("geverifieerd", False)),
+        bron=sectie.get("bron") or bestandsbron,
+        datasheet_versie=sectie.get("datasheet_versie", ""),
+        datasheet_datum=sectie.get("datasheet_datum", ""),
+        opgehaald_op=sectie.get("opgehaald_op", ""),
+    )
+
+
+def _bouw_zonnepaneelspec(sectie: dict, bestandsbron: str) -> ZonnepaneelSpec:
+    return ZonnepaneelSpec(
+        merk=sectie["merk"],
+        model=sectie["model"],
+        piekvermogen_wp=float(sectie["piekvermogen_wp"]),
+        v_oc_volt=float(sectie["v_oc_volt"]),
+        i_sc_ampere=float(sectie["i_sc_ampere"]),
+        v_mpp_volt=float(sectie["v_mpp_volt"]),
+        i_mpp_ampere=float(sectie["i_mpp_ampere"]),
+        temperatuur_coeff_pmax_pct_c=float(sectie["temperatuur_coeff_pmax_pct_c"]),
+        temperatuur_coeff_voc_pct_c=float(sectie["temperatuur_coeff_voc_pct_c"]),
+        degradatie_eerste_jaar_pct=float(sectie.get("degradatie_eerste_jaar_pct", 2.0)),
+        degradatie_per_jaar_pct=float(sectie.get("degradatie_per_jaar_pct", 0.5)),
+        oppervlakte_m2=float(sectie.get("oppervlakte_m2", 1.95)),
+        geverifieerd=bool(sectie.get("geverifieerd", False)),
+        bron=sectie.get("bron") or bestandsbron,
+        datasheet_versie=sectie.get("datasheet_versie", ""),
+        datasheet_datum=sectie.get("datasheet_datum", ""),
+        opgehaald_op=sectie.get("opgehaald_op", ""),
+    )
+
+
+def _bouw_elektrischewagenspec(sectie: dict, bestandsbron: str) -> ElektrischeWagenSpec:
+    return ElektrischeWagenSpec(
+        merk=sectie["merk"],
+        model=sectie["model"],
+        batterij_capaciteit_kwh=float(sectie["batterij_capaciteit_kwh"]),
+        verbruik_per_100km_kwh=float(sectie["verbruik_per_100km_kwh"]),
+        max_laadvermogen_ac_w=float(sectie["max_laadvermogen_ac_w"]),
+        max_laadvermogen_dc_w=float(sectie["max_laadvermogen_dc_w"]),
+        onderhoudsinterval_km=float(sectie["onderhoudsinterval_km"]),
+        geverifieerd=bool(sectie.get("geverifieerd", False)),
+        bron=sectie.get("bron") or bestandsbron,
+        datasheet_versie=sectie.get("datasheet_versie", ""),
+        datasheet_datum=sectie.get("datasheet_datum", ""),
+        opgehaald_op=sectie.get("opgehaald_op", ""),
+    )
+
+
+def _bouw_warmtepompspec(sectie: dict, bestandsbron: str) -> WarmtepompSpec:
+    return WarmtepompSpec(
+        merk=sectie["merk"],
+        model=sectie["model"],
+        type_wp=sectie["type_wp"],
+        max_thermisch_vermogen_w=float(sectie["max_thermisch_vermogen_w"]),
+        nominaal_elektrisch_vermogen_w=float(sectie["nominaal_elektrisch_vermogen_w"]),
+        cop_nominaal=float(sectie["cop_nominaal"]),
+        t_bron_nominaal_c=float(sectie.get("t_bron_nominaal_c", 7.0)),
+        t_afgifte_nominaal_c=float(sectie.get("t_afgifte_nominaal_c", 35.0)),
         geverifieerd=bool(sectie.get("geverifieerd", False)),
         bron=sectie.get("bron") or bestandsbron,
         datasheet_versie=sectie.get("datasheet_versie", ""),
@@ -172,6 +238,85 @@ class OmvormerRepository:
             beschikbaar = sorted(f"{m}/{mo}" for m, mo in self._specs)
             raise HardwareError(
                 f"Geen omvormermasterdata voor '{merk}'/'{model}'. "
+                f"Beschikbaar: {', '.join(beschikbaar) or '(geen)'}."
+            )
+        return spec
+
+
+class ZonnepaneelRepository:
+    def __init__(self, specs: dict[tuple[str, str], ZonnepaneelSpec]) -> None:
+        self._specs = specs
+
+    def zonnepanelen(self) -> dict[tuple[str, str], ZonnepaneelSpec]:
+        """Publieke accessor (voor validatie en toekomstige DB-import)."""
+        return self._specs
+
+    @classmethod
+    def load(cls, config_dir: Path) -> "ZonnepaneelRepository":
+        specs = _laad_specs(
+            config_dir, ZONNEPANELEN_PATROON, "zonnepaneel", _bouw_zonnepaneelspec, "zonnepaneel",
+        )
+        return cls(specs)
+
+    def zonnepaneel(self, merk: str, model: str) -> ZonnepaneelSpec:
+        spec = self._specs.get((merk, model))
+        if spec is None:
+            beschikbaar = sorted(f"{m}/{mo}" for m, mo in self._specs)
+            raise HardwareError(
+                f"Geen zonnepaneelmasterdata voor '{merk}'/'{model}'. "
+                f"Beschikbaar: {', '.join(beschikbaar) or '(geen)'}."
+            )
+        return spec
+
+
+class ElektrischeWagenRepository:
+    def __init__(self, specs: dict[tuple[str, str], ElektrischeWagenSpec]) -> None:
+        self._specs = specs
+
+    def elektrische_wagens(self) -> dict[tuple[str, str], ElektrischeWagenSpec]:
+        """Publieke accessor (voor validatie en toekomstige DB-import)."""
+        return self._specs
+
+    @classmethod
+    def load(cls, config_dir: Path) -> "ElektrischeWagenRepository":
+        specs = _laad_specs(
+            config_dir, ELEKTRISCHE_WAGENS_PATROON, "elektrische_wagen",
+            _bouw_elektrischewagenspec, "elektrische wagen",
+        )
+        return cls(specs)
+
+    def elektrische_wagen(self, merk: str, model: str) -> ElektrischeWagenSpec:
+        spec = self._specs.get((merk, model))
+        if spec is None:
+            beschikbaar = sorted(f"{m}/{mo}" for m, mo in self._specs)
+            raise HardwareError(
+                f"Geen EV-masterdata voor '{merk}'/'{model}'. "
+                f"Beschikbaar: {', '.join(beschikbaar) or '(geen)'}."
+            )
+        return spec
+
+
+class WarmtepompRepository:
+    def __init__(self, specs: dict[tuple[str, str], WarmtepompSpec]) -> None:
+        self._specs = specs
+
+    def warmtepompen(self) -> dict[tuple[str, str], WarmtepompSpec]:
+        """Publieke accessor (voor validatie en toekomstige DB-import)."""
+        return self._specs
+
+    @classmethod
+    def load(cls, config_dir: Path) -> "WarmtepompRepository":
+        specs = _laad_specs(
+            config_dir, WARMTEPOMPEN_PATROON, "warmtepomp", _bouw_warmtepompspec, "warmtepomp",
+        )
+        return cls(specs)
+
+    def warmtepomp(self, merk: str, model: str) -> WarmtepompSpec:
+        spec = self._specs.get((merk, model))
+        if spec is None:
+            beschikbaar = sorted(f"{m}/{mo}" for m, mo in self._specs)
+            raise HardwareError(
+                f"Geen warmtepompmasterdata voor '{merk}'/'{model}'. "
                 f"Beschikbaar: {', '.join(beschikbaar) or '(geen)'}."
             )
         return spec

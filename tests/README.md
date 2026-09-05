@@ -139,6 +139,7 @@ overgeslagen wanneer die er niet zijn, en draaien in CI tegen de zaaddump
 | `test_energiefonds_ingest.py` | De tarieftabel van vlaanderen.be: `<br>`-afgebroken labels, en "niet-residentiële" die "residentiële" als deelstring bevat. |
 | `test_transport_tarieven.py` | Het Fluxys-vervoerstarief, dat in geen VREG-werkboek staat en elke gasfactuur ~25 EUR per jaar te laag maakte. |
 | `test_hardware_repository.py` | Alleen cijfers die rechtstreeks uit een fabrikantdatasheet komen, met paginaverwijzing. |
+| `test_hardware_zonnepaneel_ev_warmtepomp.py` | Idem, voor de masterdata die de fysieke assetsimulatie gelijktrekt met batterijen: één zonnepaneel-, EV- en warmtepompmodel, elk met een echte bronvermelding. |
 | `test_hardware_validation.py` | `geverifieerd = true` zonder bronvermelding is een fout — dezelfde regel als bij heffingen. |
 | `test_homologatie.py` | De C10/26-lijst: merken in wisselende schrijfwijze, en één serie met een 1- en een 3-fasige vermelding. |
 | `test_netbeheerder.py` | Postcode naar netbeheerder. Postcode 2387 dekt twee netbeheerders en moet weigeren in plaats van gokken. |
@@ -162,6 +163,8 @@ overhouden en de vergelijking weggooien zou de waarde van die test omkeren.
 | `test_referentiefactuur.py` | De volledige engine tegen een echte ENGIE-eindafrekening, inclusief de verklaring van elk restverschil. |
 | `test_referentiefacturen_reeks.py` | Vier andere echte afrekeningen, elk voor wat de eerste niet raakt: een register "uitsluitend nacht", de netkost regel per regel, een contract dat niet op de markt bestaat, en een tweede netbeheerder. |
 | `test_battery.py` | De batterij bewaakt haar eigen grenzen: laadtoestand, cyclustelling, en een nameplate van nul die vroeger deelde door nul. |
+| `test_dispatch.py` | De brug tussen een fysiek assetmodel en een tijdreeks: zelfconsumptie-eerst-dispatch, per kwartier na te rekenen — overschot laadt, tekort ontlaadt, een volle batterij laat overschot naar injectie gaan. Ook de prijsarbitrage erbovenop: laadt maximaal tijdens de goedkoopste Belpex-uren, verkoopt maximaal tijdens de duurste, blijft zelfconsumptie ertussenin, `marktprijzen=None` raakt het bestaande gedrag niet, en arbitragekoop overschrijdt nooit de bestaande maandpiek. |
+| `test_dispatch_ev_warmtepomp.py` | EV-laadprofiel (jaartotaal klopt, blijft binnen het laadvenster, weigert bij een fysiek te kort venster) en warmtepompprofiel (thermisch/COP zonder vermogenslimiet, correcte begrenzing erboven). |
 | `test_omvormer.py` | Dezelfde zelfbewaking voor de omvormer — drie vermogensvelden die strikt positief moeten zijn. |
 | `test_zonnepaneel.py` | Instraling, celtemperatuur en ouderdom naar DC-vermogen; elk van de drie kan stil een verkeerd getal geven. |
 | `test_elektrische_wagen.py` | Een EV als verplaatsbare batterij met een kilometerteller: AC en DC laden kennen elk hun eigen limiet, de teller kan niet terug, en stranden geeft de werkelijk gereden afstand. |
@@ -174,10 +177,18 @@ overhouden en de vergelijking weggooien zou de waarde van die test omkeren.
 | `test_gebruikers_toml.py` | `gebruiker.toml` blijft in zijn bestaande vorm werken; alles wat erbij komt is optioneel. |
 | `test_dossier_sleutels.py` | Een onbekende sleutel wordt geweigerd. `afname_kwh` in plaats van `afname_dag_kwh` gaf een opgave van 0 kWh en een berekening die gewoon doorliep. |
 | `test_gebruikers_periodes.py` | De periodesnijder, op elke contractwissel, tariefkaart, heffingenregime en jaarwissel. |
-| `test_gebruikers_berekening.py` | Het invariant van dit domein: **knippen mag het totaal niet veranderen.** |
-| `test_gebruikers_schatting.py` | Verbruik schatten met de Synergrid-profielen. SPP is vermogen, SLP-EX en RLP0N zijn verdelingen; door elkaar halen scheelt factor vier. |
+| `test_gebruikers_berekening.py` | Het invariant van dit domein: **knippen mag het totaal niet veranderen.** Ook `_maandpieken()`: het capaciteitstarief leunde altijd op de statische maandpiekschatting, ook met een echte kwartierreeks voorhanden — nu gemeten waar mogelijk, met een aanname voor ontbrekende maanden. |
+| `test_gebruikers_schatting.py` | Verbruik schatten met de Synergrid-profielen. SPP is vermogen, SLP-EX en RLP0N zijn verdelingen; door elkaar halen scheelt factor vier. Bewaakt ook `gewichten_uit_databank()`, incl. de dubbele winterurenwissel die kale Python-datetimevergelijking ten onrechte als dezelfde netbeheerder-rij zag. |
 | `test_gebruikers_repository.py` | De opslaglaag, op SQLite in het geheugen — de logica is bewust dialectonafhankelijk. |
 | `test_fluvius_csv.py` | Vier registers, gas dubbel in m³ en kWh, drie validatiestatussen, en de zomertijdsprongen. Uit een echte export van drie jaar. |
+| `test_gebruikers_orchestratie.py` | `bereken_dossier()`, geëxtraheerd uit `cli/gebruikers.py`, geeft dezelfde structuur terug als de CLI vroeger opbouwde — het fundament dat elk scenario hergebruikt. |
+| `test_scenario_contract.py` | `AnderContractScenario.pas_toe()`: pure dossiersurgerie, muteert het origineel nooit, raakt enkel het gekozen aansluitingspunt, en bewaart de bestaande contractgrenzen bij meerdere contracten — anders overlappen twee `Verbruiksopgave`'s dezelfde, te brede deelperiode. |
+| `test_scenario_basis.py` | De generieke scenario-diff: basislijn min scenario, `Exactheidsklasse.SCENARIO` weegt altijd minstens mee, en een mislukt punt in het scenario verdwijnt niet stil uit het verschil. |
+| `test_scenario_opslag.py` | JSON/YAML-opslag van een `ScenarioResultaat`: geen `Decimal`/datum/enum die de encoder doet struikelen, beide formaten dragen dezelfde cijfers. |
+| `test_scenario_batterij.py` | `BatterijScenario`'s dossiersurgerie en de gedeelde reeksopbouw (`scenario.reeksen`): Fluvius-meting bij voorkeur, SLP-EX als terugval, geen PV geeft een waarschuwing i.p.v. een stille nul, een bestaande PV-installatie wordt niet dubbel geteld via een nieuwe SPP-synthese, en prijsarbitrage schakelt zichzelf uit (met waarschuwing) op een niet-overal-dynamisch contract. |
+| `test_scenario_reeksen.py` | `dag_nacht_masker()`/`verdeel_dag_nacht()` — de regressietest voor een echte fout: een gesimuleerde reeks zonder dag/nacht-registers viel bij `Kostberekening` terug op "alles is dagverbruik", wat zonnepanelen toevoegen op de echte databank een gestégen kost gaf en EV-nachtladen tegen het dure dagtarief rekende. |
+| `test_scenario_zonnepaneel.py` | `ZonnepaneelScenario`'s dossiersurgerie: voegt de PV-asset met het gevraagde vermogen toe, muteert het origineel niet. |
+| `test_scenario_elektrische_wagen_warmtepomp.py` | Idem voor `ElektrischeWagenScenario`/`WarmtepompScenario`, inclusief `vervangt_gas` dat het gasverbruik op nul zet zonder het origineel te raken. |
 
 ## `cli` — de commandoschil
 

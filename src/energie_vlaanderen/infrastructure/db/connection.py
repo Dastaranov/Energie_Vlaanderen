@@ -1,3 +1,9 @@
+"""
+Database connection via SQLAlchemy.
+Database structure is defined in `energie_vlaanderen.infrastructure.db.schema`.
+The database connection parameters are read from environment variables, 
+with a fallback to a `.env` file in the project root if provided.
+"""
 from __future__ import annotations
 
 import os
@@ -7,7 +13,15 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import sqlalchemy
 
-
+"""
+Functions to get a SQLAlchemy Engine and DSN from environment variables.
+args: 
+    project_root: Path | None = None
+        The root of the project, used to locate a .env file for environment variables.
+        If None, only the current environment variables are used.
+Returns:
+    sqlalchemy.Engine: A SQLAlchemy Engine object for connecting to the database.
+"""
 def _load_dotenv(project_root: Path) -> None:
     env_file = project_root / ".env"
     if not env_file.is_file():
@@ -18,7 +32,15 @@ def _load_dotenv(project_root: Path) -> None:
     except ImportError:
         pass
 
-
+"""
+Functions to get a SQLAlchemy Engine and DSN from environment variables.
+args:
+    project_root: Path | None = None
+        The root of the project, used to locate a .env file for environment variables.
+        If None, only the current environment variables are used.
+Returns:
+    str: A PostgreSQL DSN string for connecting to the database.
+"""
 def get_dsn(project_root: Path | None = None) -> str:
     """Bouw de PostgreSQL DSN op uit omgevingsvariabelen (met .env als fallback)."""
     import sqlalchemy as sa

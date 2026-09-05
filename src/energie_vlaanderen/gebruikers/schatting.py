@@ -137,6 +137,117 @@ class ProfielenUitCsv:
         return df.sort_values("tijdstip").reset_index(drop=True)
 
 
+def dichtstbijzijnd_beschikbaar_jaar(
+    conn, profiel_type: str, energie_type: str, gevraagd_jaar: int,
+) -> tuple[int, bool]:
+    """Het jaar van `profiel_type` in de databank dat het dichtst bij
+    `gevraagd_jaar` ligt, en of dat een substitutie was.
+
+    Zelfde regel als `gasaandeel_uit_rlp0()`: Synergrid publiceert per jaar,
+    maar niet elk jaar staat (nog) in de databank — vandaag enkel 2026.
+    Weigeren zou een scenario over 2025 onmogelijk maken terwijl de
+    seizoensvorm van een profiel zich jaar na jaar herhaalt. De oproeper is
+    verantwoordelijk om de substitutie in een `Aanname` te vermelden zodra
+    die niet `False` teruggeeft.
+    """
+    import sqlalchemy as sa
+
+    voorwaarden = ["profiel_type = :profiel_type"]
+    params: dict[str, object] = {"profiel_type": profiel_type}
+    if energie_type:
+        voorwaarden.append("energie_type = :energie_type")
+        params["energie_type"] = energie_type
+
+    beschikbaar = sorted(
+        int(r[0]) for r in conn.execute(
+            sa.text(
+                "select distinct jaar from verbruiksprofiel_waarde where "
+                + " and ".join(voorwaarden)
+            ),
+            params,
+        )
+    )
+    if not beschikbaar:
+        raise SchattingError(
+            f"Geen {profiel_type}-profiel in de databank. Laad het met "
+            "`synergrid download` en `staging parse --only profielen`."
+        )
+    if gevraagd_jaar in beschikbaar:
+        return gevraagd_jaar, False
+    return min(beschikbaar, key=lambda j: (abs(j - gevraagd_jaar), j)), True
+
+
+def gewichten_uit_databank(
+    conn,
+    profiel_type: str,
+    jaar: int,
+    energie_type: str = "",
+    netbeheerder_code: Optional[str] = None,
+) -> pd.DataFrame:
+    """Zelfde contract als `ProfielenUitCsv.gewichten()` (`tijdstip`, `gewicht`),
+    maar rechtstreeks uit `verbruiksprofiel_waarde` in de databank.
+
+    Deze functie bestaat naast de CSV-lezer, niet in de plaats ervan:
+    `ProfielenUitCsv` werkt zonder databankverbinding (handig in een test), dit
+    hier is voor code die toch al een `conn` open heeft — zoals
+    `scenario.batterij`/`scenario.zonnepaneel`, die de databank sowieso nodig
+    hebben voor de kostberekening. Zelfde regel als `gasaandeel_uit_rlp0()`
+    hierboven: per-netbeheerderprofielen (RLP0N-elektriciteit) eisen een
+    `netbeheerder_code`, nationale profielen (SLP-EX, SPP, RLP0N-gas) nemen
+    geen filter.
+    """
+    import sqlalchemy as sa
+
+    voorwaarden = ["profiel_type = :profiel_type", "jaar = :jaar"]
+    params: dict[str, object] = {"profiel_type": profiel_type, "jaar": jaar}
+    if energie_type:
+        voorwaarden.append("energie_type = :energie_type")
+        params["energie_type"] = energie_type
+    if netbeheerder_code:
+        voorwaarden.append("netbeheerder_code = :netbeheerder_code")
+        params["netbeheerder_code"] = netbeheerder_code
+
+    query = (
+        "select tijdstip, waarde from verbruiksprofiel_waarde where "
+        + " and ".join(voorwaarden)
+        + " order by tijdstip"
+    )
+    rijen = conn.execute(sa.text(query), params).all()
+    if not rijen:
+        raise SchattingError(
+            f"Geen {profiel_type}-profiel in de databank voor jaar {jaar}"
+            + (f", netbeheerder {netbeheerder_code}" if netbeheerder_code else "")
+            + ". Laad het met `synergrid download` en "
+            "`staging parse --only profielen`."
+        )
+
+    df = pd.DataFrame(rijen, columns=["tijdstip", "gewicht"])
+    # Naar UTC normaliseren vóór elke vergelijking of telling op `tijdstip`:
+    # twee aware datetimes met dezelfde wandkloktijd maar een andere `fold`
+    # (de dubbele lokale 2u-nacht bij de terugval naar wintertijd) vergelijken
+    # in kale Python als *gelijk* — `fold` wordt genegeerd bij `==`/`hash()`
+    # zodra beide dezelfde tzinfo dragen (een gedocumenteerde CPython-
+    # eigenaardigheid, geen bug in de data). Op de databank staat dat uur wél
+    # correct als twee verschillende UTC-instanten (2026-10-25 00:00 en
+    # 01:00 UTC) — enkel de naïeve Python-vergelijking zag ze als één.
+    df["tijdstip"] = pd.to_datetime(df["tijdstip"], utc=True)
+
+    if netbeheerder_code is None and profiel_type in GENORMALISEERDE_PROFIELEN:
+        # Dezelfde vangrail als `ProfielenUitCsv.gewichten()`: zonder filter op
+        # een per-netbeheerderprofiel zou de query hierboven alle
+        # netbeheerders bij elkaar optellen als er meer dan één rij per
+        # tijdstip bestaat (geen fout, gewoon een verkeerd getal).
+        aantal_tijdstippen = df["tijdstip"].nunique()
+        if aantal_tijdstippen and len(df) > aantal_tijdstippen:
+            raise SchattingError(
+                f"Profiel {profiel_type} {jaar} is per netbeheerder "
+                "opgebouwd; geef een netbeheerder_code mee. Zonder filter "
+                "zouden alle netbeheerders bij elkaar opgeteld worden."
+            )
+
+    return df.sort_values("tijdstip").reset_index(drop=True)
+
+
 def controleer_som(gewichten: pd.DataFrame, profiel_type: str) -> float:
     """Toetst de som-tot-1-eis, en alleen waar die geldt."""
     som = float(gewichten["gewicht"].sum())

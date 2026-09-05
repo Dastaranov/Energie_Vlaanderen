@@ -1,0 +1,43 @@
+# DAIKIN ALTHERMA 3 H HT — EPRA16DV3 (Class 16, 1-fasig) buitenunit met
+# ETBH16E6V binnenunit, lucht-water warmtepomp, "heating only".
+#
+# Bron: Daikin-installateursdatasheet "Daikin Altherma 3 High Temperature
+# Heating Only Datasheet" (irishheatpumps.com-kopie van het officiële Daikin
+# UK-brochurenummer 767), geraadpleegd 2026-09-05.
+#
+# Rechtstreeks van de datasheet overgenomen: cop_nominaal = 4,86, de COP
+# "Heating (e)" bij testconditie A7/W35 volgens EN14511 (Ambient air
+# temperature 7°C, leaving water temperature 35°C) — exact de conventie die
+# `t_bron_nominaal_c`/`t_afgifte_nominaal_c` hieronder vastleggen.
+#
+# NIET rechtstreeks bij A7/W35, dus gemodelleerd:
+# - max_thermisch_vermogen_w: de datasheet geeft de nominale
+#   verwarmingscapaciteit van Class 16 enkel bij A-2/W55 (11,57 kW) en
+#   A-2/W65 (11,51 kW) — een kouder/moeilijker werkpunt dan A7/W35. Bij
+#   ontstentenis van een A7/W35-capaciteitscijfer is de A-2/W55-waarde
+#   overgenomen; in de praktijk levert het toestel bij A7/W35 typisch méér
+#   thermisch vermogen dan bij A-2, dus dit is eerder een onderschatting dan
+#   een overschatting.
+# - nominaal_elektrisch_vermogen_w: niet gepubliceerd, afgeleid als
+#   max_thermisch_vermogen_w / cop_nominaal = 11570 / 4,86 ≈ 2380,7 W — een
+#   berekend, geen gepubliceerd cijfer.
+#
+# geverifieerd = false om die twee gemodelleerde velden, niet om de COP: die
+# staat letterlijk zo in de datasheet.
+bron = "Daikin Altherma 3 High Temperature Heating Only Datasheet, https://irishheatpumps.com/wp-content/uploads/2022/05/Daikin-Altherma-3-High-Temperature-Heating-Only-Datasheet.pdf, geraadpleegd 2026-09-05"
+
+[warmtepomp]
+merk = "Daikin"
+model = "Altherma 3 H HT EPRA16DV3"
+type_wp = "lucht-water"
+
+max_thermisch_vermogen_w = 11570.0
+nominaal_elektrisch_vermogen_w = 2380.7
+cop_nominaal = 4.86
+t_bron_nominaal_c = 7.0
+t_afgifte_nominaal_c = 35.0
+
+geverifieerd = false
+datasheet_versie = ""
+datasheet_datum = ""
+opgehaald_op = "2026-09-05"

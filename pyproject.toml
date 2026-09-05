@@ -15,6 +15,10 @@ dependencies = [
     "requests>=2.32",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
+    # Enkel voor `scenario.opslag.sla_op(..., formaat="yaml")` — tot nu toe
+    # enkel transitief aanwezig (via een andere dependency), wordt hier een
+    # eerste-klas import.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

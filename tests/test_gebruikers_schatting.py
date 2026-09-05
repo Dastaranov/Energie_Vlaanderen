@@ -24,6 +24,7 @@ from energie_vlaanderen.gebruikers.schatting import (
     SchattingError,
     controleer_som,
     dekkingsgraad,
+    gewichten_uit_databank,
     intervalduur_uren,
     maandpieken_uit_metingen,
     maandpieken_uit_profiel,
@@ -159,3 +160,74 @@ class TestDekking:
             }
         )
         assert dekkingsgraad(metingen, date(2026, 1, 1), date(2026, 1, 2)) == D("1")
+
+
+class _NepConn:
+    """Een minimale stand-in voor `sqlalchemy.Connection.execute(...).all()`,
+    zodat `gewichten_uit_databank()` zonder echte databank te toetsen is."""
+
+    def __init__(self, rijen: list[tuple]) -> None:
+        self._rijen = rijen
+
+    def execute(self, _query, _params=None):
+        return self
+
+    def all(self):
+        return self._rijen
+
+
+class TestGewichtenUitDatabank:
+    """Zelfde contract als `ProfielenUitCsv.gewichten()`, maar uit
+    `verbruiksprofiel_waarde` — voor code die de databank toch al open heeft
+    (bv. `scenario.batterij`)."""
+
+    def test_geeft_tijdstip_en_gewicht_terug(self):
+        conn = _NepConn([
+            ("2026-01-01T00:00:00+00:00", 0.5),
+            ("2026-01-01T00:15:00+00:00", 0.5),
+        ])
+        gewichten = gewichten_uit_databank(conn, "slp_ex", 2026, "elektriciteit")
+        assert list(gewichten.columns) == ["tijdstip", "gewicht"]
+        assert len(gewichten) == 2
+
+    def test_leeg_resultaat_is_een_fout(self):
+        conn = _NepConn([])
+        with pytest.raises(SchattingError, match="Geen slp_ex-profiel"):
+            gewichten_uit_databank(conn, "slp_ex", 2026)
+
+    def test_meerdere_netbeheerders_zonder_filter_is_een_fout(self):
+        """Twee waarden op hetzelfde tijdstip (twee netbeheerders) zonder
+        `netbeheerder_code`-filter zou stil opgeteld worden — dat moet een
+        fout zijn, geen verkeerd getal."""
+        conn = _NepConn([
+            ("2026-01-01T00:00:00+00:00", 0.5),
+            ("2026-01-01T00:00:00+00:00", 0.3),
+        ])
+        with pytest.raises(SchattingError, match="per netbeheerder"):
+            gewichten_uit_databank(conn, "rlp0n", 2026, "elektriciteit")
+
+    def test_spp_heeft_geen_netbeheerderfilter_nodig(self):
+        """SPP is geen genormaliseerd profiel; de vangrail hierboven geldt
+        alleen voor SLP-EX/RLP0N."""
+        conn = _NepConn([
+            ("2026-01-01T00:00:00+00:00", 0.5),
+            ("2026-01-01T00:15:00+00:00", 0.6),
+        ])
+        gewichten = gewichten_uit_databank(conn, "spp", 2026)
+        assert len(gewichten) == 2
+
+    def test_de_dubbele_winterurenwissel_is_geen_dubbele_netbeheerder(self):
+        """De terugval naar wintertijd (laatste zondag van oktober) geeft
+        twee échte, opeenvolgende UTC-uren die allebei als lokale klok
+        '02:00' gelden. Kale Python-datetimevergelijking ziet die (bij
+        gelijke tzinfo) ten onrechte als gelijk — `fold` wordt genegeerd bij
+        `==`/`hash()` — en zou dit RLP0N-gasprofiel (nationaal, één rij per
+        écht uur) laten doorgaan voor een per-netbeheerderprofiel. Gevonden
+        tegen de echte databank: 8760 rijen, 8759 "unieke" tijdstippen volgens
+        kale Python, 8760 unieke UTC-instanten in werkelijkheid."""
+        conn = _NepConn([
+            ("2026-10-25T00:00:00+00:00", 5.63127e-05),  # lokaal 02:00 CEST
+            ("2026-10-25T01:00:00+00:00", 5.63127e-05),  # lokaal 02:00 CET
+        ])
+        gewichten = gewichten_uit_databank(conn, "rlp0n", 2026, "gas")
+        assert len(gewichten) == 2

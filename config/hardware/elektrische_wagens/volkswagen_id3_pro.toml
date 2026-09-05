@@ -1,0 +1,38 @@
+# VOLKSWAGEN ID.3 PRO (2023-2024), 58 kWh netto bruikbare batterij — één van
+# de meest verkochte EV's in België in deze prijsklasse, gekozen als eerste
+# referentiemodel voor `ElektrischeWagenScenario`.
+#
+# Bron: EV Database (https://ev-database.org/car/1831/Volkswagen-ID3-Pro),
+# geraadpleegd 2026-09-05. Dit is geen fabrikantsdatasheet maar een
+# gespecialiseerde EV-specificatiedatabase die WLTP-cijfers uit de officiële
+# typegoedkeuring herpubliceert; `geverifieerd = false` omdat het geen
+# eerstehandsbron is.
+#
+# - batterij_capaciteit_kwh: netto bruikbare capaciteit (58,0 kWh) — niet de
+#   bruto celcapaciteit (63,0 kWh), want dat laatste kan de wagen niet
+#   volledig benutten.
+# - verbruik_per_100km_kwh: WLTP-verbruik van 153 Wh/km (EV Database-conventie,
+#   inclusief laadverlies) omgerekend naar kWh/100km.
+# - max_laadvermogen_ac_w / max_laadvermogen_dc_w: 11 kW AC (Type 2, 3-fasig)
+#   en 124 kW DC (CCS).
+# - onderhoudsinterval_km: Volkswagen zelf noemt zowel "elke 24 maanden" als
+#   "15.000 km" als onderhoudsgrens (zie carteam.nl/Volkswagen-onderhoudspagina's,
+#   geraadpleegd 2026-09-05) — welke van de twee eerst bereikt wordt, geldt in
+#   de praktijk. Dit veld kent enkel een km-grens, dus de 15.000 km-waarde is
+#   overgenomen; de tijdsgrens ontbreekt in deze masterdata.
+bron = "EV Database, https://ev-database.org/car/1831/Volkswagen-ID3-Pro, geraadpleegd 2026-09-05"
+
+[elektrische_wagen]
+merk = "Volkswagen"
+model = "ID.3 Pro"
+
+batterij_capaciteit_kwh = 58.0
+verbruik_per_100km_kwh = 15.3
+max_laadvermogen_ac_w = 11000.0
+max_laadvermogen_dc_w = 124000.0
+onderhoudsinterval_km = 15000.0
+
+geverifieerd = false
+datasheet_versie = ""
+datasheet_datum = ""
+opgehaald_op = "2026-09-05"

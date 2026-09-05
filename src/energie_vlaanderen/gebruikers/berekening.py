@@ -242,6 +242,10 @@ class Kostberekening:
         # niet als klasseattribuut: dat laatste zou gedeeld worden tussen
         # berekeningen en de tweede stil laten zwijgen.
         self._gemelde_opgaven: set[tuple] = set()
+        # Maandpieken per jaar zijn duur om te herberekenen (een groupby over de
+        # volledige meetreeks) en identiek voor elke deelperiode van hetzelfde
+        # jaar — één keer per jaar volstaat.
+        self._maandpieken_cache: dict[int, tuple[tuple[Decimal, ...], Optional[Aanname]]] = {}
 
     def _calculator_voor(self, periode: Deelperiode) -> Calculator:
         """De rekenengine met de nettarieven van het jaar van deze deelperiode."""
@@ -539,8 +543,20 @@ class Kostberekening:
         periodeverbruik, volume_aannames = self._periodevolumes(
             opgave, aandeel, periode_intervals
         )
+
+        # Maandpieken voor het capaciteitstarief: enkel zinvol voor
+        # elektriciteit (aardgas kent geen capaciteitstarief) en enkel als er
+        # een kwartierreeks is — zonder meting blijft `bouw_profile()`s eigen
+        # terugval (`Meter.geschatte_maandpiek_kw`) gelden.
+        maandpieken: Sequence[Decimal] = ()
+        maandpiek_aanname: Optional[Aanname] = None
+        if not gas and metingen is not None and not metingen.empty:
+            terugval = meter.geschatte_maandpiek_kw if meter else D("4.218")
+            maandpieken, maandpiek_aanname = self._maandpieken(metingen, periode.van.year, terugval)
+
         periodeprofiel = bouw_profile(
-            punt, meter, periodeverbruik, segment=self.segment, omvormer_kva=omvormer_kva
+            punt, meter, periodeverbruik, segment=self.segment, omvormer_kva=omvormer_kva,
+            maandpieken=maandpieken,
         )
 
         # Netkost op de volumes van deze periode, met de vaste jaarposten naar
@@ -583,6 +599,8 @@ class Kostberekening:
         # -- injectie -------------------------------------------------------
         credit = D("0")
         aannames = list(volume_aannames)
+        if maandpiek_aanname is not None:
+            aannames.append(maandpiek_aanname)
         injectie_kwh = periodeprofiel.injectie_kwh
         if gas and injectie_kwh > 0:
             raise BerekeningError(
@@ -751,6 +769,68 @@ class Kostberekening:
             raise BerekeningError(str(exc)) from exc
         vaste_vergoeding = product.components.get("fixed_fee", D("0"))
         return kost - vaste_vergoeding + vaste_vergoeding * tijddeel, list(warnings)
+
+    def _maandpieken(
+        self, metingen: Optional[pd.DataFrame], jaar: int, terugval_kw: Decimal,
+    ) -> tuple[tuple[Decimal, ...], Optional[Aanname]]:
+        """Twaalf maandpieken voor `jaar` — gemeten waar mogelijk, anders de
+        meegegeven terugval (`Meter.geschatte_maandpiek_kw`).
+
+        Zonder dit viel het capaciteitstarief altijd terug op die statische
+        schatting, ook met een echte (of gesimuleerde) kwartierreeks
+        voorhanden — de grootste post van de netkost bij een digitale meter,
+        nooit herrekend uit wat er werkelijk gebeurde. `Calculator.grid_cost()`
+        kent `p.maandpieken_kw` al (een 12-tuple, één piek per maand); die
+        werd alleen nooit gevuld.
+
+        Dag, nacht en een eventueel gecombineerd register worden opgeteld: de
+        meter kent op elk moment maar één van beide, en de piek is de piek van
+        het toegangspunt, niet van één register — zelfde regel als
+        `FluviusReeks.maandpieken_kw()`.
+        """
+        if jaar in self._maandpieken_cache:
+            return self._maandpieken_cache[jaar]
+
+        resultaat: tuple[tuple[Decimal, ...], Optional[Aanname]] = ((), None)
+        if metingen is not None and not metingen.empty:
+            df = metingen.copy()
+            df["tijdstip"] = pd.to_datetime(df["tijdstip"], utc=True)
+            lokaal = df["tijdstip"].dt.tz_convert("Europe/Brussels")
+            df = df[lokaal.dt.year == jaar]
+            kolommen = [
+                k for k in ("afname_dag_kwh", "afname_nacht_kwh", "afname_exclusief_nacht_kwh", "afname_kwh")
+                if k in df.columns
+            ]
+            stap = df["tijdstip"].diff().dropna().median() if len(df) > 1 else None
+            if not df.empty and kolommen and stap is not None and stap > pd.Timedelta(0):
+                totaal = df[kolommen].sum(axis=1)
+                maand = lokaal.loc[df.index].dt.month
+                per_uur = D(str(pd.Timedelta(hours=1) / stap))
+                gemeten = {
+                    int(m): D(str(piek)) * per_uur
+                    for m, piek in totaal.groupby(maand).max().items()
+                }
+                ontbrekend = [m for m in range(1, 13) if m not in gemeten]
+                peaks = tuple(gemeten.get(m, terugval_kw) for m in range(1, 13))
+                aanname = None
+                if ontbrekend:
+                    aanname = Aanname(
+                        veld="maandpieken_deels_geschat",
+                        waarde=f"{12 - len(ontbrekend)}/12 maanden gemeten in {jaar}",
+                        bron="kwartierreeks (gemeten of gesimuleerd) + standaardschatting voor ontbrekende maanden",
+                        geverifieerd=False,
+                        beinvloedt_bedrag=True,
+                        motivering=(
+                            f"Maand(en) {ontbrekend} van {jaar} hebben geen kwartierdata; "
+                            f"voor het capaciteitstarief van die maand(en) is de "
+                            f"standaardschatting van {terugval_kw} kW gebruikt in plaats "
+                            "van een gemeten piek."
+                        ),
+                    )
+                resultaat = (peaks, aanname)
+
+        self._maandpieken_cache[jaar] = resultaat
+        return resultaat
 
     def _periodevolumes(
         self,

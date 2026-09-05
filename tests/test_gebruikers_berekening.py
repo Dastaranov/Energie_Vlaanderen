@@ -22,6 +22,7 @@ from datetime import date
 from decimal import Decimal as D
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from energie_vlaanderen.gebruikers.berekening import (
@@ -102,6 +103,15 @@ class TestProfileBouwen:
         """Voor het capaciteitstarief telt of er een gemeten kwartierpiek is."""
         meter = Meter(punt.id, meterregime=Meterregime.AMR)
         assert bouw_profile(punt, meter, {}).meter == "digitaal"
+
+    def test_maandpieken_stromen_door_naar_het_profiel(self, punt):
+        """De brug die `_maandpieken()` gebruikt: zonder deze doorgifte was
+        elke deelperiode aangewezen op de statische terugval, ook met een
+        echte (of gesimuleerde) kwartierreeks voorhanden."""
+        meter = Meter(punt.id, meterregime=Meterregime.DIGITAAL)
+        pieken = tuple(D(str(x)) for x in range(1, 13))
+        profiel = bouw_profile(punt, meter, {}, maandpieken=pieken)
+        assert profiel.maandpieken_kw == pieken
 
     def test_klassiek_gedraagt_zich_als_analoog(self, punt):
         meter = Meter(punt.id, meterregime=Meterregime.KLASSIEK)
@@ -515,6 +525,93 @@ class TestTariefjaar:
         """Oudere staging-versies dragen het veld nog niet; daar valt niets te toetsen."""
         rekenaar = self._rekenaar(heffingen, None)
         rekenaar._controleer_tariefjaar(Deelperiode(date(2025, 1, 1), date(2026, 1, 1), None))
+
+
+class TestMaandpieken:
+    """`grid_cost()` kende `p.maandpieken_kw` al — een 12-tuple, één piek per
+    maand — maar niets vulde hem ooit: elke deelperiode viel terug op de
+    statische `Meter.geschatte_maandpiek_kw`, ook met een echte (of
+    gesimuleerde) kwartierreeks voorhanden. `_maandpieken()` is de brug
+    ertussen.
+    """
+
+    class NepRepo:
+        def __init__(self, jaar):
+            self.tariefjaar = jaar
+
+    def _rekenaar(self, heffingen, jaar=2026):
+        return Kostberekening(self.NepRepo(jaar), heffingen)
+
+    def _kwartieren(self, jaar: int, maand: int, pieken_kw: list[float]) -> pd.DataFrame:
+        """Eén kwartier per opgegeven piek, telkens de eerste van de maand —
+        genoeg om `groupby(maand).max()` te toetsen zonder een volledige
+        maand te moeten opbouwen."""
+        tijdstip = pd.date_range(f"{jaar}-{maand:02d}-01", periods=len(pieken_kw), freq="15min", tz="UTC")
+        # kWh per kwartier voor een piek van x kW: x / 4.
+        return pd.DataFrame({
+            "tijdstip": tijdstip,
+            "afname_dag_kwh": [p / 4 for p in pieken_kw],
+            "afname_nacht_kwh": [0.0] * len(pieken_kw),
+        })
+
+    def test_geen_metingen_geeft_een_lege_tuple(self, heffingen):
+        rekenaar = self._rekenaar(heffingen)
+        peaks, aanname = rekenaar._maandpieken(None, 2026, D("4.218"))
+        assert peaks == ()
+        assert aanname is None
+
+    def test_één_gemeten_maand_geeft_de_juiste_piek_en_vult_de_rest_aan(self, heffingen):
+        metingen = self._kwartieren(2026, 3, [1.0, 2.0, 3.0])  # piek 3 kW in maart
+        rekenaar = self._rekenaar(heffingen)
+
+        peaks, aanname = rekenaar._maandpieken(metingen, 2026, D("4.218"))
+
+        assert len(peaks) == 12
+        assert peaks[2] == D("3.0")  # maart = index 2
+        # Elke andere maand valt terug op de standaardschatting.
+        assert peaks[0] == D("4.218")
+        assert peaks[11] == D("4.218")
+        assert aanname is not None
+        assert not aanname.geverifieerd
+        assert aanname.beinvloedt_bedrag is True
+
+    def test_dag_en_nacht_worden_samengeteld_voor_de_piek(self, heffingen):
+        """De meter kent op elk moment maar één register — de piek is de piek
+        van het toegangspunt, niet van één register apart."""
+        tijdstip = pd.date_range("2026-06-01", periods=2, freq="15min", tz="UTC")
+        metingen = pd.DataFrame({
+            "tijdstip": tijdstip,
+            "afname_dag_kwh": [1.0, 0.0],
+            "afname_nacht_kwh": [0.0, 1.5],
+        })
+        rekenaar = self._rekenaar(heffingen)
+
+        peaks, _ = rekenaar._maandpieken(metingen, 2026, D("4.218"))
+
+        # 1,5 kWh in een kwartier = 6 kW piek (het hoogste van de twee rijen).
+        assert peaks[5] == D("6.0")
+
+    def test_volledig_jaar_gemeten_geeft_geen_aanname(self, heffingen):
+        stukken = [self._kwartieren(2026, m, [1.0]) for m in range(1, 13)]
+        metingen = pd.concat(stukken, ignore_index=True)
+        rekenaar = self._rekenaar(heffingen)
+
+        peaks, aanname = rekenaar._maandpieken(metingen, 2026, D("4.218"))
+
+        assert len(peaks) == 12
+        assert aanname is None
+
+    def test_wordt_gecachet_per_jaar(self, heffingen):
+        """Eén groupby per jaar, niet één per deelperiode."""
+        metingen = self._kwartieren(2026, 3, [3.0])
+        rekenaar = self._rekenaar(heffingen)
+
+        eerste, _ = rekenaar._maandpieken(metingen, 2026, D("4.218"))
+        # Een tweede aanroep met een lege reeks geeft toch het gecachete
+        # resultaat van de eerste aanroep terug — het jaar werd al berekend.
+        tweede, _ = rekenaar._maandpieken(pd.DataFrame({"tijdstip": [], "afname_dag_kwh": []}), 2026, D("4.218"))
+
+        assert eerste == tweede
 
 
 @pytest.mark.integration

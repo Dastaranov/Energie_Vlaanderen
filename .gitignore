@@ -246,6 +246,12 @@ data/*.json
 data/referentie/*
 !data/referentie/LEESMIJ.md
 
+# Scenarioresultaten (`energie_vlaanderen.scenario.opslag`): dragen het
+# dossier van de gebruiker (postcode, verbruik, contracten) en horen om
+# dezelfde reden als `data/referentie/` niet in git.
+data/simulaties/*
+!data/simulaties/LEESMIJ.md
+
 # Het tariefkaartarchief: de PDF's die leveranciers publiceren en vervangen.
 # Auteursrechtelijk materiaal van derden, honderden bestanden, en afgeleide
 # data — net als de rest van `data/` blijft het lokaal. Het register
